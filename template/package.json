@@ -1,0 +1,23 @@
+{
+  "name": "app-template",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App Factory template: event-sourced core, analytics seam, brand-pack tooling. Apps are stamped from this.",
+  "workspaces": [
+    "packages/*",
+    "tools"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run format:check && npm run test"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "Example",
+  "codename": "example",
+  "bundleId": "com.salaseviciusm.example",
+  "scheme": "example",
+  "store": {
+    "title": "Example: Focus Timer",
+    "subtitle": "Deep work, one block at a time",
+    "primaryKeywordPhrase": "focus timer"
+  }
+}

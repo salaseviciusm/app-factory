@@ -1,0 +1,35 @@
+// OpenClaw Slack channel config patch — apply with:
+//   openclaw config patch --file ~/src/app-factory/openclaw/slack.patch.json5
+//
+// Prereqs (see README step 3): a Slack app created from OpenClaw's recommended
+// manifest, installed to your workspace, with these env vars exported where the
+// gateway runs:
+//   SLACK_BOT_TOKEN=xoxb-...   (Install App page)
+//   SLACK_APP_TOKEN=xapp-...   (App-Level Token with connections:write)
+//
+// IMPORTANT: replace the C... placeholders with real channel IDs (right-click a
+// channel in Slack → Copy link → the C... part). Name-based keys do NOT match
+// under allowlist policy.
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "socket",
+      botToken: { $env: "SLACK_BOT_TOKEN" },
+      appToken: { $env: "SLACK_APP_TOKEN" },
+      // Only factory channels; everything else is invisible to the agent.
+      groupPolicy: "allowlist",
+      channels: {
+        // #factory-standup — no @mention needed; this is the agent's home room
+        "C_REPLACE_STANDUP": { requireMention: false },
+        // #factory-approvals — gate confirmations
+        "C_REPLACE_APPROVALS": { requireMention: false },
+        // #factory-builds — build/pipeline status
+        "C_REPLACE_BUILDS": { requireMention: true },
+      },
+      // DMs from the founder only (add your Slack member ID, U...)
+      dmPolicy: "allowlist",
+      allowFrom: ["U_REPLACE_FOUNDER"],
+    },
+  },
+}

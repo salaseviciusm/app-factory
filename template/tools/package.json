@@ -1,0 +1,21 @@
+{
+  "name": "@factory/tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build-time tooling: brand-pack validation and design-token generation.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "generate-tokens": "tsx src/generate-tokens.ts"
+  },
+  "dependencies": {
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

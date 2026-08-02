@@ -1,0 +1,64 @@
+# Roadmap
+
+Phased so that every phase ends with something working end-to-end. Resist building the
+factory before one app has gone through the line by hand.
+
+## Phase 0 — Foundation (current)
+
+- [x] Foundation docs (this set)
+- [x] First shakeout round with founder (D9–D13 logged; O1/O3 resolved)
+- [ ] Continue shakeout: agent-org depth, product-process fit, template scope
+- [ ] Resolve remaining open decisions (analytics provider O2, coding-agent runtime O4)
+- [ ] Agent profiles drafted in `agents/` — minimal active set only (D11):
+      chief-of-staff, product-lead, tech-lead, app-engineer
+- [ ] OpenClaw installed & hardened on the founder's home machine (D12), Slack via
+      OpenClaw's channel plugin (D10); standup cron posting at 08:00 with 11:00 cutoff
+
+**Exit:** standup appears in Slack at 08:00 every morning; founder can reply (or message
+at any time) and see the chief of staff re-plan.
+
+## Phase 1 — Template
+
+- [ ] `app-template` repo built per `04-template-brand-system.md`, following
+      `03-coding-principles.md` (workspaces, core package, composition root, tokens)
+- [ ] Pre-wired: onboarding, paywall (RevenueCat), analytics seam, settings, EAS profiles
+- [ ] Brand-pack → generated tokens/config pipeline working
+- [ ] `npm run check` + Maestro green in CI on the blank template
+- [ ] Apple & Google developer accounts ready; one throwaway internal app submitted to
+      TestFlight/internal track to validate the pipeline
+
+**Exit:** a new app can be stamped from the template + a hand-written brand pack, build
+green, install on the founder's phone, in under a day.
+
+## Phase 2 — First app, founder-guided
+
+- [ ] Pick app #1 idea; run the full product process (stages 0–11) with the founder
+      participating in refinement — deliberately slow, to calibrate the process docs
+- [ ] Coding agents build the custom 20% under Tech Lead review
+- [ ] Ship through both gates; launch marketing manually-ish
+- [ ] Retro: fix process docs + template from what broke
+
+**Exit:** app #1 live in both stores with its landing page and first content cycle.
+
+## Phase 3 — Automate the org
+
+- [ ] Chief-of-staff delegation loop: standup → task decomposition → sub-agent dispatch
+      → lead review → status, with founder touch only at standup + gates
+- [ ] Dedicated Slack Bolt service (fin-news pattern, D10) replaces the OpenClaw plugin;
+      approval-gate buttons live in `#factory-approvals`
+- [ ] Migrate OpenClaw + services from home machine to VPS (D12) — cron-driven
+      standups/marketing must not miss
+- [ ] Marketing engine: content generation, weekly calendar review, cron posting,
+      nightly analytics digest
+- [ ] App #2 runs with the founder ONLY at standup + gates; measure where it stalls
+
+**Exit:** founder's involvement ≈ 30 min/day while an app moves through the line.
+
+## Phase 4 — Portfolio operations
+
+- [ ] Multiple concurrent apps; move coding sessions to cloud agents if the box saturates
+- [ ] Revenue-driven weekly reallocation; rebrand/kill recommendations with founder decision
+- [ ] First rebrand-in-place or fork exercise to prove the brand system
+- [ ] Cadence discipline: 2–4 quality releases/month max (store-policy guardrail)
+
+**Exit:** the portfolio loop runs: data in, decisions at standup, effort reallocated.
