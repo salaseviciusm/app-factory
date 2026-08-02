@@ -5,8 +5,10 @@
 
 ## Phase
 
-**Phase 0 — Foundation.** Docs, org, OpenClaw workspace, and template built.
-Next milestone: factory online (standup firing at 08:00, founder connected via Slack).
+**Phase 0 — Foundation, build complete.** Docs, agent org, playbooks, OpenClaw
+workspace, and template are built and committed; template check gate is green.
+Next milestone: founder runs README "Getting online" (OpenClaw install → Slack →
+crons) → first standup fires at 08:00.
 
 ## Active apps
 

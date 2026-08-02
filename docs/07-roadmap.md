@@ -7,23 +7,27 @@ factory before one app has gone through the line by hand.
 
 - [x] Foundation docs (this set)
 - [x] First shakeout round with founder (D9–D13 logged; O1/O3 resolved)
-- [ ] Continue shakeout: agent-org depth, product-process fit, template scope
+- [x] Agent profiles in `agents/` — minimal active set (D11) + 8 dormant charters
+- [x] Playbooks: ux, monetization, aso, analytics-taxonomy
+- [x] OpenClaw workspace built: chief-of-staff identity, 5 factory skills,
+      Slack config patch, automations script
+- [ ] Founder runs README "Getting online" steps (OpenClaw install → Slack → crons)
 - [ ] Resolve remaining open decisions (analytics provider O2, coding-agent runtime O4)
-- [ ] Agent profiles drafted in `agents/` — minimal active set only (D11):
-      chief-of-staff, product-lead, tech-lead, app-engineer
-- [ ] OpenClaw installed & hardened on the founder's home machine (D12), Slack via
-      OpenClaw's channel plugin (D10); standup cron posting at 08:00 with 11:00 cutoff
 
 **Exit:** standup appears in Slack at 08:00 every morning; founder can reply (or message
 at any time) and see the chief of staff re-plan.
 
 ## Phase 1 — Template
 
-- [ ] `app-template` repo built per `04-template-brand-system.md`, following
-      `03-coding-principles.md` (workspaces, core package, composition root, tokens)
-- [ ] Pre-wired: onboarding, paywall (RevenueCat), analytics seam, settings, EAS profiles
-- [ ] Brand-pack → generated tokens/config pipeline working
-- [ ] `npm run check` + Maestro green in CI on the blank template
+- [x] Template built in `template/` per `04-template-brand-system.md`: workspaces,
+      event-sourced core (+tests), analytics seam (+tests), composition-root overlay,
+      agent-guide + ADRs, `stamp-app.sh` pipeline
+- [x] Brand-pack → generated tokens pipeline working (validated example pack + tests)
+- [x] `npm run check` green locally; CI workflow committed (runs on first push to GitHub)
+- [ ] First stamped app boots (`stamp-app.sh` + `expo start`) — validates ADR 0003 flow
+- [ ] Pre-wired shell features hardened in a real app: onboarding, paywall (RevenueCat),
+      settings, EAS profiles (these are seams + configs today, not running screens)
+- [ ] Maestro flows running against a stamped app
 - [ ] Apple & Google developer accounts ready; one throwaway internal app submitted to
       TestFlight/internal track to validate the pipeline
 

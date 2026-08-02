@@ -90,3 +90,4 @@ should emulate them:
 |---|---|---|
 | 1 | 2026-08-02 | Idea → clarification → research → options → decisions D1–D8 → foundation docs written. Open: O1–O6, functionality shakeout. |
 | 2 | 2026-08-02 | Shakeout round 1: standup timing (D9), Slack sequencing after pros/cons discussion (D10), org restraint (D11), home-machine hosting (D12), session-as-training-data clarified (D13). First "observed founder patterns" distilled. |
+| 3 | 2026-08-02 | Full build-out on founder's "build everything" directive: agent profiles (4 active + 8 dormant), 4 playbooks, OpenClaw workspace (identity + 5 skills + Slack patch + automations), app template (event-sourced core, analytics seam, brand-pack tooling — check gate green, 12 tests), stamp-app pipeline, git repo, onboarding README. Pattern reinforced: verify tool mechanics (OpenClaw docs) before writing setup instructions; ship with the gate green, not "should work." |
