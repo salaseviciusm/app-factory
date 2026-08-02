@@ -119,6 +119,36 @@ founder's judgment, so the org becomes autonomous in *his* style, not a generic 
 **Why (founder-stated):** "learn how we talk here while we are building out app-factory…
 learning from me and replicating how I do things to become autonomous."
 
+## D14 — Workspace uses symlinks + `skills.load.allowSymlinkTargets`; never copies (2026-08-02)
+
+**Context:** OpenClaw 2026.7 refuses to load workspace-skill symlinks whose targets
+live outside the workspace unless the target root is allowlisted
+(`skills.load.allowSymlinkTargets`). The README's symlink install silently produced
+zero factory skills until this was set.
+**Decision:** the factory workspace keeps repo files as symlinks (repo = single source
+of truth) and the allowlist config is part of the install. Do not "fix" missing skills
+by copying files into `~/.openclaw/workspace` — copies drift from the repo. If skills
+vanish, check the allowlist first. Related: the onboard's seeded `BOOTSTRAP.md`
+identity interview is deleted, not completed — the chief-of-staff persona is defined
+by the repo, and pre-filled `IDENTITY.md`/`USER.md` stop OpenClaw recreating it.
+**Why:** discovered during bring-up; the failure mode is silent (skills simply absent
+from `openclaw skills list`), so future agents need the mechanism written down.
+
+## D15 — Accept plaintext loopback gateway token; migrate if the bind changes (2026-08-02)
+
+**Context:** `openclaw secrets audit` flags `gateway.auth.token` as plaintext in
+`openclaw.json`. Migrating to an env SecretRef spreads the same plaintext to the
+service env file plus a shell profile (local CLI resolution needs the export) —
+more copies, no less exposure.
+**Decision:** accept the plaintext token while the gateway is loopback-only
+(127.0.0.1:18789, single-user machine, config file user-readable only).
+**Upgrade trigger (recorded, founder-approved):** migrate to a SecretRef the moment
+the gateway binds beyond loopback (LAN/tailnet/relayed), the machine gains other
+users, or a secrets provider with keychain-backed exec resolution is configured.
+Re-run `openclaw secrets audit --check` after any of those.
+**Why (founder decision):** cheapest viable step; the finding guards local access on
+an already-trusted boundary.
+
 ---
 
 ## Open decisions

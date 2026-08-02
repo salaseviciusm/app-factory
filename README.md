@@ -47,11 +47,24 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw onboard --install-daemon
 ```
 
-The onboarding wizard asks for your model provider — use your Anthropic key and pick
-the strongest available Claude model. `--install-daemon` sets up a LaunchAgent so the
-gateway survives reboots (we're on your local machine per D12; the machine must be
-awake for crons to fire — check System Settings → prevent sleep, or accept missed
-crons until the Phase 3 VPS move).
+The onboarding wizard asks for your model provider — use your Anthropic key or Claude
+subscription auth and pick the strongest available Claude model. `--install-daemon`
+sets up a LaunchAgent so the gateway survives reboots (we're on your local machine per
+D12; the machine must be awake for crons to fire — check System Settings → prevent
+sleep, or accept missed crons until the Phase 3 VPS move).
+
+Notes from the 2026-08-02 bring-up (OpenClaw 2026.7.1-2):
+
+- Non-interactive auth uses `--auth-choice anthropic-cli` (the `claude-cli` name is
+  deprecated). It reads `~/.claude/.credentials.json` — which does not exist on macOS
+  when Claude Code stores OAuth in the Keychain. Materialize it first (may prompt for
+  Keychain access):
+  `security find-generic-password -s "Claude Code-credentials" -w > ~/.claude/.credentials.json && chmod 600 ~/.claude/.credentials.json`
+  The daemonized gateway reads this file at runtime too (Keychain prompts are
+  disallowed on non-interactive paths).
+- If `openclaw doctor` afterwards reports a missing `anthropic:claude-cli` auth
+  profile, the suggested `models auth login` fix needs a TTY; in automation run it
+  under `script -q /dev/null`.
 
 **Verify:**
 
@@ -72,38 +85,68 @@ ln -sf ~/src/app-factory/openclaw/workspace/AGENTS.md "$WORKSPACE/AGENTS.md"
 for s in ~/src/app-factory/openclaw/workspace/skills/*/; do
   ln -sfn "$s" "$WORKSPACE/skills/$(basename "$s")"
 done
+# REQUIRED for symlinked skills: OpenClaw only follows workspace-skill symlinks whose
+# targets live under an allowlisted root (D14):
+openclaw config set skills.load.allowSymlinkTargets '["~/src/app-factory/openclaw/workspace/skills"]'
 openclaw gateway restart 2>/dev/null || true
 ```
 
+Then complete the identity layer: the onboard seeds a `BOOTSTRAP.md` first-boot
+interview that overrides our chief-of-staff persona until finished. The factory
+identity is already defined, so pre-fill `IDENTITY.md`/`USER.md` (OpenClaw then
+treats setup as complete) and delete `BOOTSTRAP.md`.
+
 **Verify:** in the OpenClaw Control UI / WebChat (it prints its local URL; default port
-18789), send: `who are you and what skills do you have?` — it should answer as the
+18789) or via CLI (`openclaw agent --agent main --session-id verify -m "..."`), send:
+`who are you and what skills do you have?` — it should answer as the
 App Factory Chief of Staff and list the five `factory-*` skills.
 
 ### Step 4 — Connect Slack
+
+0. Install the Slack channel plugin (not part of the stock install):
+
+```sh
+openclaw plugins install @openclaw/slack
+openclaw gateway restart
+```
 
 1. In Slack, create the channels: `#factory-standup`, `#factory-approvals`,
    `#factory-builds`. Note each channel ID (right-click channel → Copy link → the
    `C...` segment) and your own member ID (profile → ⋯ → Copy member ID, `U...`).
 2. Create the Slack app: <https://api.slack.com/apps/new> → "From a manifest" → paste
-   OpenClaw's **recommended manifest** (linked from docs.openclaw.ai/channels/slack).
-   Install it to your workspace.
+   `openclaw/slack-app-manifest.json` from this repo (verbatim copy of OpenClaw 2026.7's
+   **recommended** Socket Mode manifest from docs.openclaw.ai/channels/slack; rename the
+   bot in the Slack UI later if you like). Install it to your workspace.
 3. Collect two tokens:
    - **Bot token** `xoxb-...` — Install App page
    - **App-level token** `xapp-...` with `connections:write` — Basic Information →
      App-Level Tokens (this enables Socket Mode; no public URL needed)
-4. Edit `~/src/app-factory/openclaw/slack.patch.json5`: replace the three
-   `C_REPLACE_*` channel IDs and `U_REPLACE_FOUNDER` with the real IDs from (1).
-5. Apply:
+4. Create the single secrets file a fresh install needs — copy the example and fill
+   in both tokens from (3), the three channel IDs, and your member ID:
 
 ```sh
-export SLACK_BOT_TOKEN=xoxb-...
-export SLACK_APP_TOKEN=xapp-...
-# make them available to the daemonized gateway too (e.g. add to the LaunchAgent env
-# or your shell profile that the gateway inherits), then:
-openclaw config patch --file ~/src/app-factory/openclaw/slack.patch.json5
+cp ~/src/app-factory/openclaw/secrets.env.example ~/src/app-factory/openclaw/secrets.env
+# edit secrets.env — it is gitignored; the repo only ever contains placeholders
+```
+
+5. Apply everything:
+
+```sh
+~/src/app-factory/openclaw/apply-slack.sh
 openclaw channels status --probe
 ```
 
+   The script renders `slack.patch.json5` (a `${VAR}` template — real IDs live only
+   in `secrets.env`), validates with `--dry-run`, applies it, makes you command
+   owner, exports both tokens into the daemon's service env file, and restarts the
+   gateway. Notes learned the hard way:
+   - the daemonized gateway does NOT inherit your shell env — token exports go to
+     `~/.openclaw/service-env/ai.openclaw.gateway.env` (mode 600; regenerated if the
+     service is ever reinstalled)
+   - token fields use the canonical SecretRef form
+     `{ source: "env", provider: "default", id: "..." }` — `{ $env: ... }` is not read
+   - openclaw CLI calls in scripts need stdin detached (`< /dev/null`); they hang on
+     a TTY check otherwise
 6. Invite the bot to the three channels (`/invite @<bot>` in each).
 
 **Verify:** DM the bot in Slack: `status` → it should run the `factory-status` skill
@@ -113,16 +156,18 @@ and answer from `STATE.md`. In `#factory-standup` (no mention needed): `run stan
 ### Step 5 — Schedule the rhythm
 
 ```sh
-export FACTORY_STANDUP_CHANNEL=C...   # the #factory-standup channel ID
-~/src/app-factory/openclaw/setup-automations.sh
-openclaw automations list
+~/src/app-factory/openclaw/setup-automations.sh   # reads FACTORY_STANDUP_CHANNEL from openclaw/secrets.env
+openclaw cron list
 ```
 
 This registers: **08:00** daily standup, **11:00** cutoff sweep, **18:00** end-of-day
-state sync. (Flag names evolve — if the script errors, check
-`openclaw automations create --help` and adjust; the jobs' prompts are in the script.)
+state sync. (OpenClaw 2026.7 notes, verified by live test-fire: the CLI verb is
+`cron add`, not `automations create`; jobs that post to Slack run as **isolated
+turns with `--announce`** so the gateway delivers the final message deterministically;
+the EOD housekeeping job is a main-session `--system-event` (main jobs can't deliver);
+agent jobs default to a 30s timeout, so the script sets explicit timeouts.)
 
-**Verify:** `openclaw automations list` shows the three jobs. Tomorrow 08:00 the
+**Verify:** `openclaw cron list` shows the three jobs. Tomorrow 08:00 the
 standup appears in `#factory-standup`; reply in-thread and watch it re-plan.
 
 ### Step 6 — Start your first app
