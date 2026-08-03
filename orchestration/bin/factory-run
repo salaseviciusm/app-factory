@@ -54,6 +54,19 @@ function tdb() {
       run_id TEXT, step_id TEXT, type TEXT, value TEXT, created_at TEXT
     );
   `);
+  // Migration: per-agent-step cost/token capture from the claude JSON output.
+  // ALTER ... ADD COLUMN throws if the column already exists — idempotent by catch.
+  for (const col of [
+    "cost_usd REAL",
+    "input_tokens INTEGER",
+    "output_tokens INTEGER",
+    "cache_read_tokens INTEGER",
+    "cache_creation_tokens INTEGER",
+  ]) {
+    try {
+      _tdb.exec(`ALTER TABLE steps ADD COLUMN ${col}`);
+    } catch {}
+  }
   return _tdb;
 }
 
@@ -74,12 +87,73 @@ function tRunState(run) {
     .run(run.state, terminal ? nowIso() : null, run.id);
 }
 
-function tStep(runId, stepId, attempt, status, summary, startedAt) {
+function tStep(runId, stepId, attempt, status, summary, startedAt, usage) {
   const finished = nowIso();
   const dur = (Date.parse(finished) - Date.parse(startedAt)) / 1000;
+  const u = usage || {};
   tdb()
-    .prepare(`INSERT INTO steps (run_id, step_id, attempt, status, summary, started_at, finished_at, duration_s) VALUES (?,?,?,?,?,?,?,?)`)
-    .run(runId, stepId, attempt, status, (summary || "").slice(0, 1000), startedAt, finished, dur);
+    .prepare(
+      `INSERT INTO steps (run_id, step_id, attempt, status, summary, started_at, finished_at, duration_s,
+        cost_usd, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      runId, stepId, attempt, status, (summary || "").slice(0, 1000), startedAt, finished, dur,
+      u.costUsd ?? null, u.inputTokens ?? null, u.outputTokens ?? null,
+      u.cacheReadTokens ?? null, u.cacheCreationTokens ?? null
+    );
+}
+
+/** Extract cost/token usage from a parsed `claude --output-format json` result. */
+function parseUsage(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const u = parsed.usage || {};
+  return {
+    costUsd: typeof parsed.total_cost_usd === "number" ? parsed.total_cost_usd : null,
+    inputTokens: u.input_tokens || 0,
+    outputTokens: u.output_tokens || 0,
+    cacheReadTokens: u.cache_read_input_tokens || 0,
+    cacheCreationTokens: u.cache_creation_input_tokens || 0,
+  };
+}
+
+/** Sum cost/tokens across all telemetry step rows for a run (in-progress or done). */
+function runUsage(runId) {
+  try {
+    const r = tdb()
+      .prepare(
+        `SELECT COALESCE(SUM(cost_usd),0) cost, COALESCE(SUM(input_tokens),0) in_tok,
+                COALESCE(SUM(output_tokens),0) out_tok, COALESCE(SUM(cache_read_tokens),0) cache_read,
+                COALESCE(SUM(cache_creation_tokens),0) cache_create,
+                SUM(cost_usd IS NOT NULL) priced_steps
+         FROM steps WHERE run_id = ?`
+      )
+      .get(runId);
+    return {
+      costUsd: r.cost || 0,
+      inputTokens: (r.in_tok || 0) + (r.cache_read || 0) + (r.cache_create || 0),
+      rawInputTokens: r.in_tok || 0,
+      cacheReadTokens: r.cache_read || 0,
+      cacheCreationTokens: r.cache_create || 0,
+      outputTokens: r.out_tok || 0,
+      pricedSteps: r.priced_steps || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function fmtTokens(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(n);
+}
+
+/** One-line Slack/CLI usage summary for a run, or "" if nothing priced yet. */
+function usageLine(runId) {
+  const u = runUsage(runId);
+  if (!u || u.pricedSteps === 0) return "";
+  return `:moneybag: Cost $${u.costUsd.toFixed(2)} · tokens in ${fmtTokens(u.inputTokens)} (${fmtTokens(u.cacheReadTokens)} cached) / out ${fmtTokens(u.outputTokens)} · ${u.pricedSteps} agent step(s)`;
 }
 
 function tArtifact(runId, stepId, type, value) {
@@ -307,7 +381,7 @@ function runAgentStep(run, step) {
     /* non-json output tolerated */
   }
   const resultText = parsed && typeof parsed.result === "string" ? parsed.result : (res.stdout || "");
-  return { ok: true, summary: resultText.slice(0, 2000) };
+  return { ok: true, summary: resultText.slice(0, 2000), usage: parseUsage(parsed) };
 }
 
 // ---------- deterministic steps ----------
@@ -770,6 +844,8 @@ function execRun(id) {
           run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : "No deployable artifact for this rig.",
           `Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (or ask the chief of staff).`,
         ];
+        const usage = usageLine(id);
+        if (usage) lines.push(usage);
         notify(run, lines.join("\n"), run.qrPath);
         result = { ok: true, summary: "founder notified" };
       } else if (step.type === "spawn") {
@@ -801,7 +877,7 @@ function execRun(id) {
 
       log(runDir, `step '${step.id}': ${result.ok ? "OK" : "FAIL"} (${result.summary})`);
       try {
-        tStep(id, step.id, (loops[step.id] || 0) + 1, result.ok ? "ok" : "fail", result.summary, stepStarted);
+        tStep(id, step.id, (loops[step.id] || 0) + 1, result.ok ? "ok" : "fail", result.summary, stepStarted, result.usage);
         if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
       } catch {}
 
@@ -822,7 +898,10 @@ function execRun(id) {
           }
         }
         setState(run, "failed", result.summary);
-        notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}`);
+        {
+          const usage = usageLine(id);
+          notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}${usage ? `\n${usage}` : ""}`);
+        }
         return;
       }
       i += 1;
@@ -895,6 +974,18 @@ function cmdReport(argv) {
       if (!r) continue;
       tRun(r);
       tRunState(r);
+      // Backfill per-step cost/tokens from each step's claude JSON output, for
+      // rows that predate usage capture (only touches NULL cost_usd rows).
+      for (const f of fs.readdirSync(path.join(RUNS_DIR, d))) {
+        const m = f.match(/^(.+)\.output\.json$/);
+        if (!m) continue;
+        const u = parseUsage(readJson(path.join(RUNS_DIR, d, f), null));
+        if (!u || u.costUsd == null) continue;
+        db.prepare(
+          `UPDATE steps SET cost_usd = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ?
+           WHERE run_id = ? AND step_id = ? AND cost_usd IS NULL`
+        ).run(u.costUsd, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheCreationTokens, r.id, m[1]);
+      }
       const hasSteps = db.prepare(`SELECT COUNT(*) n FROM steps WHERE run_id = ?`).get(r.id).n > 0;
       if (!hasSteps) {
         const logPath = path.join(RUNS_DIR, d, "engine.log");
@@ -922,10 +1013,21 @@ function cmdReport(argv) {
   const runs = db.prepare(`SELECT * FROM runs WHERE created_at >= ? ORDER BY created_at DESC`).all(since);
   const stepStats = db
     .prepare(
-      `SELECT s.step_id, COUNT(*) n, SUM(s.status = 'fail') fails, ROUND(AVG(s.duration_s), 1) avg_s, MAX(s.attempt) max_attempt
+      `SELECT s.step_id, COUNT(*) n, SUM(s.status = 'fail') fails, ROUND(AVG(s.duration_s), 1) avg_s, MAX(s.attempt) max_attempt,
+              ROUND(SUM(COALESCE(s.cost_usd,0)), 2) cost, ROUND(AVG(s.cost_usd), 3) avg_cost,
+              SUM(COALESCE(s.input_tokens,0) + COALESCE(s.cache_read_tokens,0) + COALESCE(s.cache_creation_tokens,0)) in_tok,
+              SUM(COALESCE(s.output_tokens,0)) out_tok
        FROM steps s JOIN runs r ON r.id = s.run_id WHERE r.created_at >= ? GROUP BY s.step_id ORDER BY n DESC`
     )
     .all(since);
+  const totals = db
+    .prepare(
+      `SELECT ROUND(SUM(COALESCE(s.cost_usd,0)), 2) cost,
+              SUM(COALESCE(s.input_tokens,0) + COALESCE(s.cache_read_tokens,0) + COALESCE(s.cache_creation_tokens,0)) in_tok,
+              SUM(COALESCE(s.output_tokens,0)) out_tok
+       FROM steps s JOIN runs r ON r.id = s.run_id WHERE r.created_at >= ?`
+    )
+    .get(since);
   const findings = db
     .prepare(
       `SELECT a.run_id, a.value FROM artifacts a JOIN runs r ON r.id = a.run_id
@@ -945,18 +1047,31 @@ function cmdReport(argv) {
        ORDER BY a.created_at DESC LIMIT 40`
     )
     .all(since);
+  const runUsageMap = Object.fromEntries(runs.map((r) => [r.id, runUsage(r.id)]));
   if (asJson) {
-    console.log(JSON.stringify({ since, runs, stepStats, findings, failures, artifacts }, null, 2));
+    console.log(JSON.stringify({ since, totals, runs, runUsage: runUsageMap, stepStats, findings, failures, artifacts }, null, 2));
     return;
   }
   const lines = [`# Factory run report (last ${days} days, since ${since})`, ""];
+  lines.push(
+    `**Total cost:** $${(totals.cost || 0).toFixed(2)} · **tokens in:** ${fmtTokens(totals.in_tok || 0)} · **out:** ${fmtTokens(totals.out_tok || 0)}`,
+    ""
+  );
   lines.push(`## Runs (${runs.length})`, "");
-  lines.push("| id | workflow | rig | state | created | prompt |", "|---|---|---|---|---|---|");
+  lines.push("| id | workflow | rig | state | created | cost | tok in/out | prompt |", "|---|---|---|---|---|---|---|---|");
   for (const r of runs) {
-    lines.push(`| ${r.id} | ${r.workflow} | ${r.rig} | ${r.state} | ${r.created_at.slice(0, 16)} | ${(r.prompt || "").replace(/\n/g, " ").slice(0, 70)} |`);
+    const u = runUsageMap[r.id];
+    const cost = u && u.pricedSteps ? `$${u.costUsd.toFixed(2)}` : "—";
+    const tok = u && u.pricedSteps ? `${fmtTokens(u.inputTokens)}/${fmtTokens(u.outputTokens)}` : "—";
+    lines.push(`| ${r.id} | ${r.workflow} | ${r.rig} | ${r.state} | ${r.created_at.slice(0, 16)} | ${cost} | ${tok} | ${(r.prompt || "").replace(/\n/g, " ").slice(0, 60)} |`);
   }
-  lines.push("", "## Step statistics", "", "| step | executions | failures | avg seconds | max attempt |", "|---|---|---|---|---|");
-  for (const s of stepStats) lines.push(`| ${s.step_id} | ${s.n} | ${s.fails} | ${s.avg_s} | ${s.max_attempt} |`);
+  lines.push("", "## Step statistics", "", "| step | executions | failures | avg seconds | avg cost | total cost | tok in/out | max attempt |", "|---|---|---|---|---|---|---|---|");
+  for (const s of stepStats) {
+    const avgCost = s.avg_cost != null ? `$${Number(s.avg_cost).toFixed(3)}` : "—";
+    const totCost = s.cost ? `$${Number(s.cost).toFixed(2)}` : "—";
+    const tok = s.in_tok ? `${fmtTokens(s.in_tok)}/${fmtTokens(s.out_tok)}` : "—";
+    lines.push(`| ${s.step_id} | ${s.n} | ${s.fails} | ${s.avg_s} | ${avgCost} | ${totCost} | ${tok} | ${s.max_attempt} |`);
+  }
   lines.push("", "## Recent step failures", "");
   for (const f of failures) lines.push(`- [${f.run_id} / ${f.step_id}] ${(f.summary || "").replace(/\n/g, " ").slice(0, 200)}`);
   lines.push("", "## Recent review findings", "");
@@ -991,13 +1106,15 @@ function cmdStatus(argv) {
   const ids = id ? [id] : fs.existsSync(RUNS_DIR) ? fs.readdirSync(RUNS_DIR).filter((d) => fs.existsSync(path.join(RUNS_DIR, d, "run.json"))) : [];
   const runs = ids.map((rid) => loadRun(rid)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   if (asJson) {
-    console.log(JSON.stringify(runs, null, 2));
+    console.log(JSON.stringify(runs.map((r) => ({ ...r, usage: runUsage(r.id) })), null, 2));
     return;
   }
   for (const r of runs) {
     const wf = loadWorkflow(r.workflow);
     const step = wf.steps[Math.min(r.stepIndex, wf.steps.length - 1)];
     console.log(`${r.id}  ${r.state.padEnd(20)} ${r.rig.padEnd(20)} step ${r.stepIndex}/${wf.steps.length} (${step.id})  ${r.prompt.slice(0, 60)}`);
+    const usage = usageLine(r.id);
+    if (usage) console.log(`  ${usage.replace(/:moneybag: /, "")}`);
     if (id) {
       for (const h of r.history.slice(-10)) console.log(`  ${h.at}  ${h.state}${h.detail ? ` — ${h.detail}` : ""}`);
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);

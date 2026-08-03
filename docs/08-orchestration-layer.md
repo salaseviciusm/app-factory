@@ -509,13 +509,28 @@ The factory improves itself through the same graph machinery it uses for apps.
 `orchestration/telemetry.db` (SQLite via `node:sqlite`, zero dependencies):
 
 - `runs`: id, workflow, rig, prompt, state, parent run, timestamps
-- `steps`: per-attempt outcome, summary, duration (implement loops visible as attempts)
+- `steps`: per-attempt outcome, summary, duration (implement loops visible as
+  attempts), and per-agent-step **cost/tokens** (`cost_usd`, `input_tokens`,
+  `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`) parsed from each
+  step's `claude --output-format json` result
 - `artifacts`: commits (sha + subject), review verdicts, review findings,
   deploy/artifact URLs, harness merge commits
 
-`factory-run report [--days N] [--json]` renders the digest (run table, step
-failure/duration stats, recent findings, recent artifacts) and backfills any
-pre-telemetry runs from their run dirs (engine.log step lines + review.json).
+**Cost/token accounting (for effort tuning).** Agent-step cost and token counts
+are captured into `steps` as each step completes. They surface in three places,
+so the founder never has to dig through run dirs:
+- **End of workflow**: the completion Slack message (and the FAILED message)
+  append a line — `Cost $X · tokens in N (M cached) / out K · S agent step(s)`.
+- **On a status request**: `factory-run status [<id>]` prints the same per-run
+  usage line (the `factory-feature` skill relays it).
+- **In the report**: `factory-run report` shows a grand total, a per-run
+  cost/token column, and a per-step table with avg cost and total cost — the
+  primary signal for tuning model/effort choices per step.
+
+`factory-run report [--days N] [--json]` renders the digest (totals, run table
+with cost, step failure/duration/cost stats, recent findings, recent artifacts)
+and backfills any pre-telemetry runs from their run dirs — engine.log step lines,
+review.json, and per-step cost/tokens from the `*.output.json` files on disk.
 
 **Self-review workflow** (`workflows/self-review.json`, worktree-less: it reads
 the live checkout):

@@ -232,3 +232,9 @@ changes, and every self-improvement is itself telemetry for the next review.
 | O4 | Coding agent runtime (local Claude Code sessions vs Agent SDK service vs cloud Managed Agents) | Local sessions first; revisit Phase 4 | Phase 2 |
 | O5 | Separate Apple/Google developer accounts per niche vs one account | One account until portfolio proves out | Phase 3 |
 | O6 | Whether marketing content generation uses multiple model providers | Decide when marketing engine is built | Phase 3 |
+
+## D20 — Model + reasoning-effort policy: Opus 5 default, tiered effort (2026-08-03)
+
+**Context:** Factory harness was running Opus 4.8 against the Claude Max 5x subscription (not API pricing). Founder directed an upgrade and set standing effort tiers.
+**Decision:** Default model → **Opus 5** (`claude-opus-5`). Global `thinkingDefault` → **medium**. Reasoning tiers for dispatch: **medium** = standard tasks (default); **high / xhigh** = higher-reasoning tasks; **Fable 5** (`claude-fable-5`) at **high** effort = large feature requests. Runtime stays Claude CLI on the Max subscription (flat cost, rate-limited).
+**Why:** (founder-stated) Better default capability with cost-controlled subscription billing; reserve expensive reasoning for tasks that need it and route large features to Fable 5. Dispatch (factory-dispatch / factory-feature) must select model+effort per task per these tiers rather than always using the global default.

@@ -60,7 +60,13 @@ Status (also fold into standup when runs are active):
 ```sh
 ~/src/app-factory/orchestration/bin/factory-run status            # all runs
 ~/src/app-factory/orchestration/bin/factory-run status <run_id>   # one run, with history
+~/src/app-factory/orchestration/bin/factory-run report --days 7   # cost/token totals for tuning
 ```
+
+Every run's status (and the engine's own end-of-run Slack message) now carries a
+cost/token line — `Cost $X · tokens in N (M cached) / out K · S agent step(s)`.
+Relay it verbatim when reporting status; for "how much are we spending / which
+step costs most", run `report` (grand total + per-run + per-step cost).
 
 Cancel: `factory-run cancel <run_id>`.
 
