@@ -523,29 +523,56 @@ function longFlagsOf(argv) {
   return argv.filter((a) => /^--[a-z][\w-]*$/i.test(a));
 }
 
-/** Option-alias groups (e.g. ["-m", "--message"]) that the help output marks
- *  required — "(required)" markers and "Missing required option" style lines. */
+/** Option-alias groups (e.g. ["-m", "--message"]) whose --help definition line
+ *  marks them required. Aliases come only from the option-definition column at
+ *  the start of the line — never from flags mentioned in description prose
+ *  (the "-m, --message" line says "required unless --media is set"; --media
+ *  belongs to a different option and must not join this group). */
 function requiredOptionGroups(helpText) {
   const groups = [];
   for (const line of helpText.split("\n")) {
     if (!/required/i.test(line)) continue;
-    const flags = line.match(/(?<=^|[\s,])-{1,2}[a-z][\w-]*/gi) || [];
-    if (flags.length) groups.push(flags);
+    const def = line.match(/^\s+(-{1,2}[a-z][\w-]*(?:,\s+-{1,2}[a-z][\w-]*)*)/i);
+    if (def) groups.push(def[1].split(/,\s+/));
   }
   return groups;
 }
 
+/** Option-alias groups the CLI actually enforces as required, derived by
+ *  running it — not by trusting --help prose (openclaw's "-t, --target" line
+ *  carries no "required" marker at all). Invokes the command under --dry-run
+ *  (payload printed, nothing sent), satisfies each "Missing required option"
+ *  error with a dummy value, and repeats until the CLI stops raising that
+ *  error class. Returns {groups} or {error} when probing can't run safely. */
+function enforcedRequiredGroups(cmd, baseArgs, helpText) {
+  if (!helpText.includes("--dry-run")) {
+    return { error: "--dry-run absent from --help; cannot probe required options without sending" };
+  }
+  const groups = [];
+  const argv = [...baseArgs, "--dry-run"];
+  for (let i = 0; i < 6; i++) {
+    const res = preflightSpawn(cmd, argv, undefined, 30000);
+    const m = res.output.match(/Missing required option "([^"]+)"/);
+    if (!m) break;
+    const flags = m[1].match(/-{1,2}[a-z][\w-]*/gi) || [];
+    if (!flags.length || groups.some((g) => g[0] === flags[0])) break;
+    groups.push(flags);
+    argv.push(flags[flags.length - 1], "preflight-probe");
+  }
+  return { groups };
+}
+
 /** Heuristic two-way contract check: every long --flag the engine passes must
- *  appear in the help output, and every required option the help reports must
- *  be covered (by any of its aliases) in the engine's argv. */
-function helpContractProblems(helpText, argv) {
+ *  appear in the help output, and every required option group given must be
+ *  covered (by any of its aliases) in the engine's argv. */
+function helpContractProblems(helpText, argv, requiredGroups) {
   const problems = [];
   for (const flag of longFlagsOf(argv)) {
     if (!helpText.includes(flag)) problems.push(`engine passes ${flag}, absent from --help`);
   }
-  for (const group of requiredOptionGroups(helpText)) {
+  for (const group of requiredGroups) {
     if (!group.some((f) => argv.includes(f))) {
-      problems.push(`help marks ${group.join("/")} required, engine passes none of them`);
+      problems.push(`${group.join("/")} is required, engine passes none of them`);
     }
   }
   return problems;
@@ -557,11 +584,27 @@ function probeNotifyContract() {
   if (help.status !== 0) {
     return { name, ok: false, detail: `openclaw message send --help exited ${help.status}: ${help.output.slice(0, 200)}` };
   }
+  // Required-ness comes from two sources: what the CLI enforces when actually
+  // invoked (catches --target, which --help never marks required), plus any
+  // options whose help line carries a "required" marker (catches -m/--message).
+  const enforced = enforcedRequiredGroups("openclaw", ["message", "send"], help.output);
+  if (enforced.error) return { name, ok: false, detail: enforced.error };
+  if (enforced.groups.length === 0) {
+    return { name, ok: false, detail: 'dry-run probe confirmed no required options ("Missing required option" format changed?)' };
+  }
+  const requiredGroups = [...enforced.groups];
+  for (const group of requiredOptionGroups(help.output)) {
+    if (!requiredGroups.some((g) => g[0] === group[0])) requiredGroups.push(group);
+  }
   // Dummy media path so the --media flag is part of the checked contract.
   const argv = notifyArgs("preflight", "preflight probe", "preflight-probe.png");
-  const problems = helpContractProblems(help.output, argv);
+  const problems = helpContractProblems(help.output, argv, requiredGroups);
   if (problems.length) return { name, ok: false, detail: problems.join("; ") };
-  return { name, ok: true, detail: `${longFlagsOf(argv).length} long flags verified against --help` };
+  return {
+    name,
+    ok: true,
+    detail: `${longFlagsOf(argv).length} long flags verified against --help; ${requiredGroups.length} required option groups covered (${enforced.groups.length} enforced live)`,
+  };
 }
 
 function probeClaude() {

@@ -557,11 +557,19 @@ exercises those exact contracts before any token is spent.
 
 **Probes** (all read-only — nothing is sent to Slack, nothing is published):
 
-- `notify:openclaw-send-contract` — runs `openclaw message send --help` and
-  cross-checks it against the engine's real notify argv (built by the same
-  `notifyArgs()` helper `notify()` sends with, so the probe cannot drift):
-  every long `--flag` the engine passes must appear in the help output, and
-  every option the help marks required must be covered by the engine's argv.
+- `notify:openclaw-send-contract` — cross-checks `openclaw message send`
+  against the engine's real notify argv (built by the same `notifyArgs()`
+  helper `notify()` sends with, so the probe cannot drift). Every long
+  `--flag` the engine passes must appear in `--help` output, and every
+  required option must be covered by the engine's argv. Required-ness is
+  derived empirically, not from help prose (openclaw's `--target` line
+  carries no "required" marker): the probe invokes the command under
+  `--dry-run` (payload printed, nothing sent) and satisfies each
+  `Missing required option` error with a dummy value until the CLI stops
+  raising them, plus any option whose own help line carries a "required"
+  marker (catches `-m/--message`). The probe fails loudly if `--dry-run`
+  disappears from the help or the dry-run pass confirms zero required
+  options — both mean the probing mechanism itself broke.
 - `claude:version` — `claude --version` must exit 0.
 - Per rig with `deploy.type: "eas-update"`, executed in the rig's live app
   directory: `npx eas whoami --non-interactive` (authenticated, exit 0),
