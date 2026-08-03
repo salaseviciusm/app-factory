@@ -149,14 +149,85 @@ Re-run `openclaw secrets audit --check` after any of those.
 **Why (founder decision):** cheapest viable step; the finding guards local access on
 an already-trusted boundary.
 
----
+## D16 — PostHog is the factory-wide analytics provider (2026-08-02)
 
-## Open decisions
+**Context:** O2 was open between PostHog / Amplitude / self-hosted; PostHog was the
+standing lean. Founder confirmed in `#factory-standup`.
+**Decision:** PostHog for all factory apps. Every app wires activation + habit +
+feature events through PostHog per `playbooks/analytics-taxonomy.md`, from Phase 1 on.
+**Why (founder-stated):** "posthog sounds good." Product analytics (funnels, retention,
+activation/habit tracking) with a generous free tier and self-serve setup; no LLM in
+the loop. Self-hostable if the portfolio outgrows the hosted tier.
+
+## D17 — Marketing capability activated for skip-hero go-to-market (2026-08-02)
+
+**Context:** Founder reported skip-hero's core is done and asked to start the marketing
+strategy (branding, app name, content strategy + generation). The factory had no active
+marketing role (dormant profiles only) per the org-restraint rule (D11: no role without a
+workload).
+**Decision:** Activate the dormant `marketing-lead` profile for this concrete workload
+(skip-hero launch), delegated as a sub-agent producing a GTM strategy artifact in
+`~/src/skip-hero/marketing/` for the founder's marketing-calendar gate. `brand-designer`
+and `content-creator` stay dormant until strategy is approved and volume production is the
+named next bottleneck.
+**Why:** D11 satisfied — skip-hero shipping is a real workload; cheapest viable step is one
+lead producing a strategy + sample content, not a standing marketing team. Escalate to
+brand-designer/content-creator only on approval + a volume need.
+
+## D18 — Orchestration layer: thin in-repo run engine, not Gas Town (2026-08-03)
+
+**Context:** `docs/08-orchestration-layer.md` left P7 open: adopt Gas Town as the run
+engine vs implement a thin molecule runner inside the factory. The vertical slice
+needed: feature-dev + bug-fix workflows over running-with-pace, skip-hero, and
+`apps/<name>` quickfire rigs, steerable from Slack (typed or voice), ending in a
+downloadable EAS update with a QR code.
+**Decision:** built `orchestration/bin/factory-run` (zero-dependency node CLI) inside
+the factory instead of adopting Gas Town. Key mechanics, all verified live:
+- one git **worktree per run** (`factory/<run_id>` branch) — main checkouts never
+  touched; merge is a separate founder-confirmed step;
+- agentic steps are **Claude Code `-p` sessions** in the worktree (repo CLAUDE.md /
+  AGENTS.md standards load for free); the reviewer runs a **different model**
+  (sonnet) for genuine cross-validation, writing a structured verdict JSON;
+- deterministic checks/tests come from `orchestration/rigs.json` per rig —
+  **production tier** (full loop) vs **quickfire tier** (template checks only);
+- failure loops route findings back to the implementer (bounded by `maxLoops`);
+- the engine posts progress/plan/artifacts to `#factory-builds` itself via
+  `openclaw message send --target` (flag is `--target`, not `--to`) — deterministic
+  delivery, no cron watcher needed;
+- run state is JSON files under `orchestration/runs/` — resumable (`exec <id>`) and
+  inspectable by the chief of staff.
+**Why:** Gas Town is 3 weeks old, tmux-native, Beads-coupled, and its own author says
+"you probably don't want to use it yet." The factory needed ~500 lines to get durable
+runs with exactly our gates; revisit adoption (P7) when scale demands patrol agents
+and a merge queue.
+
+## D19 — Self-evaluation loop: SQLite telemetry + self-review workflow that ships harness improvements through the standard pipeline (2026-08-03)
+
+**Context:** founder asked for a self-improvement loop: store structured outputs from
+agent nodes (commits, links, verdicts — not context dumps), review how runs actually
+went, and let the factory improve its own harness after founder confirmation in Slack.
+**Decision:**
+- run telemetry in `orchestration/telemetry.db` (`node:sqlite`, zero deps): runs,
+  per-attempt step outcomes/durations, artifacts (commits, review verdicts/findings,
+  deploy URLs). `factory-run report` is the query surface; it backfills pre-telemetry
+  runs from run dirs.
+- `self-review` workflow: analyze node (reads report + run dirs + harness source,
+  writes a ONE-improvement plan) → Slack plan gate (founder discussion via chief of
+  staff) → **spawn** step that launches a full feature-dev graph execution on the new
+  `app-factory` rig with the approved plan as the feature request.
+- `app-factory` rig deploys via **harness-merge**: validated branch merges to main +
+  gateway restart = improvement live. Spawned child runs are auto-gated (plan already
+  founder-approved); checks + cross-model review still apply. Rollback = revert the
+  merge commit.
+- cadence: weekly cron (Sun 17:00) + on-demand `factory-self-review` skill.
+**Why:** the loop reuses the exact pipeline that builds apps — same worktrees, same
+validation, same Slack gates — so harness changes get the same rigor as product
+changes, and every self-improvement is itself telemetry for the next review.
 
 | ID | Question | Leaning | Needed by |
 |---|---|---|---|
 | ~~O1~~ | ~~Slack surface~~ | Resolved → D10 (plugin now, Bolt service at Phase 3) | — |
-| O2 | Analytics provider (PostHog / Amplitude / self-hosted) | PostHog (self-hostable, generous free tier) | Phase 1 |
+| ~~O2~~ | ~~Analytics provider~~ | Resolved → D16 (PostHog, factory-wide) | — |
 | ~~O3~~ | ~~Where the factory runs~~ | Resolved → D12 (home machine, VPS at Phase 3) | — |
 | O4 | Coding agent runtime (local Claude Code sessions vs Agent SDK service vs cloud Managed Agents) | Local sessions first; revisit Phase 4 | Phase 2 |
 | O5 | Separate Apple/Google developer accounts per niche vs one account | One account until portfolio proves out | Phase 3 |

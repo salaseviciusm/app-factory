@@ -1,0 +1,10 @@
+{
+  "name": "self-review",
+  "description": "Factory self-evaluation loop: analyze telemetry (commits, artifacts, verdicts, durations - never context dumps) from past runs, find what works and what doesn't, write an improvement plan, confirm it with the founder in Slack, then spawn a full feature-dev graph execution on the app-factory rig to implement, validate, and deploy the improvement live.",
+  "worktree": false,
+  "steps": [
+    { "id": "analyze", "type": "agent", "prompt": "self-reviewer", "timeoutMinutes": 25 },
+    { "id": "plan-gate", "type": "gate", "planFile": "improvement-plan.md" },
+    { "id": "spawn", "type": "spawn", "workflow": "feature-dev", "rig": "app-factory", "promptFrom": "improvement-plan.md" }
+  ]
+}

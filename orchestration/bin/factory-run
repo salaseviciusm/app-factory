@@ -1,0 +1,844 @@
+#!/usr/bin/env node
+/*
+ * factory-run: the App Factory run engine.
+ *
+ * Executes workflow DAGs (feature-dev, bug-fix) against registered rigs:
+ * git worktree per run, Claude Code sessions per agentic step, deterministic
+ * checks + cross-model agentic review, EAS deploy, Slack notifications with
+ * QR code via the OpenClaw gateway.
+ *
+ * Design doc: docs/08-orchestration-layer.md. Zero npm dependencies.
+ *
+ * Commands:
+ *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]
+ *   factory-run exec <run_id>            (internal: runs the step loop in-process)
+ *   factory-run resume <run_id>          (restart a stopped/failed run's executor)
+ *   factory-run status [<run_id>] [--json]
+ *   factory-run list [--json]
+ *   factory-run approve <run_id>
+ *   factory-run reject <run_id> "<feedback>"
+ *   factory-run steer <run_id> "<instruction>"
+ *   factory-run cancel <run_id>
+ *   factory-run selftest
+ */
+"use strict";
+
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { execSync, spawnSync, spawn } = require("child_process");
+
+const ORCH_DIR = path.resolve(__dirname, "..");
+const RUNS_DIR = path.join(ORCH_DIR, "runs");
+const WORKTREES_DIR = path.join(ORCH_DIR, "worktrees");
+const RIGS = JSON.parse(fs.readFileSync(path.join(ORCH_DIR, "rigs.json"), "utf8"));
+
+// ---------- telemetry (SQLite, node:sqlite — structured artifacts, not context dumps) ----------
+
+let _tdb = null;
+function tdb() {
+  if (_tdb) return _tdb;
+  const { DatabaseSync } = require("node:sqlite");
+  _tdb = new DatabaseSync(path.join(ORCH_DIR, "telemetry.db"));
+  _tdb.exec(`
+    CREATE TABLE IF NOT EXISTS runs (
+      id TEXT PRIMARY KEY, workflow TEXT, rig TEXT, prompt TEXT, state TEXT,
+      auto INTEGER, parent_run TEXT, created_at TEXT, finished_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS steps (
+      run_id TEXT, step_id TEXT, attempt INTEGER, status TEXT, summary TEXT,
+      started_at TEXT, finished_at TEXT, duration_s REAL
+    );
+    CREATE TABLE IF NOT EXISTS artifacts (
+      run_id TEXT, step_id TEXT, type TEXT, value TEXT, created_at TEXT
+    );
+  `);
+  return _tdb;
+}
+
+function tRun(run) {
+  tdb()
+    .prepare(
+      `INSERT INTO runs (id, workflow, rig, prompt, state, auto, parent_run, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET state = excluded.state`
+    )
+    .run(run.id, run.workflow, run.rig, run.prompt, run.state, run.auto ? 1 : 0, run.parentRun || null, run.createdAt);
+}
+
+function tRunState(run) {
+  const terminal = ["done", "failed", "rejected", "cancelled"].includes(run.state);
+  tdb()
+    .prepare(`UPDATE runs SET state = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ?`)
+    .run(run.state, terminal ? nowIso() : null, run.id);
+}
+
+function tStep(runId, stepId, attempt, status, summary, startedAt) {
+  const finished = nowIso();
+  const dur = (Date.parse(finished) - Date.parse(startedAt)) / 1000;
+  tdb()
+    .prepare(`INSERT INTO steps (run_id, step_id, attempt, status, summary, started_at, finished_at, duration_s) VALUES (?,?,?,?,?,?,?,?)`)
+    .run(runId, stepId, attempt, status, (summary || "").slice(0, 1000), startedAt, finished, dur);
+}
+
+function tArtifact(runId, stepId, type, value) {
+  tdb()
+    .prepare(`INSERT INTO artifacts (run_id, step_id, type, value, created_at) VALUES (?,?,?,?,?)`)
+    .run(runId, stepId, type, String(value).slice(0, 2000), nowIso());
+}
+
+// ---------- helpers ----------
+
+function expandHome(p) {
+  return p.startsWith("~") ? path.join(os.homedir(), p.slice(1)) : p;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function log(runDir, msg) {
+  const line = `[${nowIso()}] ${msg}`;
+  console.log(line);
+  if (runDir) fs.appendFileSync(path.join(runDir, "engine.log"), line + "\n");
+}
+
+function readJson(p, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(p, obj) {
+  fs.writeFileSync(p, JSON.stringify(obj, null, 2) + "\n");
+}
+
+function sh(cmd, opts = {}) {
+  return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
+}
+
+/** Run a shell command, capturing output to a log file. Returns {ok, output}. */
+function runCommand(cmd, cwd, logFile, timeoutMinutes = 30) {
+  const res = spawnSync("bash", ["-lc", cmd], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMinutes * 60 * 1000,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const output = (res.stdout || "") + (res.stderr || "");
+  if (logFile) fs.appendFileSync(logFile, `\n$ ${cmd}\n${output}\n(exit ${res.status})\n`);
+  return { ok: res.status === 0, output, status: res.status };
+}
+
+function resolveRig(name) {
+  if (RIGS.rigs[name]) {
+    const rig = { name, ...RIGS.rigs[name] };
+    rig.path = expandHome(rig.path);
+    return rig;
+  }
+  const m = name.match(/^factory:(.+)$/);
+  if (m) {
+    const appPath = path.join(expandHome(RIGS.factoryApps.basePath), m[1]);
+    if (!fs.existsSync(appPath)) throw new Error(`factory app not found: ${appPath}`);
+    return { name, path: appPath, ...RIGS.factoryApps, basePath: undefined };
+  }
+  throw new Error(`unknown rig: ${name}. Known: ${Object.keys(RIGS.rigs).join(", ")}, factory:<app>`);
+}
+
+function loadWorkflow(name) {
+  const p = path.join(ORCH_DIR, "workflows", `${name}.json`);
+  if (!fs.existsSync(p)) throw new Error(`unknown workflow: ${name}`);
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+
+function runDirOf(id) {
+  return path.join(RUNS_DIR, id);
+}
+
+function loadRun(id) {
+  const p = path.join(runDirOf(id), "run.json");
+  if (!fs.existsSync(p)) throw new Error(`no such run: ${id}`);
+  return readJson(p);
+}
+
+function saveRun(run) {
+  writeJson(path.join(runDirOf(run.id), "run.json"), run);
+}
+
+function setState(run, state, detail) {
+  run.state = state;
+  run.updatedAt = nowIso();
+  run.history.push({ state, detail: detail || null, at: run.updatedAt });
+  saveRun(run);
+  try {
+    tRunState(run);
+  } catch {
+    /* telemetry must never break a run */
+  }
+}
+
+// ---------- notifications (OpenClaw -> Slack) ----------
+
+/** Resolve ${VAR} placeholders from the environment or openclaw/secrets.env (IDs stay out of git). */
+let _secretsEnv = null;
+function resolvePlaceholders(str) {
+  return str.replace(/\$\{(\w+)\}/g, (_, key) => {
+    if (process.env[key]) return process.env[key];
+    if (_secretsEnv === null) {
+      _secretsEnv = {};
+      const p = path.join(ORCH_DIR, "..", "openclaw", "secrets.env");
+      if (fs.existsSync(p)) {
+        for (const line of fs.readFileSync(p, "utf8").split("\n")) {
+          const m = line.match(/^(\w+)=(.*)$/);
+          if (m) _secretsEnv[m[1]] = m[2];
+        }
+      }
+    }
+    if (_secretsEnv[key]) return _secretsEnv[key];
+    throw new Error(`unresolved placeholder \${${key}} (set it in env or openclaw/secrets.env)`);
+  });
+}
+
+function notify(run, message, mediaPath) {
+  const target = RIGS.notify;
+  if (!target || process.env.FACTORY_RUN_NO_NOTIFY === "1") return;
+  let to;
+  try {
+    to = resolvePlaceholders(target.to);
+  } catch (err) {
+    log(runDirOf(run.id), `notify FAILED: ${err.message}`);
+    return;
+  }
+  const args = [
+    "message", "send",
+    "--channel", target.channel,
+    "--target", to,
+    "-m", message,
+  ];
+  if (mediaPath && fs.existsSync(mediaPath)) args.push("--media", mediaPath);
+  const res = spawnSync("openclaw", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 120000,
+  });
+  const runDir = runDirOf(run.id);
+  if (res.status !== 0) {
+    log(runDir, `notify FAILED: ${(res.stderr || res.stdout || "").slice(0, 500)}`);
+  } else {
+    log(runDir, `notified Slack: ${message.split("\n")[0]}`);
+  }
+}
+
+// ---------- agentic steps (Claude Code) ----------
+
+function renderPrompt(templateName, run) {
+  const runDir = runDirOf(run.id);
+  let tpl = fs.readFileSync(path.join(ORCH_DIR, "prompts", `${templateName}.md`), "utf8");
+  const steeringPath = path.join(runDir, "steering.md");
+  const steering = fs.existsSync(steeringPath)
+    ? `Founder steering (mid-run instructions, honor these):\n\n${fs.readFileSync(steeringPath, "utf8")}`
+    : "";
+  const findingsPath = path.join(runDir, "findings.md");
+  const findings = fs.existsSync(findingsPath)
+    ? `Previous validation FAILED. You must address every finding below, then re-complete your task:\n\n${fs.readFileSync(findingsPath, "utf8")}`
+    : "";
+  return tpl
+    .replaceAll("{{PROMPT}}", run.prompt)
+    .replaceAll("{{RUN_DIR}}", runDir)
+    .replaceAll("{{BASE_BRANCH}}", run.baseBranch)
+    .replaceAll("{{STEERING}}", steering)
+    .replaceAll("{{FINDINGS}}", findings);
+}
+
+function runAgentStep(run, step) {
+  const runDir = runDirOf(run.id);
+  const prompt = renderPrompt(step.prompt, run);
+  const promptFile = path.join(runDir, `${step.id}.prompt.md`);
+  fs.writeFileSync(promptFile, prompt);
+  const args = [
+    "-p", prompt,
+    "--output-format", "json",
+    "--dangerously-skip-permissions",
+  ];
+  if (step.model) args.push("--model", step.model);
+  log(runDir, `agent step '${step.id}' starting (model=${step.model || "default"}, cwd=${run.worktree})`);
+  const res = spawnSync("claude", args, {
+    cwd: run.worktree,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: (step.timeoutMinutes || 30) * 60 * 1000,
+    maxBuffer: 256 * 1024 * 1024,
+    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "factory-run" },
+  });
+  fs.writeFileSync(path.join(runDir, `${step.id}.output.json`), res.stdout || "");
+  if (res.error && res.error.code === "ETIMEDOUT") {
+    return { ok: false, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m` };
+  }
+  if (res.status !== 0) {
+    return { ok: false, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}` };
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(res.stdout);
+  } catch {
+    /* non-json output tolerated */
+  }
+  const resultText = parsed && typeof parsed.result === "string" ? parsed.result : (res.stdout || "");
+  return { ok: true, summary: resultText.slice(0, 2000) };
+}
+
+// ---------- deterministic steps ----------
+
+function runCommandsStep(run, step, rig) {
+  const runDir = runDirOf(run.id);
+  const cmds = rig[step.source] || [];
+  if (cmds.length === 0) {
+    log(runDir, `step '${step.id}': no ${step.source} configured for rig, skipping`);
+    return { ok: true, summary: `no ${step.source} configured` };
+  }
+  const logFile = path.join(runDir, `${step.id}.log`);
+  for (const cmd of cmds) {
+    log(runDir, `step '${step.id}': ${cmd}`);
+    const r = runCommand(cmd, run.worktree, logFile, 30);
+    if (!r.ok) {
+      const tail = r.output.split("\n").slice(-80).join("\n");
+      fs.writeFileSync(
+        path.join(runDir, "findings.md"),
+        `Deterministic ${step.source} failed.\n\nCommand: \`${cmd}\`\n\nOutput tail:\n\n\`\`\`\n${tail}\n\`\`\`\n`
+      );
+      return { ok: false, summary: `${step.source} failed at: ${cmd}` };
+    }
+  }
+  return { ok: true, summary: `${cmds.length} ${step.source} command(s) green` };
+}
+
+function evaluateReview(run) {
+  const runDir = runDirOf(run.id);
+  const review = readJson(path.join(runDir, "review.json"), null);
+  if (!review || !review.verdict) {
+    return { ok: false, summary: "reviewer did not produce a valid review.json" };
+  }
+  try {
+    tArtifact(run.id, "review", "review_verdict", review.verdict);
+    for (const f of review.findings || []) tArtifact(run.id, "review", "finding", f);
+  } catch {}
+  if (review.verdict === "PASS") {
+    fs.rmSync(path.join(runDir, "findings.md"), { force: true });
+    return { ok: true, summary: "agentic review PASS" };
+  }
+  const findings = (review.findings || []).map((f, i) => `${i + 1}. ${f}`).join("\n");
+  fs.writeFileSync(
+    path.join(runDir, "findings.md"),
+    `Agentic cross-validation FAILED.\n\nFindings:\n\n${findings}\n`
+  );
+  return { ok: false, summary: `agentic review FAIL (${(review.findings || []).length} findings)` };
+}
+
+/** Record the run branch's commits as telemetry artifacts (idempotent-ish: replaces prior rows). */
+function recordCommits(run) {
+  try {
+    const out = sh(`git -C ${JSON.stringify(run.worktree)} log --format='%H %s' ${run.baseBranch}..HEAD`);
+    tdb().prepare(`DELETE FROM artifacts WHERE run_id = ? AND type = 'commit'`).run(run.id);
+    for (const line of out.trim().split("\n").filter(Boolean)) tArtifact(run.id, "implement", "commit", line);
+  } catch {}
+}
+
+// ---------- gate ----------
+
+function waitForGate(run, step) {
+  const runDir = runDirOf(run.id);
+  if (run.auto) {
+    log(runDir, "plan gate skipped (--auto)");
+    return { ok: true, summary: "auto-approved" };
+  }
+  setState(run, "awaiting-approval", "plan gate");
+  const planPath = path.join(runDir, step.planFile || "plan.md");
+  const plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, "utf8") : "(no plan file)";
+  notify(
+    run,
+    `:clipboard: Run ${run.id} (${run.workflow} on ${run.rig}) has a plan awaiting approval.\n\n` +
+      plan.slice(0, 2800) +
+      `\n\nApprove: \`factory-run approve ${run.id}\` / reject with feedback: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`
+  );
+  const decisionPath = path.join(runDir, "gate-decision.json");
+  const timeoutMs = 12 * 60 * 60 * 1000;
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (fs.existsSync(decisionPath)) {
+      const d = readJson(decisionPath, {});
+      if (d.decision === "approve") return { ok: true, summary: "founder approved" };
+      return { ok: false, summary: `founder rejected: ${d.feedback || ""}`, terminal: true };
+    }
+    const cancelled = loadRun(run.id).state === "cancelled";
+    if (cancelled) return { ok: false, summary: "cancelled", terminal: true };
+    execSync("sleep 15");
+  }
+  return { ok: false, summary: "plan gate timed out after 12h", terminal: true };
+}
+
+// ---------- deploy ----------
+
+function deployStep(run, rig) {
+  const runDir = runDirOf(run.id);
+  const deploy = rig.deploy || { type: "none" };
+  if (deploy.type === "none") {
+    return { ok: true, summary: "no deploy configured for this rig (quickfire/spec-only)", url: null };
+  }
+  if (deploy.type === "harness-merge") {
+    // Self-improvement deploy: merge the validated run branch into the rig's
+    // default branch and restart the gateway so skills/engine reload.
+    const logFile = path.join(runDir, "deploy.log");
+    const r = runCommand(
+      `git merge --no-ff factory/${run.id} -m "self-improvement: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})"`,
+      rig.path,
+      logFile,
+      5
+    );
+    if (!r.ok) {
+      runCommand("git merge --abort", rig.path, logFile, 2);
+      return { ok: false, summary: `harness merge failed (aborted cleanly): ${r.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
+    }
+    const sha = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --short HEAD`).trim();
+    runCommand("openclaw gateway restart < /dev/null", rig.path, logFile, 5);
+    try {
+      tArtifact(run.id, "deploy", "harness_merge_commit", sha);
+    } catch {}
+    return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
+  }
+  if (deploy.type !== "eas-update") {
+    return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
+  }
+  const appDir = path.join(run.worktree, rig.appDir || ".");
+  const logFile = path.join(runDir, "deploy.log");
+  const msg = `factory-run ${run.id}: ${run.prompt.slice(0, 80)}`;
+  log(runDir, `deploying: eas update --branch ${deploy.branch} (${appDir})`);
+  const environment = deploy.environment || deploy.branch;
+  const r = runCommand(
+    `npx eas update --branch ${JSON.stringify(deploy.branch)} --environment ${JSON.stringify(environment)} --message ${JSON.stringify(msg)} --non-interactive --json`,
+    appDir,
+    logFile,
+    30
+  );
+  if (!r.ok) {
+    return { ok: false, summary: `eas update failed (see deploy.log): ${r.output.split("\n").slice(-5).join(" | ").slice(0, 400)}` };
+  }
+  // The publish output is noisy; query the branch for the newest update group instead.
+  let url = null;
+  const list = runCommand(
+    `npx eas update:list --branch ${JSON.stringify(deploy.branch)} --limit 1 --json --non-interactive`,
+    appDir,
+    logFile,
+    5
+  );
+  try {
+    const jsonStart = list.output.indexOf("{");
+    const parsed = JSON.parse(list.output.slice(jsonStart));
+    const group = parsed.currentPage && parsed.currentPage[0] && parsed.currentPage[0].group;
+    if (group && rig.easSlug && RIGS.easAccount) {
+      url = `https://expo.dev/accounts/${RIGS.easAccount}/projects/${rig.easSlug}/updates/${group}`;
+    }
+  } catch {
+    const m = r.output.match(/https:\/\/expo\.dev\S+/);
+    if (m) url = m[0];
+  }
+  let qrPath = null;
+  if (url) {
+    qrPath = path.join(runDir, "qr.png");
+    const q = runCommand(`npx --yes qrcode ${JSON.stringify(url)} -o ${JSON.stringify(qrPath)}`, runDir, logFile, 5);
+    if (!q.ok) qrPath = null;
+  }
+  return { ok: true, summary: url ? `EAS update published: ${url}` : "EAS update published (no URL parsed, see deploy.log)", url, qrPath };
+}
+
+// ---------- executor ----------
+
+function execRun(id) {
+  const run = loadRun(id);
+  const runDir = runDirOf(id);
+  const rig = resolveRig(run.rig);
+  const workflow = loadWorkflow(run.workflow);
+  const loops = {};
+
+  try {
+    tRun(run);
+    // Worktree setup (idempotent on resume). Read-only workflows (self-review)
+    // set "worktree": false and run agent steps against the live checkout.
+    if (workflow.worktree === false) {
+      run.worktree = rig.path;
+      saveRun(run);
+    } else if (!fs.existsSync(run.worktree)) {
+      setState(run, "setup", "creating worktree");
+      fs.mkdirSync(WORKTREES_DIR, { recursive: true });
+      sh(`git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b factory/${id} ${rig.defaultBranch}`);
+      log(runDir, `worktree created at ${run.worktree} (branch factory/${id})`);
+      const setupLog = path.join(runDir, "setup.log");
+      for (const cmd of rig.setup || []) {
+        log(runDir, `setup: ${cmd}`);
+        const r = runCommand(cmd, run.worktree, setupLog, 30);
+        if (!r.ok) throw new Error(`setup failed: ${cmd} (see setup.log)`);
+      }
+    }
+
+    let i = run.stepIndex || 0;
+    while (i < workflow.steps.length) {
+      const step = workflow.steps[i];
+      run.stepIndex = i;
+      let result;
+      const stepStarted = nowIso();
+
+      if (step.type === "agent") {
+        setState(run, `running:${step.id}`, null);
+        notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
+        result = runAgentStep(run, step);
+        if (result.ok && step.id === "review") result = evaluateReview(run);
+        if (result.ok && step.id === "implement") recordCommits(run);
+      } else if (step.type === "commands") {
+        setState(run, `running:${step.id}`, null);
+        result = runCommandsStep(run, step, rig);
+      } else if (step.type === "gate") {
+        result = waitForGate(run, step);
+        if (result.ok) setState(run, "approved", result.summary);
+      } else if (step.type === "deploy") {
+        setState(run, "deploying", null);
+        result = deployStep(run, rig);
+        if (result.ok) {
+          run.artifactUrl = result.url || null;
+          run.qrPath = result.qrPath || null;
+          saveRun(run);
+        }
+      } else if (step.type === "notify") {
+        const planTitle = (() => {
+          try {
+            return fs.readFileSync(path.join(runDir, "plan.md"), "utf8").split("\n")[0].replace(/^#\s*/, "");
+          } catch {
+            return run.prompt.slice(0, 80);
+          }
+        })();
+        const lines = [
+          `:white_check_mark: Run ${id} complete: *${planTitle}*`,
+          `Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`,
+          run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : "No deployable artifact for this rig.",
+          `Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (or ask the chief of staff).`,
+        ];
+        notify(run, lines.join("\n"), run.qrPath);
+        result = { ok: true, summary: "founder notified" };
+      } else if (step.type === "spawn") {
+        // Self-improvement chain: launch a full workflow run (its own graph
+        // execution) with the approved plan as the prompt.
+        setState(run, `running:${step.id}`, null);
+        const planFile = path.join(runDir, step.promptFrom || "improvement-plan.md");
+        if (!fs.existsSync(planFile)) {
+          result = { ok: false, summary: `spawn: missing ${step.promptFrom}` };
+        } else {
+          const childPrompt = fs.readFileSync(planFile, "utf8");
+          const childId = createRun({
+            rig: step.rig || run.rig,
+            workflow: step.workflow,
+            prompt: childPrompt,
+            auto: step.auto !== false, // plan was already founder-approved at this run's gate
+            parentRun: run.id,
+          });
+          run.childRun = childId;
+          saveRun(run);
+          notify(run, `:rocket: Run ${id} spawned implementation run *${childId}* (${step.workflow} on ${step.rig || run.rig}) from the approved improvement plan. It will implement, validate, and deploy through the standard pipeline.`);
+          result = { ok: true, summary: `spawned ${childId}` };
+        }
+      } else if (step.type === "manual") {
+        result = { ok: true, summary: `manual step: ${step.note || ""}` };
+      } else {
+        result = { ok: false, summary: `unknown step type ${step.type}` };
+      }
+
+      log(runDir, `step '${step.id}': ${result.ok ? "OK" : "FAIL"} (${result.summary})`);
+      try {
+        tStep(id, step.id, (loops[step.id] || 0) + 1, result.ok ? "ok" : "fail", result.summary, stepStarted);
+        if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
+      } catch {}
+
+      if (!result.ok) {
+        if (result.terminal) {
+          setState(run, "rejected", result.summary);
+          notify(run, `:no_entry: Run ${id} stopped: ${result.summary}`);
+          return;
+        }
+        if (step.onFail) {
+          loops[step.id] = (loops[step.id] || 0) + 1;
+          if (loops[step.id] <= (step.maxLoops || 1)) {
+            const backIdx = workflow.steps.findIndex((s) => s.id === step.onFail);
+            log(runDir, `looping back to '${step.onFail}' (attempt ${loops[step.id]}/${step.maxLoops})`);
+            notify(run, `:arrows_counterclockwise: Run ${id}: *${step.id}* failed validation, looping back to *${step.onFail}* (attempt ${loops[step.id]}/${step.maxLoops}).\n${result.summary}`);
+            i = backIdx;
+            continue;
+          }
+        }
+        setState(run, "failed", result.summary);
+        notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}`);
+        return;
+      }
+      i += 1;
+      run.stepIndex = i;
+      saveRun(run);
+    }
+    setState(run, "done", null);
+  } catch (err) {
+    setState(run, "failed", String(err.message || err));
+    notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
+    throw err;
+  }
+}
+
+// ---------- commands ----------
+
+function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun }) {
+  const rig = resolveRig(rigName);
+  loadWorkflow(wfName);
+  const id = `${wfName.split("-")[0]}-${Date.now().toString(36)}`;
+  const runDir = runDirOf(id);
+  fs.mkdirSync(runDir, { recursive: true });
+  const run = {
+    id,
+    workflow: wfName,
+    rig: rigName,
+    prompt,
+    auto: !!auto,
+    parentRun: parentRun || null,
+    baseBranch: rig.defaultBranch,
+    worktree: path.join(WORKTREES_DIR, id),
+    state: "queued",
+    stepIndex: 0,
+    artifactUrl: null,
+    qrPath: null,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    history: [],
+  };
+  saveRun(run);
+  try {
+    tRun(run);
+  } catch {}
+  // Detach the executor so the caller (Slack skill / spawning run) returns immediately.
+  detachExec(id);
+  return id;
+}
+
+function cmdStart(argv) {
+  const rigName = argOf(argv, "--rig");
+  const wfName = argOf(argv, "--workflow") || "feature-dev";
+  const prompt = argOf(argv, "--prompt");
+  const auto = argv.includes("--auto");
+  if (!rigName || !prompt) {
+    console.error('usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]');
+    process.exit(1);
+  }
+  console.log(createRun({ rig: rigName, workflow: wfName, prompt, auto }));
+}
+
+function cmdReport(argv) {
+  const days = Number(argOf(argv, "--days") || 30);
+  const asJson = argv.includes("--json");
+  // Backfill any runs on disk that predate telemetry (runs, engine.log step
+  // outcomes, review verdicts/findings, deploy artifacts).
+  if (fs.existsSync(RUNS_DIR)) {
+    const db = tdb();
+    for (const d of fs.readdirSync(RUNS_DIR)) {
+      const r = readJson(path.join(RUNS_DIR, d, "run.json"), null);
+      if (!r) continue;
+      tRun(r);
+      tRunState(r);
+      const hasSteps = db.prepare(`SELECT COUNT(*) n FROM steps WHERE run_id = ?`).get(r.id).n > 0;
+      if (!hasSteps) {
+        const logPath = path.join(RUNS_DIR, d, "engine.log");
+        if (fs.existsSync(logPath)) {
+          const re = /^\[([^\]]+)\] step '([^']+)': (OK|FAIL) \((.*)\)$/;
+          for (const line of fs.readFileSync(logPath, "utf8").split("\n")) {
+            const m = line.match(re);
+            if (m) {
+              db.prepare(`INSERT INTO steps (run_id, step_id, attempt, status, summary, started_at, finished_at, duration_s) VALUES (?,?,?,?,?,?,?,NULL)`)
+                .run(r.id, m[2], 1, m[3] === "OK" ? "ok" : "fail", m[4].slice(0, 1000), m[1], m[1]);
+            }
+          }
+        }
+        const review = readJson(path.join(RUNS_DIR, d, "review.json"), null);
+        if (review && review.verdict) {
+          tArtifact(r.id, "review", "review_verdict", review.verdict);
+          for (const f of review.findings || []) tArtifact(r.id, "review", "finding", f);
+        }
+        if (r.artifactUrl) tArtifact(r.id, "deploy", "artifact_url", r.artifactUrl);
+      }
+    }
+  }
+  const since = new Date(Date.now() - days * 864e5).toISOString();
+  const db = tdb();
+  const runs = db.prepare(`SELECT * FROM runs WHERE created_at >= ? ORDER BY created_at DESC`).all(since);
+  const stepStats = db
+    .prepare(
+      `SELECT s.step_id, COUNT(*) n, SUM(s.status = 'fail') fails, ROUND(AVG(s.duration_s), 1) avg_s, MAX(s.attempt) max_attempt
+       FROM steps s JOIN runs r ON r.id = s.run_id WHERE r.created_at >= ? GROUP BY s.step_id ORDER BY n DESC`
+    )
+    .all(since);
+  const findings = db
+    .prepare(
+      `SELECT a.run_id, a.value FROM artifacts a JOIN runs r ON r.id = a.run_id
+       WHERE a.type = 'finding' AND r.created_at >= ? ORDER BY a.created_at DESC LIMIT 25`
+    )
+    .all(since);
+  const failures = db
+    .prepare(
+      `SELECT s.run_id, s.step_id, s.summary FROM steps s JOIN runs r ON r.id = s.run_id
+       WHERE s.status = 'fail' AND r.created_at >= ? ORDER BY s.finished_at DESC LIMIT 15`
+    )
+    .all(since);
+  const artifacts = db
+    .prepare(
+      `SELECT a.run_id, a.type, a.value FROM artifacts a JOIN runs r ON r.id = a.run_id
+       WHERE a.type IN ('artifact_url', 'harness_merge_commit', 'commit') AND r.created_at >= ?
+       ORDER BY a.created_at DESC LIMIT 40`
+    )
+    .all(since);
+  if (asJson) {
+    console.log(JSON.stringify({ since, runs, stepStats, findings, failures, artifacts }, null, 2));
+    return;
+  }
+  const lines = [`# Factory run report (last ${days} days, since ${since})`, ""];
+  lines.push(`## Runs (${runs.length})`, "");
+  lines.push("| id | workflow | rig | state | created | prompt |", "|---|---|---|---|---|---|");
+  for (const r of runs) {
+    lines.push(`| ${r.id} | ${r.workflow} | ${r.rig} | ${r.state} | ${r.created_at.slice(0, 16)} | ${(r.prompt || "").replace(/\n/g, " ").slice(0, 70)} |`);
+  }
+  lines.push("", "## Step statistics", "", "| step | executions | failures | avg seconds | max attempt |", "|---|---|---|---|---|");
+  for (const s of stepStats) lines.push(`| ${s.step_id} | ${s.n} | ${s.fails} | ${s.avg_s} | ${s.max_attempt} |`);
+  lines.push("", "## Recent step failures", "");
+  for (const f of failures) lines.push(`- [${f.run_id} / ${f.step_id}] ${(f.summary || "").replace(/\n/g, " ").slice(0, 200)}`);
+  lines.push("", "## Recent review findings", "");
+  for (const f of findings) lines.push(`- [${f.run_id}] ${(f.value || "").replace(/\n/g, " ").slice(0, 200)}`);
+  lines.push("", "## Recent artifacts (commits, deploys)", "");
+  for (const a of artifacts) lines.push(`- [${a.run_id}] ${a.type}: ${(a.value || "").replace(/\n/g, " ").slice(0, 160)}`);
+  console.log(lines.join("\n"));
+}
+
+function detachExec(id) {
+  const out = fs.openSync(path.join(runDirOf(id), "executor.log"), "a");
+  const child = spawn(process.execPath, [__filename, "exec", id], {
+    detached: true,
+    stdio: ["ignore", out, out],
+  });
+  child.unref();
+}
+
+function cmdResume(id) {
+  const run = loadRun(id); // validates
+  if (["done", "cancelled"].includes(run.state)) {
+    console.error(`run ${id} is ${run.state}; nothing to resume`);
+    process.exit(1);
+  }
+  detachExec(id);
+  console.log(`resumed ${id} at step ${run.stepIndex}`);
+}
+
+function cmdStatus(argv) {
+  const id = argv.find((a) => !a.startsWith("--"));
+  const asJson = argv.includes("--json");
+  const ids = id ? [id] : fs.existsSync(RUNS_DIR) ? fs.readdirSync(RUNS_DIR).filter((d) => fs.existsSync(path.join(RUNS_DIR, d, "run.json"))) : [];
+  const runs = ids.map((rid) => loadRun(rid)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  if (asJson) {
+    console.log(JSON.stringify(runs, null, 2));
+    return;
+  }
+  for (const r of runs) {
+    const wf = loadWorkflow(r.workflow);
+    const step = wf.steps[Math.min(r.stepIndex, wf.steps.length - 1)];
+    console.log(`${r.id}  ${r.state.padEnd(20)} ${r.rig.padEnd(20)} step ${r.stepIndex}/${wf.steps.length} (${step.id})  ${r.prompt.slice(0, 60)}`);
+    if (id) {
+      for (const h of r.history.slice(-10)) console.log(`  ${h.at}  ${h.state}${h.detail ? ` — ${h.detail}` : ""}`);
+      if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
+      console.log(`  worktree: ${r.worktree}`);
+      console.log(`  run dir:  ${runDirOf(r.id)}`);
+    }
+  }
+  if (runs.length === 0) console.log("no runs");
+}
+
+function cmdGate(id, decision, feedback) {
+  loadRun(id); // validates
+  writeJson(path.join(runDirOf(id), "gate-decision.json"), { decision, feedback: feedback || null, at: nowIso() });
+  console.log(`${decision} recorded for ${id}`);
+}
+
+function cmdSteer(id, instruction) {
+  loadRun(id);
+  fs.appendFileSync(path.join(runDirOf(id), "steering.md"), `- [${nowIso()}] ${instruction}\n`);
+  console.log(`steering recorded for ${id} (applies from the next agentic step)`);
+}
+
+function cmdCancel(id) {
+  const run = loadRun(id);
+  setState(run, "cancelled", "cancelled by founder");
+  console.log(`cancelled ${id} (executor exits at the next step boundary; worktree kept)`);
+}
+
+function cmdSelftest() {
+  const problems = [];
+  const okMark = (b) => (b ? "ok" : "MISSING");
+  for (const name of Object.keys(RIGS.rigs)) {
+    const rig = resolveRig(name);
+    const exists = fs.existsSync(rig.path) && fs.existsSync(path.join(rig.path, ".git"));
+    console.log(`rig ${name}: path ${okMark(exists)} (${rig.path})`);
+    if (!exists) problems.push(`rig ${name} path missing`);
+    try {
+      const branch = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --verify ${rig.defaultBranch}`, {}).trim();
+      console.log(`rig ${name}: base branch ${rig.defaultBranch} ok (${branch.slice(0, 8)})`);
+    } catch {
+      problems.push(`rig ${name}: base branch ${rig.defaultBranch} not found`);
+    }
+  }
+  for (const wf of ["feature-dev", "bug-fix"]) {
+    const w = loadWorkflow(wf);
+    for (const s of w.steps) {
+      if (s.type === "agent" && !fs.existsSync(path.join(ORCH_DIR, "prompts", `${s.prompt}.md`))) {
+        problems.push(`workflow ${wf}: missing prompt ${s.prompt}`);
+      }
+    }
+    console.log(`workflow ${wf}: ${w.steps.length} steps ok`);
+  }
+  for (const bin of ["claude", "openclaw", "git", "npx"]) {
+    const found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
+    console.log(`binary ${bin}: ${okMark(found)}`);
+    if (!found) problems.push(`binary ${bin} not on PATH`);
+  }
+  if (problems.length) {
+    console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
+    process.exit(1);
+  }
+  console.log("\nselftest green");
+}
+
+function argOf(argv, flag) {
+  const i = argv.indexOf(flag);
+  return i !== -1 ? argv[i + 1] : undefined;
+}
+
+// ---------- main ----------
+
+const [, , cmd, ...rest] = process.argv;
+try {
+  if (cmd === "start") cmdStart(rest);
+  else if (cmd === "exec") execRun(rest[0]);
+  else if (cmd === "resume") cmdResume(rest[0]);
+  else if (cmd === "status" || cmd === "list") cmdStatus(rest);
+  else if (cmd === "approve") cmdGate(rest[0], "approve");
+  else if (cmd === "reject") cmdGate(rest[0], "reject", rest[1]);
+  else if (cmd === "steer") cmdSteer(rest[0], rest.slice(1).join(" "));
+  else if (cmd === "cancel") cmdCancel(rest[0]);
+  else if (cmd === "selftest") cmdSelftest();
+  else if (cmd === "report") cmdReport(rest);
+  else {
+    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|report|selftest>");
+    process.exit(cmd ? 1 : 0);
+  }
+} catch (err) {
+  console.error(`error: ${err.message || err}`);
+  process.exit(1);
+}

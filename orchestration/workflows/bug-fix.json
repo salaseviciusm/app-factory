@@ -1,0 +1,13 @@
+{
+  "name": "bug-fix",
+  "description": "Bug fix: finds the bug, implements a fix, validates with agentic cross-validation and deterministic checks (link/compile/test, GitHub-Actions-style), then ships.",
+  "steps": [
+    { "id": "find", "type": "agent", "prompt": "bug-finder", "timeoutMinutes": 20 },
+    { "id": "implement", "type": "agent", "prompt": "bug-fixer", "timeoutMinutes": 60 },
+    { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
+    { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },
+    { "id": "tests", "type": "commands", "source": "tests", "onFail": "implement", "maxLoops": 2 },
+    { "id": "deploy", "type": "deploy" },
+    { "id": "notify", "type": "notify" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "new-app",
+  "description": "Quick-fire new app idea inside the factory. Delegates to the existing factory-new-app skill flow (spec refinement, market sanity, brand pack, template stamp), then runs as a quickfire rig where the marketing loop judges viability. Not executed by the run engine step-by-step; the orchestrator drives the factory-new-app skill and registers the resulting apps/<name> as a quickfire rig.",
+  "steps": [
+    { "id": "delegate", "type": "manual", "note": "Orchestrator runs the factory-new-app skill (spec -> founder spec gate -> stamp template). Resulting app dir becomes rig factory:<name>." },
+    { "id": "first-feature", "type": "manual", "note": "Subsequent feature work on the new app uses workflow feature-dev with rig factory:<name> (quickfire tier: template checks only, no agentic review loop by default)." }
+  ]
+}

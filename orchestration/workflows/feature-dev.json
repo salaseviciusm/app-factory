@@ -1,0 +1,14 @@
+{
+  "name": "feature-dev",
+  "description": "Feature development: dissect prompt, refine plan with founder, implement, validate (agentic + deterministic), test, deploy as downloadable update.",
+  "steps": [
+    { "id": "plan", "type": "agent", "prompt": "planner", "timeoutMinutes": 15 },
+    { "id": "plan-gate", "type": "gate", "skipWhen": "auto" },
+    { "id": "implement", "type": "agent", "prompt": "implementer", "timeoutMinutes": 90 },
+    { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
+    { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },
+    { "id": "tests", "type": "commands", "source": "tests", "onFail": "implement", "maxLoops": 2 },
+    { "id": "deploy", "type": "deploy" },
+    { "id": "notify", "type": "notify" }
+  ]
+}

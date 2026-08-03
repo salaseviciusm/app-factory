@@ -1,0 +1,85 @@
+{
+  "notify": {
+    "channel": "slack",
+    "to": "channel:${FACTORY_BUILDS_CHANNEL}"
+  },
+  "easAccount": "salaseviciusm",
+  "rigs": {
+    "running-with-pace": {
+      "path": "~/src/running-with-pace",
+      "tier": "production",
+      "defaultBranch": "main",
+      "setup": [
+        "npm install",
+        "cd pace-react-native && npm install"
+      ],
+      "checks": [
+        "npm run type-check",
+        "npm run lint"
+      ],
+      "tests": [
+        "npm run test:unit"
+      ],
+      "appDir": "pace-react-native",
+      "easSlug": "pace",
+      "deploy": {
+        "type": "eas-update",
+        "branch": "preview"
+      }
+    },
+    "app-factory": {
+      "path": "~/src/app-factory",
+      "tier": "production",
+      "defaultBranch": "main",
+      "setup": [],
+      "checks": [
+        "node --check orchestration/bin/factory-run",
+        "orchestration/bin/factory-run selftest",
+        "bash -n openclaw/apply-slack.sh openclaw/apply-voice.sh openclaw/setup-automations.sh"
+      ],
+      "tests": [],
+      "appDir": ".",
+      "deploy": {
+        "type": "harness-merge"
+      }
+    },
+    "skip-hero": {
+      "path": "~/src/skip-hero",
+      "tier": "production",
+      "defaultBranch": "main",
+      "setup": [
+        "npm install"
+      ],
+      "checks": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run format:check"
+      ],
+      "tests": [
+        "npm run test"
+      ],
+      "appDir": "apps/mobile",
+      "easSlug": "skip-hero",
+      "deploy": {
+        "type": "eas-update",
+        "branch": "preview"
+      }
+    }
+  },
+  "factoryApps": {
+    "basePath": "~/src/app-factory/apps",
+    "tier": "quickfire",
+    "defaultBranch": "main",
+    "setup": [
+      "npm install"
+    ],
+    "checks": [
+      "npm run check"
+    ],
+    "tests": [],
+    "appDir": ".",
+    "deploy": {
+      "type": "none"
+    }
+  }
+}

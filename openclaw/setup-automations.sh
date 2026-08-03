@@ -57,6 +57,19 @@ openclaw cron add "0 18 * * *" \
   --timeout-seconds 600
   < /dev/null
 
+# Weekly self-review — Sunday 17:00. Isolated turn kicks off the self-review
+# workflow; the run engine handles the Slack plan gate + spawned implementation.
+openclaw cron add "0 17 * * 0" \
+  "Run the factory-self-review skill: start a self-review run (factory-run start --rig app-factory --workflow self-review --prompt 'weekly self-review: find the highest-leverage harness improvement'). Your final message must be one short line announcing the run id and that the improvement plan will arrive in #factory-builds for approval." \
+  --name "factory-weekly-self-review" \
+  --declaration-key "factory-weekly-self-review" \
+  --session isolated \
+  --announce \
+  --channel slack \
+  --to "channel:${STANDUP_CHANNEL}" \
+  --timeout-seconds 600 \
+  < /dev/null
+
 # --- Phase 3 additions (do not enable yet — see docs/07-roadmap.md) ---
 # nightly analytics pull, weekly marketing calendar prep, weekly retro prompt
 
