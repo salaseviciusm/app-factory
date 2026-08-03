@@ -19,8 +19,9 @@
         "${FACTORY_STANDUP_CHANNEL}": { requireMention: false },
         // #factory-approvals — gate confirmations
         "${FACTORY_APPROVALS_CHANNEL}": { requireMention: false },
-        // #factory-builds — build/pipeline status
-        "${FACTORY_BUILDS_CHANNEL}": { requireMention: true },
+        // #factory-builds — build/pipeline status; run-gate approvals are typed
+        // here as plain replies, so no @mention required
+        "${FACTORY_BUILDS_CHANNEL}": { requireMention: false },
       },
       // DMs from the founder only
       dmPolicy: "allowlist",
