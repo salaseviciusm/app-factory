@@ -548,6 +548,45 @@ still applies.
 **Cadence:** weekly cron (`factory-weekly-self-review`, Sundays 17:00) plus
 on-demand via the `factory-self-review` skill ("review how the factory is doing").
 
+## 12b. Preflight: external-CLI contract checks (implemented 2026-08-03)
+
+Both live bugs in the smoke run were the same failure class: `factory-run`
+shells out to external CLIs (`openclaw message send`, `eas update`) with
+hand-written argument lists that were first validated in production. Preflight
+exercises those exact contracts before any token is spent.
+
+**Probes** (all read-only — nothing is sent to Slack, nothing is published):
+
+- `notify:openclaw-send-contract` — runs `openclaw message send --help` and
+  cross-checks it against the engine's real notify argv (built by the same
+  `notifyArgs()` helper `notify()` sends with, so the probe cannot drift):
+  every long `--flag` the engine passes must appear in the help output, and
+  every option the help marks required must be covered by the engine's argv.
+- `claude:version` — `claude --version` must exit 0.
+- Per rig with `deploy.type: "eas-update"`, executed in the rig's live app
+  directory: `npx eas whoami --non-interactive` (authenticated, exit 0),
+  `npx eas update --help` (must contain every publish flag from the shared
+  `easPublishArgs()` helper that the real deploy step sends with), and
+  `npx eas update:list --branch <branch> --limit 1 --non-interactive --json`
+  (exit 0 and JSON-parseable output). Rigs with deploy type `none` or
+  `harness-merge` get no EAS probes.
+
+**Automatic run-start invocation:** the executor runs the rig's preflight at
+the top of every run — before worktree setup, so resumes re-verify too. A
+failure sets the run `failed` with a summary starting `preflight failed:`
+before any agent step runs, and is recorded as a normal telemetry step
+(`step_id` `preflight`), so `report` shows it. Related fail-loud change:
+`notify()` now reports send success, and an undeliverable plan-gate
+notification ends the run terminally (naming the notify failure) instead of
+silently waiting 12 h on a gate the founder never saw.
+
+**Standalone command:** `factory-run preflight [--rig <name>]` probes one rig
+(default: all registered rigs), prints one line per probe (ok/FAIL plus
+detail), and exits non-zero on any failure.
+
+**Escape hatch:** `FACTORY_RUN_NO_PREFLIGHT=1` skips the run-start preflight
+(engine tests, offline work). The standalone command always runs.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.
