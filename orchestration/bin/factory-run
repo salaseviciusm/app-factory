@@ -39,6 +39,10 @@ const path = require("path");
 const { execSync, spawnSync, spawn } = require("child_process");
 
 const ORCH_DIR = path.resolve(__dirname, "..");
+// Company agent profiles (repo-root agents/, sibling of orchestration/), read
+// from the main checkout like prompts/ — never from a run's worktree. Only
+// top-level .md files are addressable; agents/dormant/ is intentionally not.
+const AGENTS_DIR = path.join(ORCH_DIR, "..", "agents");
 const RUNS_DIR = path.join(ORCH_DIR, "runs");
 const WORKTREES_DIR = path.join(ORCH_DIR, "worktrees");
 const RIGS = JSON.parse(fs.readFileSync(path.join(ORCH_DIR, "rigs.json"), "utf8"));
@@ -304,6 +308,30 @@ function loadWorkflow(name) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
+/** Every agent step's file references, checked before any run record or
+ *  worktree exists (createRun) and across all workflows by selftest: the
+ *  prompt template must exist and, when the step names an `agent` profile,
+ *  the name must be a plain slug (never usable as a path — no `../`) with a
+ *  matching top-level agents/<agent>.md. Returns problem lines, [] when
+ *  clean. */
+function validateWorkflowAgentSteps(wfName, wf) {
+  const problems = [];
+  for (const s of wf.steps) {
+    if (s.type !== "agent") continue;
+    if (!fs.existsSync(path.join(ORCH_DIR, "prompts", `${s.prompt}.md`))) {
+      problems.push(`workflow ${wfName}: missing prompt ${s.prompt}`);
+    }
+    if (s.agent !== undefined) {
+      if (!/^[a-z0-9-]+$/.test(String(s.agent))) {
+        problems.push(`workflow ${wfName}: invalid agent name '${s.agent}' (must match /^[a-z0-9-]+$/)`);
+      } else if (!fs.existsSync(path.join(AGENTS_DIR, `${s.agent}.md`))) {
+        problems.push(`workflow ${wfName}: missing agent profile ${s.agent} (agents/${s.agent}.md)`);
+      }
+    }
+  }
+  return problems;
+}
+
 function runDirOf(id) {
   return path.join(RUNS_DIR, id);
 }
@@ -469,9 +497,21 @@ function notify(run, message, mediaPath) {
 
 // ---------- agentic steps (Claude Code) ----------
 
-function renderPrompt(templateName, run) {
+/** Compose an agent step's final prompt (pure, exercised by selftest).
+ *  Order: agent profile first, rendered task template second, joined by
+ *  "\n\n---\n\n" — the profile is a role/voice/standards preamble included
+ *  VERBATIM (frontmatter and all, no placeholder substitution), and the
+ *  template's task + output contract come last so task-specific instructions
+ *  win on any conflict. Without a profile the template passes through
+ *  unchanged. */
+function composeStepPrompt(profileText, renderedTemplate) {
+  if (!profileText) return renderedTemplate;
+  return `${profileText}\n\n---\n\n${renderedTemplate}`;
+}
+
+function renderPrompt(step, run) {
   const runDir = runDirOf(run.id);
-  let tpl = fs.readFileSync(path.join(ORCH_DIR, "prompts", `${templateName}.md`), "utf8");
+  let tpl = fs.readFileSync(path.join(ORCH_DIR, "prompts", `${step.prompt}.md`), "utf8");
   const steeringPath = path.join(runDir, "steering.md");
   const steering = fs.existsSync(steeringPath)
     ? `Founder steering (mid-run instructions, honor these):\n\n${fs.readFileSync(steeringPath, "utf8")}`
@@ -480,12 +520,16 @@ function renderPrompt(templateName, run) {
   const findings = fs.existsSync(findingsPath)
     ? `Previous validation FAILED. You must address every finding below, then re-complete your task:\n\n${fs.readFileSync(findingsPath, "utf8")}`
     : "";
-  return tpl
+  const rendered = tpl
     .replaceAll("{{PROMPT}}", run.prompt)
     .replaceAll("{{RUN_DIR}}", runDir)
     .replaceAll("{{BASE_BRANCH}}", run.baseBranch)
     .replaceAll("{{STEERING}}", steering)
     .replaceAll("{{FINDINGS}}", findings);
+  // {{…}} substitution applies to the task template only; the profile (when
+  // the step names one) is prepended verbatim by composeStepPrompt.
+  const profile = step.agent ? fs.readFileSync(path.join(AGENTS_DIR, `${step.agent}.md`), "utf8") : null;
+  return composeStepPrompt(profile, rendered);
 }
 
 /** Filename of one attempt's prompt/output/transcript document. Attempt 1
@@ -525,7 +569,7 @@ function runAgentStep(run, step) {
   // Attempt derived from files on disk (not in-memory loop counters) so
   // numbering survives engine restarts and never overwrites earlier attempts.
   const attempt = maxStepAttempt(fs.readdirSync(runDir), step.id) + 1;
-  const prompt = renderPrompt(step.prompt, run);
+  const prompt = renderPrompt(step, run);
   const promptFile = path.join(runDir, stepDocName(step.id, "prompt", attempt));
   fs.writeFileSync(promptFile, prompt);
   // Full working context goes to <step>[.N].transcript.jsonl: stdout streams
@@ -540,7 +584,7 @@ function runAgentStep(run, step) {
     "--dangerously-skip-permissions",
   ];
   if (step.model) args.push("--model", step.model);
-  log(runDir, `agent step '${step.id}' starting (attempt ${attempt}, model=${step.model || "default"}, cwd=${run.worktree})`);
+  log(runDir, `agent step '${step.id}' starting (attempt ${attempt}, model=${step.model || "default"}, agent=${step.agent || "none"}, cwd=${run.worktree})`);
   const fd = fs.openSync(transcriptFile, "w");
   let res;
   try {
@@ -1557,7 +1601,10 @@ function execRun(id) {
 
 function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun }) {
   const rig = resolveRig(rigName);
-  loadWorkflow(wfName);
+  const wf = loadWorkflow(wfName);
+  // Fail before the run dir or worktree exists on a broken step reference.
+  const wfProblems = validateWorkflowAgentSteps(wfName, wf);
+  if (wfProblems.length) throw new Error(wfProblems.join("; "));
   const slug = slugify(prompt);
   const base = `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
   const id = uniqueRunId(base, (candidate) => fs.existsSync(runDirOf(candidate)));
@@ -2031,14 +2078,16 @@ function cmdSelftest() {
       problems.push(`rig ${name}: base branch ${rig.defaultBranch} not found`);
     }
   }
-  for (const wf of ["feature-dev", "bug-fix"]) {
+  const wfNames = fs
+    .readdirSync(path.join(ORCH_DIR, "workflows"))
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""))
+    .sort();
+  for (const wf of wfNames) {
     const w = loadWorkflow(wf);
-    for (const s of w.steps) {
-      if (s.type === "agent" && !fs.existsSync(path.join(ORCH_DIR, "prompts", `${s.prompt}.md`))) {
-        problems.push(`workflow ${wf}: missing prompt ${s.prompt}`);
-      }
-    }
-    console.log(`workflow ${wf}: ${w.steps.length} steps ok`);
+    const wfProblems = validateWorkflowAgentSteps(wf, w);
+    problems.push(...wfProblems);
+    console.log(`workflow ${wf}: ${w.steps.length} steps ${wfProblems.length ? "INVALID" : "ok"}`);
   }
   {
     const p = fs.existsSync(path.join(ORCH_DIR, "prompts", `${RESOLVE_STEP.prompt}.md`));
@@ -2161,6 +2210,24 @@ function cmdSelftest() {
   for (const [name, ok] of docChecks) {
     console.log(`step-doc ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`step-doc check failed: ${name}`);
+  }
+  // Agent-profile prompt composition (pure) + agent-step reference validation
+  // (fs.existsSync against the repo's own prompts/ and agents/).
+  const composed = composeStepPrompt("# Role\n{{PROMPT}} stays literal", "task body");
+  const vAgent = (agent) =>
+    validateWorkflowAgentSteps("synthetic", { steps: [{ id: "x", type: "agent", prompt: "planner", agent }] });
+  const agentChecks = [
+    ["profile first, --- separator, template last", composed === "# Role\n{{PROMPT}} stays literal\n\n---\n\ntask body"],
+    ["profile placeholders survive verbatim", composed.includes("{{PROMPT}} stays literal")],
+    ["no profile passes template through unchanged", composeStepPrompt(null, "task body") === "task body"],
+    ["existing agent profile accepted", vAgent("product-lead").length === 0],
+    ["missing agent profile flagged with workflow+agent", vAgent("no-such-agent").some((p) => p === "workflow synthetic: missing agent profile no-such-agent (agents/no-such-agent.md)")],
+    ["path-traversal agent name rejected", vAgent("../secrets").some((p) => /invalid agent name '\.\.\/secrets'/.test(p))],
+    ["missing prompt still flagged", validateWorkflowAgentSteps("synthetic", { steps: [{ id: "x", type: "agent", prompt: "no-such-prompt" }] }).some((p) => p === "workflow synthetic: missing prompt no-such-prompt")],
+  ];
+  for (const [name, ok] of agentChecks) {
+    console.log(`agent-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`agent-step check failed: ${name}`);
   }
   // Transcript envelope extraction + context stats (pure — no filesystem access).
   const assistantEv = JSON.stringify({
