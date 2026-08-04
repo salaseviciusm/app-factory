@@ -98,6 +98,7 @@ export interface Recovery {
 export interface StepDocAttempts {
   prompt: number[];
   output: number[];
+  transcript: number[];
 }
 
 export type StepDocKind = keyof StepDocAttempts;
@@ -128,4 +129,43 @@ export interface RunsResponse {
 export interface SettingsResponse {
   rigsRaw: string;
   workflows: Workflow[];
+}
+
+/** Per-repo cost bucket (quickfire factory:<app> rigs collapse into "factory-apps"). */
+export interface RepoUsage {
+  repo: string;
+  costUsd: number;
+  pricedSteps: number;
+  runs: number;
+}
+
+/** Cost/token aggregates for one trailing window (or all time). */
+export interface UsageWindow {
+  costUsd: number;
+  inputTokens: number;
+  rawInputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  pricedSteps: number;
+  runs: number;
+  repos: RepoUsage[];
+}
+
+export type UsageWindowKey = "all" | "d31" | "d7" | "d1";
+
+export interface StorageCategory {
+  key: string;
+  label: string;
+  bytes: number;
+  files: number;
+}
+
+export interface UsageResponse {
+  cost: Record<UsageWindowKey, UsageWindow>;
+  storage: {
+    categories: StorageCategory[];
+    totalBytes: number;
+    totalFiles: number;
+  };
 }

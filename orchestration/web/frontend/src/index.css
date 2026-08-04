@@ -703,6 +703,84 @@ th {
   overflow-wrap: anywhere;
 }
 
+/* ---------- transcript timeline ---------- */
+
+.transcript-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 55vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+}
+
+.tr-entry {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+
+.tr-entry:last-child {
+  border-bottom: none;
+}
+
+.tr-entry summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.tr-tool summary code {
+  color: var(--accent);
+}
+
+.tr-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.tr-final summary {
+  color: var(--ok);
+}
+
+/* ---------- usage page ---------- */
+
+.usage-total {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.usage-total-cost {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.usage-total-sub {
+  color: var(--text-dim);
+  font-size: 0.88rem;
+}
+
+.usage-windows {
+  margin-bottom: 10px;
+}
+
+.usage-window-line {
+  margin-bottom: 8px;
+  font-size: 0.92rem;
+}
+
+.usage-total-row td {
+  border-top: 1px solid var(--border);
+  font-weight: 600;
+}
+
 /* ---------- settings ---------- */
 
 .wf-details {
