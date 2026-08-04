@@ -757,8 +757,11 @@ function deployStep(run, rig) {
       delete run.recovery.pending;
       saveRun(run);
     }
+    // The prompt's first line is free-form founder/plan text and can contain
+    // backticks, quotes or $ — single-quote it so the shell treats it as data.
+    const mergeSubject = `self-improvement: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})`;
     const r = runCommand(
-      `git merge --no-ff factory/${run.id} -m "self-improvement: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})"`,
+      `git merge --no-ff factory/${run.id} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
       rig.path,
       logFile,
       5
