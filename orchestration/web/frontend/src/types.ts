@@ -58,6 +58,7 @@ export interface WorkflowStep {
   source?: string;
   onFail?: string;
   maxLoops?: number;
+  onRecover?: string;
   note?: string;
   planFile?: string;
   workflow?: string;
@@ -77,6 +78,22 @@ export interface HistoryEntry {
   at: string;
 }
 
+/** One deploy-recovery cycle: the run branch was rebased onto the drifted base. */
+export interface RecoveryAttempt {
+  at: string;
+  fromSha: string;
+  toSha: string;
+  conflicted: boolean;
+  outcome: string;
+}
+
+/** Deploy-recovery state persisted in run.json (absent until the base drifts). */
+export interface Recovery {
+  iterations: number;
+  attempts: RecoveryAttempt[];
+  pending?: string;
+}
+
 /** Per-attempt documents available for one step (attempt numbers, ascending). */
 export interface StepDocAttempts {
   prompt: number[];
@@ -92,10 +109,13 @@ export interface RunDetail {
   steps: StepRow[];
   artifacts: ArtifactRow[];
   workflow: Workflow | null;
+  recovery: Recovery | null;
   planMd: string | null;
   findingsMd: string | null;
   steeringMd: string | null;
   deviationsMd: string | null;
+  conflictMd: string | null;
+  escalationMd: string | null;
   review: { verdict?: string; findings?: string[] } | null;
   stepDocs: Record<string, StepDocAttempts>;
   logs: string[];

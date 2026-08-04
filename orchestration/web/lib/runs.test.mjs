@@ -10,7 +10,7 @@ import { getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
 const RUN_ID = "feature-test-run";
 
 /** Build a throwaway orchDir with one workflow and one run dir. */
-function makeOrchDir(t, files = {}) {
+function makeOrchDir(t, files = {}, runOverrides = {}) {
   const orchDir = fs.mkdtempSync(path.join(os.tmpdir(), "runs-test-"));
   t.after(() => fs.rmSync(orchDir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(orchDir, "workflows"));
@@ -40,6 +40,7 @@ function makeOrchDir(t, files = {}) {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T01:00:00.000Z",
       history: [],
+      ...runOverrides,
     })
   );
   for (const [name, text] of Object.entries(files)) {
@@ -109,6 +110,42 @@ test("readStepDoc returns 404 for valid input with no file", (t) => {
   missing(readStepDoc(orchDir, "feature-no-such-run", "implement", "prompt"));
 });
 
+test("readStepDoc serves the synthetic resolve-conflicts step's documents", (t) => {
+  const orchDir = makeOrchDir(t, {
+    "resolve-conflicts.prompt.md": "resolve prompt",
+    "resolve-conflicts.2.output.json": '{"result":"resolved"}',
+  });
+  // Not declared in the workflow, but allowlisted as an engine-synthetic step.
+  assert.deepEqual(readStepDoc(orchDir, RUN_ID, "resolve-conflicts", "prompt"), { text: "resolve prompt" });
+  assert.deepEqual(readStepDoc(orchDir, RUN_ID, "resolve-conflicts", "output", 2), { text: '{"result":"resolved"}' });
+  assert.equal(readStepDoc(orchDir, RUN_ID, "resolve-conflicts", "output", 1).status, 404);
+});
+
+test("getRunDetail exposes recovery state, conflict/escalation docs, and resolve-conflicts docs", (t) => {
+  const recovery = {
+    iterations: 2,
+    attempts: [
+      { at: "2026-01-01T00:30:00.000Z", fromSha: "aaa", toSha: "bbb", conflicted: false, outcome: "reverify" },
+      { at: "2026-01-01T00:45:00.000Z", fromSha: "bbb", toSha: "ccc", conflicted: true, outcome: "resolved" },
+    ],
+  };
+  const orchDir = makeOrchDir(
+    t,
+    {
+      "conflict.md": "conflicting files\n",
+      "escalation.md": "needs a human\n",
+      "resolve-conflicts.prompt.md": "p",
+      "resolve-conflicts.output.json": "o",
+    },
+    { recovery }
+  );
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.deepEqual(detail.recovery, recovery);
+  assert.equal(detail.conflictMd, "conflicting files\n");
+  assert.equal(detail.escalationMd, "needs a human\n");
+  assert.deepEqual(detail.stepDocs["resolve-conflicts"], { prompt: [1], output: [1] });
+});
+
 test("getRunDetail lists step docs, extra documents, and the extended logs", (t) => {
   const orchDir = makeOrchDir(t, {
     "plan.prompt.md": "p",
@@ -143,6 +180,9 @@ test("getRunDetail reports absent documents as null", (t) => {
   const detail = getRunDetail(orchDir, RUN_ID);
   assert.equal(detail.steeringMd, null);
   assert.equal(detail.deviationsMd, null);
+  assert.equal(detail.recovery, null);
+  assert.equal(detail.conflictMd, null);
+  assert.equal(detail.escalationMd, null);
   assert.deepEqual(detail.stepDocs, {});
   assert.deepEqual(detail.logs, []);
 });

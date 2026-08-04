@@ -116,6 +116,10 @@ const RUN_LOGS = ["engine", "executor", "setup", "checks", "tests", "deploy"];
 // <step>.output.json for attempt 1, <step>.N.prompt.md / .N.output.json for
 // retries. Kind whitelist maps to the file extension.
 const STEP_DOC_KINDS = { prompt: "prompt.md", output: "output.json" };
+// Engine-synthetic step ids: spawned by the executor when needed (deploy
+// conflict recovery), never declared in workflow JSON, but their per-attempt
+// documents are served exactly like a declared step's.
+const SYNTHETIC_STEP_IDS = ["resolve-conflicts"];
 const STEP_ID_RE = /^[a-z0-9-]+$/;
 const STEP_DOC_RE = /^([a-z0-9-]+)\.(?:(\d+)\.)?(prompt\.md|output\.json)$/;
 const MAX_ATTEMPT = 999;
@@ -183,7 +187,9 @@ export function readStepDoc(orchDir, id, stepId, kind, attempt) {
   if (!run || !run.id) return { status: 404, error: `no such run: ${id}` };
   const stepIds = workflowStepIds(orchDir, run.workflow);
   if (!stepIds) return { status: 404, error: `workflow '${run.workflow}' not found` };
-  if (!stepIds.includes(stepId)) return { status: 400, error: `step '${stepId}' not in workflow` };
+  if (!stepIds.includes(stepId) && !SYNTHETIC_STEP_IDS.includes(stepId)) {
+    return { status: 400, error: `step '${stepId}' not in workflow` };
+  }
   if (n === null) {
     const attempts = (listStepDocs(runDir, [stepId])[stepId] || {})[kind] || [];
     if (attempts.length === 0) return { status: 404, error: "no such document" };
@@ -224,12 +230,15 @@ export function getRunDetail(orchDir, id) {
     steps: stepsForRun(db, id),
     artifacts: artifactsForRun(db, id),
     workflow,
+    recovery: (run && run.recovery) || null,
     planMd: readCapped(path.join(runDir, "plan.md")),
     findingsMd: readCapped(path.join(runDir, "findings.md")),
     steeringMd: readCapped(path.join(runDir, "steering.md")),
     deviationsMd: readCapped(path.join(runDir, "deviations.md")),
+    conflictMd: readCapped(path.join(runDir, "conflict.md")),
+    escalationMd: readCapped(path.join(runDir, "escalation.md")),
     review: readJson(path.join(runDir, "review.json"), null),
-    stepDocs: listStepDocs(runDir, stepIds),
+    stepDocs: listStepDocs(runDir, [...stepIds, ...SYNTHETIC_STEP_IDS]),
     logs: RUN_LOGS.filter((n) => fs.existsSync(path.join(runDir, `${n}.log`))),
   };
 }
