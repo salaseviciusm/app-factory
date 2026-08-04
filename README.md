@@ -169,6 +169,9 @@ agent jobs default to a 30s timeout, so the script sets explicit timeouts.)
 
 **Verify:** `openclaw cron list` shows the three jobs. Tomorrow 08:00 the
 standup appears in `#factory-standup`; reply in-thread and watch it re-plan.
+Within 10 minutes the three channels' topics read `OpenClaw: online — heartbeat …`
+(the `ai.openclaw.factory-heartbeat` LaunchAgent — needs the Step 4 manifest
+re-applied and the app reinstalled, since topic writes use new scopes).
 
 ### Step 5b — Orchestrated runs (feature-dev / bug-fix on any rig)
 
