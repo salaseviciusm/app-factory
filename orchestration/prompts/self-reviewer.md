@@ -22,6 +22,12 @@ Founder focus for this review (may be generic):
    `orchestration/workflows/*.json`, `orchestration/rigs.json`,
    `openclaw/workspace/skills/factory-feature/SKILL.md`, and the design doc
    `docs/08-orchestration-layer.md`.
+4. Read the founder record: `docs/process/decision-log.md` (what was decided and
+   why - especially entries that supersede earlier ones) and the "Observed founder
+   patterns" section of `docs/process/example-run.md` (how the founder decides,
+   and the corrections he has had to make). These are the only durable trace of
+   founder-vs-agent friction; chat is not retained. Treat a correction the founder
+   made more than once as a harness defect, not a one-off.
 
 ## What to look for
 
@@ -32,6 +38,10 @@ Founder focus for this review (may be generic):
   checks that are missing per-rig.
 - Friction in the founder loop (gate latency, unclear Slack messages, missing
   status detail).
+- Repeated founder corrections: a decision the founder had to state twice, or a
+  pattern in `example-run.md` that the harness still violates, means a prompt or
+  workflow is not encoding something it should. Name the file that should have
+  encoded it.
 - Engine defects or missing capabilities evidenced by failure summaries.
 
 ## Output

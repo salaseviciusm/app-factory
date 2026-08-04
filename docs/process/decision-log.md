@@ -238,3 +238,20 @@ changes, and every self-improvement is itself telemetry for the next review.
 **Context:** Factory harness was running Opus 4.8 against the Claude Max 5x subscription (not API pricing). Founder directed an upgrade and set standing effort tiers.
 **Decision:** Default model → **Opus 5** (`claude-opus-5`). Global `thinkingDefault` → **medium**. Reasoning tiers for dispatch: **medium** = standard tasks (default); **high / xhigh** = higher-reasoning tasks; **Fable 5** (`claude-fable-5`) at **high** effort = large feature requests. Runtime stays Claude CLI on the Max subscription (flat cost, rate-limited).
 **Why:** (founder-stated) Better default capability with cost-controlled subscription billing; reserve expensive reasoning for tasks that need it and route large features to Fable 5. Dispatch (factory-dispatch / factory-feature) must select model+effort per task per these tiers rather than always using the global default.
+
+## D21 — Founder corrections are captured in the decision log; self-review reads it (2026-08-04)
+
+**Context:** Founder asked whether the self-review loop learns from Slack conversations
+and the corrections he has had to make. It does not — evidence was telemetry, run dirs,
+and harness source only; chat is not retained anywhere. The highest-signal data in the
+factory (what the founder had to correct) was evaporating.
+**Decision:** Corrections and stated preferences get written down as they happen —
+consequential choices to `docs/process/decision-log.md` (D-entries), working-style
+observations to "Observed founder patterns" in `docs/process/example-run.md` — and the
+self-reviewer prompt now reads both as a first-class evidence source. A correction the
+founder had to make more than once is treated as a harness defect, and the review must
+name the prompt or workflow file that should have encoded it.
+**Why (founder-stated):** the self-review loop should improve the orchestration layer
+from founder conversations, not just run telemetry. Chose the discipline+prompt version
+over a structured `corrections.jsonl` capture pipeline as the cheapest viable step;
+upgrade trigger is evidence that corrections are being forgotten rather than recorded.
