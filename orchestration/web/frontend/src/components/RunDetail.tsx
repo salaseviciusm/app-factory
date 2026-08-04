@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
-import type { RunDetail as RunDetailData, StepRow, WorkflowStep } from "../types";
+import type { RunDetail as RunDetailData, StepDocAttempts, StepDocKind, StepRow, WorkflowStep } from "../types";
 import { usePolling } from "../hooks/usePolling";
 import { NodeGraph } from "../graph/NodeGraph";
 import { Badge } from "./Badge";
@@ -75,8 +75,10 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
           <NodeGraph workflow={workflow} nodes={nodes} selected={selectedStep} onSelect={setSelectedStep} />
           {selectedDef && (
             <StepSheet
+              runId={run.id}
               def={selectedDef}
               rows={data.steps.filter((s) => s.step_id === selectedDef.id)}
+              docs={data.stepDocs[selectedDef.id]}
               onClose={() => setSelectedStep(null)}
             />
           )}
@@ -249,7 +251,29 @@ function ActionBar({ runId, refresh }: { runId: string; refresh: () => void }) {
 
 // ---------- step sheet + tables ----------
 
-function StepSheet({ def, rows, onClose }: { def: WorkflowStep; rows: StepRow[]; onClose: () => void }) {
+function StepSheet({
+  runId,
+  def,
+  rows,
+  docs,
+  onClose,
+}: {
+  runId: string;
+  def: WorkflowStep;
+  rows: StepRow[];
+  docs: StepDocAttempts | undefined;
+  onClose: () => void;
+}) {
+  // Map telemetry rows to on-disk document attempts. New runs record the true
+  // file-suffix attempt in telemetry; old runs can repeat attempt numbers
+  // (the loop counter only advanced for the failing step), so fall back to
+  // per-step row order there.
+  const attemptsUnique = new Set(rows.map((r) => r.attempt)).size === rows.length;
+  const docAttempt = (r: StepRow, i: number) => (attemptsUnique ? r.attempt : i + 1);
+  const covered = new Set(rows.map(docAttempt));
+  const orphanAttempts = [...new Set([...(docs?.prompt ?? []), ...(docs?.output ?? [])])]
+    .filter((a) => !covered.has(a))
+    .sort((a, b) => a - b);
   return (
     <div className="step-sheet">
       <div className="step-sheet-head">
@@ -267,7 +291,7 @@ function StepSheet({ def, rows, onClose }: { def: WorkflowStep; rows: StepRow[];
         {def.onFail && <span>on fail → {def.onFail} (≤{def.maxLoops ?? 1}×)</span>}
         {def.note && <span>{def.note}</span>}
       </div>
-      {rows.length === 0 ? (
+      {rows.length === 0 && orphanAttempts.length === 0 ? (
         <div className="empty-state">No telemetry recorded for this step.</div>
       ) : (
         <ol className="attempt-list">
@@ -286,10 +310,68 @@ function StepSheet({ def, rows, onClose }: { def: WorkflowStep; rows: StepRow[];
                 )}
               </div>
               {r.summary && <div className="attempt-summary">{r.summary}</div>}
+              <AttemptDocs runId={runId} stepId={def.id} attempt={docAttempt(r, i)} docs={docs} />
+            </li>
+          ))}
+          {orphanAttempts.map((a) => (
+            <li key={`doc-${a}`} className="attempt">
+              <div className="attempt-head">
+                <span>attempt {a}</span>
+                <span>(no telemetry row)</span>
+              </div>
+              <AttemptDocs runId={runId} stepId={def.id} attempt={a} docs={docs} />
             </li>
           ))}
         </ol>
       )}
+    </div>
+  );
+}
+
+/** Collapsible Prompt / Output viewers for one step attempt (fetch-on-expand). */
+function AttemptDocs({
+  runId,
+  stepId,
+  attempt,
+  docs,
+}: {
+  runId: string;
+  stepId: string;
+  attempt: number;
+  docs: StepDocAttempts | undefined;
+}) {
+  const [open, setOpen] = useState<StepDocKind | null>(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const kinds = (["prompt", "output"] as const).filter((k) => docs?.[k].includes(attempt));
+  if (kinds.length === 0) return null;
+
+  const show = async (kind: StepDocKind) => {
+    if (open === kind) {
+      setOpen(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      setText(await api.stepDoc(runId, stepId, kind, attempt));
+    } catch (e) {
+      setText(`failed to load: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(false);
+    }
+    setOpen(kind);
+  };
+
+  return (
+    <div className="attempt-docs">
+      <div className="gate-actions">
+        {kinds.map((k) => (
+          <button key={k} className="btn btn-ghost" disabled={busy} onClick={() => void show(k)}>
+            {open === k ? `hide ${k}` : k}
+          </button>
+        ))}
+      </div>
+      {open && <pre className="doc-view log-view">{text || "(empty)"}</pre>}
     </div>
   );
 }
@@ -353,10 +435,11 @@ function githubArtifactUrl(repoUrl: string | null, type: string, value: string):
 }
 
 function Artifacts({ data }: { data: RunDetailData }) {
-  const { run, repoUrl, artifacts, review, findingsMd } = data;
+  const { run, repoUrl, artifacts, review, findingsMd, steeringMd, deviationsMd } = data;
   const commits = artifacts.filter((a) => a.type === "commit");
   const other = artifacts.filter((a) => !["commit", "finding", "review_verdict"].includes(a.type));
-  const empty = !run.artifactUrl && commits.length === 0 && other.length === 0 && !review && !findingsMd;
+  const empty =
+    !run.artifactUrl && commits.length === 0 && other.length === 0 && !review && !findingsMd && !steeringMd && !deviationsMd;
   return (
     <section className="panel">
       <h3>Artifacts & review</h3>
@@ -384,6 +467,18 @@ function Artifacts({ data }: { data: RunDetailData }) {
         <details>
           <summary>Current findings.md</summary>
           <pre className="doc-view">{findingsMd}</pre>
+        </details>
+      )}
+      {steeringMd && (
+        <details>
+          <summary>steering.md — founder mid-run instructions</summary>
+          <pre className="doc-view">{steeringMd}</pre>
+        </details>
+      )}
+      {deviationsMd && (
+        <details>
+          <summary>deviations.md — implementer plan deviations</summary>
+          <pre className="doc-view">{deviationsMd}</pre>
         </details>
       )}
       {commits.length > 0 && (
