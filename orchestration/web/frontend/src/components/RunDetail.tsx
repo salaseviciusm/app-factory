@@ -335,7 +335,9 @@ function StepSheet({
   );
 }
 
-/** Collapsible Prompt / Output viewers for one step attempt (fetch-on-expand). */
+/** Collapsible Prompt / Output / Transcript viewers for one step attempt.
+ *  Everything is fetch-on-expand — transcripts especially are MBs and only
+ *  cross the wire when the founder actually taps the button. */
 function AttemptDocs({
   runId,
   stepId,
@@ -350,7 +352,7 @@ function AttemptDocs({
   const [open, setOpen] = useState<StepDocKind | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const kinds = (["prompt", "output"] as const).filter((k) => docs?.[k].includes(attempt));
+  const kinds = (["prompt", "output", "transcript"] as const).filter((k) => docs?.[k].includes(attempt));
   if (kinds.length === 0) return null;
 
   const show = async (kind: StepDocKind) => {
@@ -378,7 +380,125 @@ function AttemptDocs({
           </button>
         ))}
       </div>
-      {open && <pre className="doc-view log-view">{text || "(empty)"}</pre>}
+      {open === "transcript" ? (
+        <TranscriptView raw={text} />
+      ) : (
+        open && <pre className="doc-view log-view">{text || "(empty)"}</pre>
+      )}
+    </div>
+  );
+}
+
+// ---------- transcript timeline ----------
+
+type TranscriptEntry =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; name: string; input: string }
+  | { kind: "tool-result"; text: string; isError: boolean }
+  | { kind: "final"; text: string };
+
+const TOOL_RESULT_PREVIEW = 1500;
+
+function blockText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((b) => (b && typeof b === "object" && "text" in b ? String((b as { text: unknown }).text) : ""))
+    .join("");
+}
+
+/** Parse stream-json transcript lines into a readable timeline. Unparseable
+ *  lines (e.g. the first line cut by tail-capping) are skipped silently —
+ *  same tolerance the engine's transcript readers use. */
+function parseTranscript(raw: string): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  for (const line of raw.split("\n")) {
+    let ev: unknown;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const e = ev as { type?: string; message?: { content?: unknown }; result?: unknown };
+    if (e.type === "assistant" && Array.isArray(e.message?.content)) {
+      for (const block of e.message.content as Array<Record<string, unknown>>) {
+        if (!block || typeof block !== "object") continue;
+        if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+          entries.push({ kind: "text", text: block.text });
+        } else if (block.type === "tool_use" && typeof block.name === "string") {
+          let input = "";
+          try {
+            input = JSON.stringify(block.input, null, 2) ?? "";
+          } catch {
+            /* unserializable input — leave empty */
+          }
+          entries.push({ kind: "tool", name: block.name, input });
+        }
+      }
+    } else if (e.type === "user" && Array.isArray(e.message?.content)) {
+      for (const block of e.message.content as Array<Record<string, unknown>>) {
+        if (block && typeof block === "object" && block.type === "tool_result") {
+          const text = blockText(block.content);
+          entries.push({
+            kind: "tool-result",
+            text: text.length > TOOL_RESULT_PREVIEW ? `${text.slice(0, TOOL_RESULT_PREVIEW)}\n… (truncated)` : text,
+            isError: block.is_error === true,
+          });
+        }
+      }
+    } else if (e.type === "result" && typeof e.result === "string") {
+      entries.push({ kind: "final", text: e.result });
+    }
+  }
+  return entries;
+}
+
+/** Parsed timeline of one attempt's transcript (assistant turns, tool calls
+ *  with collapsed inputs, truncated tool results) with a raw-JSONL toggle. */
+function TranscriptView({ raw }: { raw: string }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const entries = parseTranscript(raw);
+  return (
+    <div className="transcript-view">
+      <div className="gate-actions">
+        <button className="btn btn-ghost" onClick={() => setShowRaw(!showRaw)}>
+          {showRaw ? "parsed view" : "raw jsonl"}
+        </button>
+      </div>
+      {showRaw ? (
+        <pre className="doc-view log-view">{raw || "(empty)"}</pre>
+      ) : entries.length === 0 ? (
+        <div className="empty-state">No parseable events in this transcript.</div>
+      ) : (
+        <ol className="transcript-list">
+          {entries.map((entry, i) => (
+            <li key={i} className={`tr-entry tr-${entry.kind}`}>
+              {entry.kind === "text" && <pre className="tr-text">{entry.text}</pre>}
+              {entry.kind === "tool" && (
+                <details>
+                  <summary>
+                    🔧 <code>{entry.name}</code>
+                  </summary>
+                  {entry.input && <pre className="doc-view log-view">{entry.input}</pre>}
+                </details>
+              )}
+              {entry.kind === "tool-result" && (
+                <details>
+                  <summary>{entry.isError ? "⚠ tool result (error)" : "↩ tool result"}</summary>
+                  <pre className="doc-view log-view">{entry.text || "(empty)"}</pre>
+                </details>
+              )}
+              {entry.kind === "final" && (
+                <details>
+                  <summary>🏁 final result</summary>
+                  <pre className="tr-text">{entry.text}</pre>
+                </details>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

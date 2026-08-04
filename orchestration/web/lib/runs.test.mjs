@@ -66,6 +66,21 @@ test("readStepDoc resolves unsuffixed, suffixed, and latest attempts", (t) => {
   assert.deepEqual(readStepDoc(orchDir, RUN_ID, "implement", "output"), { text: '{"result":"out two"}' });
 });
 
+test("readStepDoc serves per-attempt transcripts with the larger tail cap", (t) => {
+  // ~1.2 MB transcript: only the last 1 MB comes back (tail-capped), while the
+  // 256 KB doc cap stays in force for prompts/outputs.
+  const line = `{"type":"assistant","pad":"${"x".repeat(1000)}"}\n`;
+  const big = line.repeat(1250);
+  const orchDir = makeOrchDir(t, {
+    "implement.transcript.jsonl": "attempt one transcript",
+    "implement.2.transcript.jsonl": big,
+  });
+  assert.deepEqual(readStepDoc(orchDir, RUN_ID, "implement", "transcript", 1), { text: "attempt one transcript" });
+  const latest = readStepDoc(orchDir, RUN_ID, "implement", "transcript");
+  assert.equal(latest.text.length, 1024 * 1024);
+  assert.equal(latest.text, big.slice(big.length - 1024 * 1024));
+});
+
 test("readStepDoc treats pre-existing run dirs (unsuffixed only) as attempt 1", (t) => {
   const orchDir = makeOrchDir(t, { "plan.prompt.md": "old-style prompt" });
   assert.deepEqual(readStepDoc(orchDir, RUN_ID, "plan", "prompt"), { text: "old-style prompt" });
@@ -143,7 +158,7 @@ test("getRunDetail exposes recovery state, conflict/escalation docs, and resolve
   assert.deepEqual(detail.recovery, recovery);
   assert.equal(detail.conflictMd, "conflicting files\n");
   assert.equal(detail.escalationMd, "needs a human\n");
-  assert.deepEqual(detail.stepDocs["resolve-conflicts"], { prompt: [1], output: [1] });
+  assert.deepEqual(detail.stepDocs["resolve-conflicts"], { prompt: [1], output: [1], transcript: [] });
 });
 
 test("getRunDetail lists step docs, extra documents, and the extended logs", (t) => {
@@ -153,6 +168,8 @@ test("getRunDetail lists step docs, extra documents, and the extended logs", (t)
     "implement.prompt.md": "p1",
     "implement.2.prompt.md": "p2",
     "implement.2.output.json": "o2",
+    "implement.transcript.jsonl": "t1",
+    "implement.2.transcript.jsonl": "t2",
     "steering.md": "- steer left\n",
     "deviations.md": "none\n",
     "findings.md": "still failing\n",
@@ -166,8 +183,8 @@ test("getRunDetail lists step docs, extra documents, and the extended logs", (t)
   const detail = getRunDetail(orchDir, RUN_ID);
   assert.equal(detail.run.id, RUN_ID);
   assert.deepEqual(detail.stepDocs, {
-    plan: { prompt: [1], output: [1] },
-    implement: { prompt: [1, 2], output: [2] },
+    plan: { prompt: [1], output: [1], transcript: [] },
+    implement: { prompt: [1, 2], output: [2], transcript: [1, 2] },
   });
   assert.equal(detail.steeringMd, "- steer left\n");
   assert.equal(detail.deviationsMd, "none\n");

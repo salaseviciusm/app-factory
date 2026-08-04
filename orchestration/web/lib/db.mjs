@@ -95,6 +95,97 @@ export function usageForRun(db, runId) {
   return usageFromRow(r);
 }
 
+// Trailing windows for the Usage page, in days ("all" = no cutoff). One
+// response carries every window so the 31d/7d/1d buttons are client toggles.
+const USAGE_WINDOWS = { all: null, d31: 31, d7: 7, d1: 1 };
+
+/** Repo bucket for a rig name: quickfire factory:<app> rigs collapse into one
+ *  "factory-apps" bucket; every other rig (running-with-pace, skip-hero,
+ *  app-factory, …) is its own repo. */
+export function repoBucket(rig) {
+  if (typeof rig !== "string" || !rig) return "unknown";
+  return rig.startsWith("factory:") ? "factory-apps" : rig;
+}
+
+const EMPTY_WINDOW = () => ({
+  costUsd: 0,
+  inputTokens: 0,
+  rawInputTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  outputTokens: 0,
+  pricedSteps: 0,
+  runs: 0,
+  repos: [],
+});
+
+function windowTotals(db, since) {
+  const where = since === null ? "" : " WHERE s.started_at >= ?";
+  const params = since === null ? [] : [since];
+  const row = safeGet(
+    db,
+    `SELECT COALESCE(SUM(s.cost_usd),0) cost, COALESCE(SUM(s.input_tokens),0) in_tok,
+            COALESCE(SUM(s.output_tokens),0) out_tok, COALESCE(SUM(s.cache_read_tokens),0) cache_read,
+            COALESCE(SUM(s.cache_creation_tokens),0) cache_create,
+            COALESCE(SUM(s.cost_usd IS NOT NULL),0) priced_steps,
+            COUNT(DISTINCT s.run_id) run_count
+     FROM steps s${where}`,
+    ...params
+  );
+  const out = EMPTY_WINDOW();
+  if (!row) return out;
+  out.costUsd = row.cost || 0;
+  // Same semantics as usageFromRow: "in" includes cache reads/creation.
+  out.inputTokens = (row.in_tok || 0) + (row.cache_read || 0) + (row.cache_create || 0);
+  out.rawInputTokens = row.in_tok || 0;
+  out.cacheReadTokens = row.cache_read || 0;
+  out.cacheCreationTokens = row.cache_create || 0;
+  out.outputTokens = row.out_tok || 0;
+  out.pricedSteps = row.priced_steps || 0;
+  out.runs = row.run_count || 0;
+  // Per-repo cost buckets (founder ask): join steps to runs for the rig; LEFT
+  // JOIN so steps whose run row is gone still count (as "unknown").
+  const rigRows = safeAll(
+    db,
+    `SELECT r.rig rig, COALESCE(SUM(s.cost_usd),0) cost,
+            COALESCE(SUM(s.cost_usd IS NOT NULL),0) priced_steps,
+            COUNT(DISTINCT s.run_id) run_count
+     FROM steps s LEFT JOIN runs r ON r.id = s.run_id${where}
+     GROUP BY r.rig`,
+    ...params
+  );
+  const buckets = new Map();
+  for (const r of rigRows) {
+    const key = repoBucket(r.rig);
+    const b = buckets.get(key) || { repo: key, costUsd: 0, pricedSteps: 0, runs: 0 };
+    b.costUsd += r.cost || 0;
+    b.pricedSteps += r.priced_steps || 0;
+    b.runs += r.run_count || 0;
+    buckets.set(key, b);
+  }
+  out.repos = [...buckets.values()].sort((a, b) => b.costUsd - a.costUsd);
+  return out;
+}
+
+/**
+ * Cost/token aggregates for the Usage page: all-time plus trailing 31d/7d/1d
+ * windows over steps.started_at (ISO strings compare lexicographically), each
+ * with per-repo cost buckets. Zeroed structure when the DB is absent. `now` is
+ * injectable for tests.
+ */
+export function usageTotals(db, now = new Date()) {
+  const out = {};
+  for (const [key, days] of Object.entries(USAGE_WINDOWS)) {
+    if (!db) {
+      out[key] = EMPTY_WINDOW();
+      continue;
+    }
+    const since = days === null ? null : new Date(now.getTime() - days * 86400e3).toISOString();
+    out[key] = windowTotals(db, since);
+  }
+  return out;
+}
+
 /** Cost/token totals for every run in one query: { [runId]: usage }. */
 export function usageByRun(db) {
   if (!db) return {};

@@ -23,6 +23,8 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
 import { listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
+import { openTelemetry, usageTotals } from "./lib/db.mjs";
+import { contextStorage } from "./lib/storage.mjs";
 import {
   loadToken,
   createToken,
@@ -216,6 +218,13 @@ async function handleApi(req, res, pathname, query) {
       const doc = readStepDoc(ORCH_DIR, m[1], m[2], m[3], query.get("attempt") ?? undefined);
       if (doc.error) return sendJson(res, doc.status, { error: doc.error });
       return sendText(res, 200, doc.text);
+    }
+    if (pathname === "/api/usage") {
+      // Aggregates only — no transcript/document content ever rides this route.
+      return sendJson(res, 200, {
+        cost: usageTotals(openTelemetry(ORCH_DIR)),
+        storage: contextStorage(ORCH_DIR),
+      });
     }
     if (pathname === "/api/workflows") return sendJson(res, 200, { workflows: listWorkflows() });
     if (pathname === "/api/settings") {

@@ -126,17 +126,22 @@ function gatePlanFile(steps, stepIndex) {
 const RUN_LOGS = ["engine", "executor", "setup", "checks", "tests", "deploy"];
 
 // Per-attempt step documents the engine writes: <step>.prompt.md /
-// <step>.output.json for attempt 1, <step>.N.prompt.md / .N.output.json for
+// <step>.output.json / <step>.transcript.jsonl for attempt 1, <step>.N.* for
 // retries. Kind whitelist maps to the file extension.
-const STEP_DOC_KINDS = { prompt: "prompt.md", output: "output.json" };
+const STEP_DOC_KINDS = { prompt: "prompt.md", output: "output.json", transcript: "transcript.jsonl" };
+const KIND_BY_EXT = { "prompt.md": "prompt", "output.json": "output", "transcript.jsonl": "transcript" };
 // Engine-synthetic step ids: spawned by the executor when needed (deploy
 // conflict recovery), never declared in workflow JSON, but their per-attempt
 // documents are served exactly like a declared step's.
 const SYNTHETIC_STEP_IDS = ["resolve-conflicts"];
 const STEP_ID_RE = /^[a-z0-9-]+$/;
-const STEP_DOC_RE = /^([a-z0-9-]+)\.(?:(\d+)\.)?(prompt\.md|output\.json)$/;
+const STEP_DOC_RE = /^([a-z0-9-]+)\.(?:(\d+)\.)?(prompt\.md|output\.json|transcript\.jsonl)$/;
 const MAX_ATTEMPT = 999;
 const STEP_DOC_CAP = 256 * 1024;
+// Transcripts are full stream-json captures (MBs); serve a bigger tail than the
+// prompt/output cap but still bounded — and only ever on explicit request (the
+// run-detail payload lists attempt numbers, never transcript content).
+const TRANSCRIPT_CAP = 1024 * 1024;
 
 function stepDocFileName(stepId, kind, attempt) {
   const ext = STEP_DOC_KINDS[kind];
@@ -158,13 +163,14 @@ function listStepDocs(runDir, stepIds) {
   for (const name of names) {
     const m = STEP_DOC_RE.exec(name);
     if (!m || !declared.has(m[1])) continue;
-    const kind = m[3] === "prompt.md" ? "prompt" : "output";
-    const entry = (out[m[1]] ||= { prompt: [], output: [] });
+    const kind = KIND_BY_EXT[m[3]];
+    const entry = (out[m[1]] ||= { prompt: [], output: [], transcript: [] });
     entry[kind].push(m[2] ? parseInt(m[2], 10) : 1);
   }
   for (const entry of Object.values(out)) {
     entry.prompt.sort((a, b) => a - b);
     entry.output.sort((a, b) => a - b);
+    entry.transcript.sort((a, b) => a - b);
   }
   return out;
 }
@@ -208,7 +214,8 @@ export function readStepDoc(orchDir, id, stepId, kind, attempt) {
     if (attempts.length === 0) return { status: 404, error: "no such document" };
     n = attempts[attempts.length - 1];
   }
-  const text = readCapped(path.join(runDir, stepDocFileName(stepId, kind, n)), STEP_DOC_CAP);
+  const cap = kind === "transcript" ? TRANSCRIPT_CAP : STEP_DOC_CAP;
+  const text = readCapped(path.join(runDir, stepDocFileName(stepId, kind, n)), cap);
   if (text === null) return { status: 404, error: "no such document" };
   return { text };
 }
