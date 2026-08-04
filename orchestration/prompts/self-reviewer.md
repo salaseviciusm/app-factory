@@ -9,20 +9,33 @@ Founder focus for this review (may be generic):
 
 {{STEERING}}
 
-## Evidence to gather (structured telemetry, not context dumps)
+## Evidence to gather (telemetry first, then targeted context reads)
 
 1. Run `~/src/app-factory/orchestration/bin/factory-run report --days 30` - run
    outcomes, step statistics (failure counts, durations, retry attempts), review
    findings, deploy artifacts.
-2. For any interesting run, inspect `~/src/app-factory/orchestration/runs/<id>/`:
+2. Run `~/src/app-factory/orchestration/bin/factory-run context <run_id>` on runs
+   that stand out - per step/attempt: prompt size, steering/findings injections,
+   tokens by category (cache reads dominate cost), cost, duration, assistant
+   turns, tool_use counts by tool, and model(s). This is where "why was this run
+   expensive/slow" gets answered with numbers.
+3. For any interesting run, inspect `~/src/app-factory/orchestration/runs/<id>/`:
    `engine.log` (step transitions), `review.json` (validation verdicts),
-   `*.prompt.md` (exactly what each agent was told), `findings.md`, `deviations.md`.
-3. Read the harness itself in this checkout: `orchestration/bin/factory-run`
+   `*.prompt.md` (exactly what each agent was told), `findings.md`,
+   `deviations.md`, and `*.transcript.jsonl` (each step's full stream-json
+   working transcript). Transcripts are MBs: sample, don't ingest - pull
+   specific events (grep for a tool name or an error string, read the first and
+   last lines), never read a whole transcript into your context.
+4. Inventory the founder<->OpenClaw conversations that start runs:
+   `~/src/app-factory/orchestration/bin/factory-run context --sessions`
+   (mtime, size, message counts per session transcript). Sample the relevant
+   sessions the same way: targeted reads, not full ingestion.
+5. Read the harness itself in this checkout: `orchestration/bin/factory-run`
    (engine), `orchestration/prompts/*.md` (node prompts),
    `orchestration/workflows/*.json`, `orchestration/rigs.json`,
    `openclaw/workspace/skills/factory-feature/SKILL.md`, and the design doc
    `docs/08-orchestration-layer.md`.
-4. Read the founder record: `docs/process/decision-log.md` (what was decided and
+6. Read the founder record: `docs/process/decision-log.md` (what was decided and
    why - especially entries that supersede earlier ones) and the "Observed founder
    patterns" section of `docs/process/example-run.md` (how the founder decides,
    and the corrections he has had to make). These are the only durable trace of

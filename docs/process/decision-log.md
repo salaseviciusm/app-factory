@@ -255,3 +255,32 @@ name the prompt or workflow file that should have encoded it.
 from founder conversations, not just run telemetry. Chose the discipline+prompt version
 over a structured `corrections.jsonl` capture pipeline as the cheapest viable step;
 upgrade trigger is evidence that corrections are being forgotten rather than recorded.
+
+## D22 — Per-step context capture: full transcripts + `factory-run context`; D19's "not context dumps" clause superseded (2026-08-04)
+
+**Context:** the factory recorded only each agent step's rendered prompt and a ~1.6 kB
+result envelope; the step's real working context (6–9M cached tokens per implement
+step) and the founder↔OpenClaw conversations that start runs were invisible to the
+self-review loop, which had to infer failure causes from wreckage. D21's upgrade
+trigger — evidence that founder context was being lost rather than recorded — fired.
+**Decision:**
+- agent steps run `claude --output-format stream-json --verbose` with stdout streamed
+  to `<step>[.N].transcript.jsonl` in the run dir via a file descriptor (MB-scale
+  transcripts survive timeouts/kills). The prior single-object envelope is
+  reconstructed from the transcript's `"type":"result"` event, so `parseUsage`, the
+  report backfill, and the web console are untouched; on timeout/kill, usage falls
+  back to the last assistant event's `message.usage` so failed attempts stop costing
+  "null".
+- `factory-run context <run_id> [--json]` reports per step/attempt prompt bytes,
+  steering/findings injections, tokens by category, cost, duration, assistant turns,
+  tool_use counts, and models — deterministic parsing only; LLM-side inference stays
+  in the self-reviewer prompt. `factory-run context --sessions` inventories OpenClaw
+  session transcripts (discoverable, not ingested); the self-reviewer samples both.
+- report backfill became attempt-aware (`implement.2.output.json` → step `implement`
+  attempt 2, `AND attempt = ?` in the UPDATE), fixing the every-row double-count and
+  the `implement.2` step-name mis-parse.
+This supersedes the "not context dumps" clause of D19: telemetry stays structured,
+but full per-step context is now captured on disk as evidence.
+**Why:** the self-review loop can only fix what it can see; context/cost analysis
+must start from true numbers. Run dirs grow by MBs per step — acceptable, reclaimed
+by existing cleanup; rollback is a `git revert` of the merge commit.
