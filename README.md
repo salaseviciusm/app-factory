@@ -211,6 +211,30 @@ implement → checks → cross-model review → **merge to main + gateway restar
 The harness improves itself through the same validated pipeline as the apps.
 Rollback: `git revert -m 1 <merge_sha>` + `openclaw gateway restart`.
 
+### Step 5c — Slack connectivity watchdog
+
+Twice in two days the gateway's Socket Mode connection went zombie — `openclaw
+status` said "connected, healthy" while the bot was deaf. The watchdog is an
+**independent launchd job** (every 5 min; deliberately not an openclaw cron, which
+couldn't fire with the gateway wedged) that judges liveness from behavioral
+evidence only — gateway-log inbound freshness plus a real probe send — and on a
+wedged verdict runs `openclaw gateway restart` (max once per 30 min), re-verifies,
+and posts a recovery notice to `#factory-builds`.
+
+1. Create a dedicated **quiet** channel `#factory-watchdog` (probes land there
+   whenever inbound traffic goes stale — keep it muted/out of human view) and
+   `/invite` the bot.
+2. Add its channel ID to `openclaw/secrets.env`: `FACTORY_WATCHDOG_CHANNEL=C...`
+3. Install:
+
+```sh
+~/src/app-factory/openclaw/setup-watchdog.sh   # idempotent; --uninstall to remove
+```
+
+**Verify:** `node ~/src/app-factory/openclaw/watchdog.mjs --check-only` exits 0
+(it never restarts or posts notices), and decisions append to
+`/tmp/openclaw/watchdog.log`.
+
 ### Step 6 — Start your first app
 
 In Slack (DM or `#factory-standup`):
