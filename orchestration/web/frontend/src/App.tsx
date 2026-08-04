@@ -46,7 +46,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <a className="brand" href="#/">
-          <span className="brand-mark">⚙</span> Factory Console
+          <span className="brand-mark">⚙</span> <span className="brand-text">Factory Console</span>
         </a>
         <nav>
           <a className={route.page === "runs" ? "nav-active" : ""} href="#/">

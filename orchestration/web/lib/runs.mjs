@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openTelemetry, telemetryRuns, stepsForRun, artifactsForRun, usageForRun, usageByRun } from "./db.mjs";
+import { repoUrlForRig } from "./github.mjs";
 
 export const RUN_ID_RE = /^[a-z0-9-]+$/;
 export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled"];
@@ -128,6 +129,7 @@ export function getRunDetail(orchDir, id) {
   const workflow = readJson(path.join(orchDir, "workflows", `${summary.workflow}.json`), null);
   return {
     run: summary,
+    repoUrl: repoUrlForRig(orchDir, summary.rig),
     history: (run && run.history) || [],
     steps: stepsForRun(db, id),
     artifacts: artifactsForRun(db, id),

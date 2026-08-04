@@ -38,7 +38,9 @@
         "for f in orchestration/web/server.mjs orchestration/web/lib/*.mjs orchestration/bin/factory-web; do node --check \"$f\" || exit 1; done",
         "bash -n openclaw/apply-slack.sh openclaw/apply-voice.sh openclaw/setup-automations.sh"
       ],
-      "tests": [],
+      "tests": [
+        "node --test orchestration/web/lib/*.test.mjs"
+      ],
       "appDir": ".",
       "deploy": {
         "type": "harness-merge"

@@ -79,6 +79,7 @@ export interface HistoryEntry {
 
 export interface RunDetail {
   run: RunSummary;
+  repoUrl: string | null;
   history: HistoryEntry[];
   steps: StepRow[];
   artifacts: ArtifactRow[];
