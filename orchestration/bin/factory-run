@@ -574,6 +574,20 @@ function easPublishArgs(deploy, msg) {
   ];
 }
 
+/** Pure decision core for the harness-merge web-console restart (exercised by
+ * selftest). Given the merge commit's first-parent file list, says whether the
+ * factory web server must be restarted and whether its frontend build is stale
+ * (frontend/dist/ is gitignored, so merged frontend sources need a rebuild). */
+function classifyWebRestart(files) {
+  const owned = files.filter(
+    (f) => f.startsWith("orchestration/web/") || f.startsWith("orchestration/bin/factory-web")
+  );
+  return {
+    restart: owned.length > 0,
+    rebuildFrontend: owned.some((f) => f.startsWith("orchestration/web/frontend/")),
+  };
+}
+
 function deployStep(run, rig) {
   const runDir = runDirOf(run.id);
   const deploy = rig.deploy || { type: "none" };
@@ -599,7 +613,26 @@ function deployStep(run, rig) {
     try {
       tArtifact(run.id, "deploy", "harness_merge_commit", sha);
     } catch {}
-    return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
+    // The gateway restart reloads gateway-owned code only; the web console is a
+    // separate long-lived process, so a merge touching it needs its own restart.
+    const diff = runCommand("git diff --name-only HEAD^1 HEAD", rig.path, logFile, 2);
+    const web = classifyWebRestart(diff.ok ? diff.output.split("\n") : []);
+    if (!web.restart) {
+      return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
+    }
+    if (web.rebuildFrontend) runCommand("rm -rf orchestration/web/frontend/dist", rig.path, logFile, 2);
+    const down = runCommand("orchestration/bin/factory-web-down", rig.path, logFile, 5);
+    const up = runCommand("orchestration/bin/factory-web-up", rig.path, logFile, 10);
+    if (down.ok && up.ok && up.output.includes(": up at ")) {
+      return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway + web console`, url: null };
+    }
+    // The merge is durable and already on the default branch, so the deploy
+    // stays ok — but the summary must not read as a clean deploy.
+    return {
+      ok: true,
+      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED — restart manually with factory-web-up, see deploy.log`,
+      url: null,
+    };
   }
   if (deploy.type !== "eas-update") {
     return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
@@ -1463,6 +1496,20 @@ function cmdSelftest() {
   for (const [name, ok] of cleanupChecks) {
     console.log(`cleanup ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`cleanup check failed: ${name}`);
+  }
+  // Harness-merge web-restart decision core (pure).
+  const webChecks = [
+    ["engine-only merge skips web restart", classifyWebRestart(["orchestration/bin/factory-run", "orchestration/prompts/implement.md"]).restart === false],
+    ["server change restarts web", classifyWebRestart(["orchestration/web/server.mjs"]).restart === true],
+    ["web lib change restarts web", classifyWebRestart(["orchestration/web/lib/runs.mjs"]).restart === true],
+    ["factory-web script change restarts web", classifyWebRestart(["orchestration/bin/factory-web-down"]).restart === true],
+    ["backend-only change keeps frontend build", classifyWebRestart(["orchestration/web/server.mjs"]).rebuildFrontend === false],
+    ["frontend change forces rebuild", classifyWebRestart(["orchestration/web/frontend/src/App.tsx"]).rebuildFrontend === true],
+    ["empty diff is a no-op", classifyWebRestart([""]).restart === false],
+  ];
+  for (const [name, ok] of webChecks) {
+    console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`web-restart check failed: ${name}`);
   }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
