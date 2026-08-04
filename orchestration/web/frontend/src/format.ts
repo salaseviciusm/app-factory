@@ -42,7 +42,9 @@ export function usageLine(u: Usage | null): string | null {
   return `${fmtCost(u.costUsd)} · in ${fmtTokens(u.inputTokens)} (${fmtTokens(u.cacheReadTokens)} cached) / out ${fmtTokens(u.outputTokens)}`;
 }
 
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled"];
+// "killed" is a discussion step's don't-build ending: terminal and a success
+// (early kill = money saved), styled like done — never like failed.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
 
 export function isTerminal(state: string): boolean {
   return TERMINAL_STATES.includes(state);
@@ -51,6 +53,7 @@ export function isTerminal(state: string): boolean {
 /** CSS modifier for a run state badge. */
 export function stateKind(state: string): string {
   if (state === "done") return "ok";
+  if (state === "killed") return "ok";
   if (state === "failed") return "fail";
   if (state === "rejected") return "warn";
   if (state === "cancelled") return "muted";
@@ -97,7 +100,7 @@ export function deriveNodes(detail: RunDetail): Record<string, NodeInfo> {
     let status: NodeStatus = "pending";
     if (run.state === `running:${step.id}` || (run.state === "deploying" && step.type === "deploy")) {
       status = "active";
-    } else if (run.state === "awaiting-approval" && step.type === "gate" && i === stepIdx) {
+    } else if (run.state === "awaiting-approval" && (step.type === "gate" || step.type === "discussion") && i === stepIdx) {
       status = "gate";
     } else if (last && last.status === "recover") {
       // Deploy hit base drift and looped the gates back — it will run again.

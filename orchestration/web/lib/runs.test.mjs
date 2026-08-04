@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
+import { TERMINAL_STATES, getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
 
 const RUN_ID = "feature-test-run";
 
@@ -202,6 +202,16 @@ test("getRunDetail reports absent documents as null", (t) => {
   assert.equal(detail.escalationMd, null);
   assert.deepEqual(detail.stepDocs, {});
   assert.deepEqual(detail.logs, []);
+});
+
+test("killed is a terminal state and a killed run never reads as stalled", (t) => {
+  // A discussion don't-build ends the run in "killed": terminal (so listings
+  // close it out) and a success — the console styles it like done, not failed.
+  assert.ok(TERMINAL_STATES.includes("killed"));
+  const orchDir = makeOrchDir(t, {}, { state: "killed", updatedAt: "2026-01-01T01:00:00.000Z" });
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.equal(detail.run.state, "killed");
+  assert.equal(detail.run.stalled, false);
 });
 
 test("readRunLog serves the fixed whitelist and rejects everything else", (t) => {
