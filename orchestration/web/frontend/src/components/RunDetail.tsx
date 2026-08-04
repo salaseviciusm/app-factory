@@ -342,8 +342,18 @@ function StepsTable({ rows }: { rows: StepRow[] }) {
   );
 }
 
+const BARE_SHA_RE = /^[0-9a-f]{7,40}$/;
+
+/** GitHub page for an artifact (bare sha → commit, pr-ish number → pull), or null. */
+function githubArtifactUrl(repoUrl: string | null, type: string, value: string): string | null {
+  if (!repoUrl) return null;
+  if (BARE_SHA_RE.test(value)) return `${repoUrl}/commit/${value}`;
+  if (/(^|_)pr$/.test(type) && /^\d+$/.test(value)) return `${repoUrl}/pull/${value}`;
+  return null;
+}
+
 function Artifacts({ data }: { data: RunDetailData }) {
-  const { run, artifacts, review, findingsMd } = data;
+  const { run, repoUrl, artifacts, review, findingsMd } = data;
   const commits = artifacts.filter((a) => a.type === "commit");
   const other = artifacts.filter((a) => !["commit", "finding", "review_verdict"].includes(a.type));
   const empty = !run.artifactUrl && commits.length === 0 && other.length === 0 && !review && !findingsMd;
@@ -380,25 +390,45 @@ function Artifacts({ data }: { data: RunDetailData }) {
         <details open>
           <summary>{commits.length} commit(s)</summary>
           <ul className="commit-list">
-            {commits.map((c, i) => (
-              <li key={i}>
-                <code>{c.value.slice(0, 8)}</code> {c.value.slice(41)}
-              </li>
-            ))}
+            {commits.map((c, i) => {
+              const sp = c.value.indexOf(" ");
+              const sha = sp === -1 ? c.value : c.value.slice(0, sp);
+              const subject = sp === -1 ? "" : c.value.slice(sp + 1);
+              const href = githubArtifactUrl(repoUrl, c.type, sha);
+              return (
+                <li key={i}>
+                  {href ? (
+                    <a href={href} target="_blank" rel="noreferrer">
+                      <code>{sha.slice(0, 8)}</code>
+                    </a>
+                  ) : (
+                    <code>{sha.slice(0, 8)}</code>
+                  )}{" "}
+                  {subject}
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}
-      {other.map((a, i) => (
-        <p key={i} className="artifact-row">
-          {a.type}: {/^https?:\/\//.test(a.value) ? (
-            <a href={a.value} target="_blank" rel="noreferrer">
-              {a.value}
-            </a>
-          ) : (
-            <code>{a.value}</code>
-          )}
-        </p>
-      ))}
+      {other.map((a, i) => {
+        const gh = githubArtifactUrl(repoUrl, a.type, a.value);
+        return (
+          <p key={i} className="artifact-row">
+            {a.type}: {/^https?:\/\//.test(a.value) ? (
+              <a href={a.value} target="_blank" rel="noreferrer">
+                {a.value}
+              </a>
+            ) : gh ? (
+              <a href={gh} target="_blank" rel="noreferrer">
+                <code>{a.value}</code>
+              </a>
+            ) : (
+              <code>{a.value}</code>
+            )}
+          </p>
+        );
+      })}
     </section>
   );
 }
