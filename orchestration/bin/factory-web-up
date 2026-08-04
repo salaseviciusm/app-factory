@@ -1,0 +1,60 @@
+#!/bin/bash
+# factory-web-up: idempotently start the factory web console and tailscale serve.
+# Safe to run repeatedly (used by Claude Code / Cursor session hooks).
+set -u
+
+ORCH_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PORT=4620
+URL="http://127.0.0.1:${PORT}"
+LOG="${ORCH_DIR}/web/server.log"
+
+# 1. Web server: skip if already answering.
+if ! curl -s -o /dev/null --max-time 2 "${URL}/"; then
+  mkdir -p "${ORCH_DIR}/web"
+  # Detached spawn in a new process group (same pattern as factory-run's
+  # executor): survives the parent shell/session being reaped, unlike nohup.
+  node -e '
+    const fs = require("fs");
+    const { spawn } = require("child_process");
+    const [bin, log] = process.argv.slice(1);
+    const fd = fs.openSync(log, "a");
+    spawn(bin, [], { detached: true, stdio: ["ignore", fd, fd] }).unref();
+  ' "${ORCH_DIR}/bin/factory-web" "${LOG}"
+  # Wait briefly so a session hook can report real status (first build takes longer).
+  for _ in $(seq 1 15); do
+    sleep 1
+    curl -s -o /dev/null --max-time 2 "${URL}/" && break
+  done
+fi
+
+if curl -s -o /dev/null --max-time 2 "${URL}/"; then
+  WEB_STATUS="up"
+else
+  WEB_STATUS="starting (see ${LOG})"
+fi
+
+# 2. tailscale serve: idempotent --bg registration, skip if already configured.
+TS_BIN="$(command -v tailscale || true)"
+[ -z "${TS_BIN}" ] && [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ] \
+  && TS_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+TS_STATUS="tailscale not found"
+if [ -n "${TS_BIN}" ]; then
+  TS_JSON="$("${TS_BIN}" status --json 2>/dev/null)"
+  TS_HOST="$(printf '%s' "${TS_JSON}" | jq -r '.Self.DNSName // empty' | sed 's/\.$//')"
+  CERT_DOMAINS="$(printf '%s' "${TS_JSON}" | jq -r '(.CertDomains // []) | length')"
+  if [ "${CERT_DOMAINS}" = "0" ]; then
+    # `tailscale serve` hangs indefinitely when HTTPS certs are not enabled
+    # for the tailnet, so detect and instruct instead of attempting it.
+    TS_STATUS="skipped — enable HTTPS certificates at https://login.tailscale.com/admin/dns first"
+  elif "${TS_BIN}" serve status 2>/dev/null | grep -q "127.0.0.1:${PORT}"; then
+    TS_STATUS="already serving"
+  elif "${TS_BIN}" serve --bg "${URL}" >/dev/null 2>&1; then
+    TS_STATUS="serve registered"
+  else
+    TS_STATUS="serve failed (run manually: tailscale serve --bg ${URL})"
+  fi
+  [ -n "${TS_HOST:-}" ] && [ "${CERT_DOMAINS}" != "0" ] && TS_STATUS="${TS_STATUS} — https://${TS_HOST}"
+fi
+
+echo "factory-web: ${WEB_STATUS} at ${URL} · tailnet: ${TS_STATUS}"

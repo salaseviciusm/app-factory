@@ -11,3 +11,4 @@ orchestration/web/frontend/node_modules/
 orchestration/web/frontend/dist/
 orchestration/web/.token
 orchestration/web/audit.log
+orchestration/web/server.log

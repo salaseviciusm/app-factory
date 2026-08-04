@@ -1,0 +1,39 @@
+#!/bin/bash
+# factory-web-down: stop the factory web console and tear down tailscale serve.
+# Idempotent mirror of factory-web-up (used by Claude Code / Cursor session-end hooks).
+set -u
+
+PORT=4620
+
+# 1. Web server: kill whatever listens on the port, plus launcher/server leftovers.
+PIDS="$(lsof -ti ":${PORT}" 2>/dev/null)"
+if [ -n "${PIDS}" ]; then
+  kill ${PIDS} 2>/dev/null
+  sleep 1
+  # Escalate only if something survived.
+  PIDS="$(lsof -ti ":${PORT}" 2>/dev/null)"
+  [ -n "${PIDS}" ] && kill -9 ${PIDS} 2>/dev/null
+  WEB_STATUS="stopped"
+else
+  WEB_STATUS="was not running"
+fi
+pkill -f "orchestration/web/server.mjs" 2>/dev/null
+pkill -f "orchestration/bin/factory-web$" 2>/dev/null
+
+# 2. tailscale serve: reset only if a serve config exists (avoids cert hangs).
+TS_BIN="$(command -v tailscale || true)"
+[ -z "${TS_BIN}" ] && [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ] \
+  && TS_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+TS_STATUS="tailscale not found"
+if [ -n "${TS_BIN}" ]; then
+  if "${TS_BIN}" serve status 2>/dev/null | grep -q "No serve config"; then
+    TS_STATUS="no serve config"
+  elif "${TS_BIN}" serve reset >/dev/null 2>&1; then
+    TS_STATUS="serve reset"
+  else
+    TS_STATUS="serve reset failed (run manually: tailscale serve reset)"
+  fi
+fi
+
+echo "factory-web: ${WEB_STATUS} · tailnet: ${TS_STATUS}"
