@@ -12,7 +12,9 @@
  * Commands:
  *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
- *   factory-run resume <run_id>          (restart a stopped/failed run's executor)
+ *   factory-run resume <run_id> [--step <step-id>|--back]
+ *                                        (restart a stopped/failed run's executor,
+ *                                         optionally rewound to an earlier step)
  *   factory-run status [<run_id>] [--json]
  *   factory-run list [--json]
  *   factory-run approve <run_id>
@@ -636,6 +638,70 @@ function classifyWebRestart(files) {
   };
 }
 
+// Deploy-time base-drift recovery (harness-merge only): concurrent runs land
+// on the base branch mid-run, so a stale-base merge is never attempted. On
+// drift the run branch is rebased onto the base inside the worktree and the
+// executor loops the verification gates back over the new base, bounded by
+// RECOVERY_CAP. The counter lives in run.json (run.recovery) so engine
+// restarts and resumes cannot reset it.
+const RECOVERY_CAP = 5;
+
+// Engine-synthetic agent step: spawned by the executor only when a recovery
+// rebase conflicts — never declared in workflow JSON.
+const RESOLVE_STEP = { id: "resolve-conflicts", type: "agent", prompt: "conflict-resolver", timeoutMinutes: 30 };
+
+/** Pure decision core for deploy-time base-drift recovery (exercised by
+ *  selftest). `iterations` = recovery cycles already burned. Called before the
+ *  rebase with conflicted=false (merge / escalate / permission-to-rebase) and
+ *  again after it with the real conflict outcome. */
+function classifyRecovery({ drifted, conflicted, iterations, cap = RECOVERY_CAP }) {
+  if (!drifted) return { action: "merge", reason: "base branch unchanged since branch point" };
+  if (iterations >= cap) return { action: "escalate", reason: `recovery cap reached (${iterations}/${cap} cycles)` };
+  if (conflicted) return { action: "resolve", reason: "rebase conflicted; agent resolution required" };
+  return { action: "reverify", reason: "clean rebase; deterministic gates must re-run against the new base" };
+}
+
+/** Write conflict.md into the run dir: the conflicting files/hunks plus the
+ *  base-side commits that caused the drift — the dynamic context the static
+ *  conflict-resolver prompt template references (same pattern as findings.md). */
+function writeConflictContext(run, fromSha, toSha, logFile) {
+  const files = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2).output.trim();
+  const commits = runCommand(`git log --format='%h %s' ${fromSha}..${toSha}`, run.worktree, logFile, 2).output.trim();
+  const hunksRaw = runCommand("git diff", run.worktree, logFile, 2).output;
+  const hunks = hunksRaw.length > 30000 ? `${hunksRaw.slice(0, 30000)}\n… (truncated)` : hunksRaw;
+  fs.writeFileSync(
+    path.join(runDirOf(run.id), "conflict.md"),
+    [
+      "# Rebase conflict: base branch advanced during this run",
+      "",
+      `Run branch \`factory/${run.id}\` is being rebased onto \`${run.baseBranch}\` (\`${toSha.slice(0, 12)}\`); the rebase stopped on conflicts.`,
+      "",
+      "## Conflicting files",
+      "",
+      files ? `\`\`\`\n${files}\n\`\`\`` : "(none reported)",
+      "",
+      `## Base-side commits since the branch point (\`${fromSha.slice(0, 12)}..${toSha.slice(0, 12)}\`)`,
+      "",
+      commits ? `\`\`\`\n${commits}\n\`\`\`` : "(none)",
+      "",
+      "## Conflict hunks (`git diff` at the first stop, truncated)",
+      "",
+      "```diff",
+      hunks.trimEnd(),
+      "```",
+      "",
+    ].join("\n")
+  );
+}
+
+/** True while a rebase is mid-flight in the worktree (either backend). */
+function rebaseInProgress(worktree) {
+  return ["rebase-merge", "rebase-apply"].some((d) => {
+    const p = git(worktree, ["rev-parse", "--git-path", d]);
+    return p.status === 0 && fs.existsSync(path.resolve(worktree, p.stdout.trim()));
+  });
+}
+
 function deployStep(run, rig) {
   const runDir = runDirOf(run.id);
   const deploy = rig.deploy || { type: "none" };
@@ -646,6 +712,51 @@ function deployStep(run, rig) {
     // Self-improvement deploy: merge the validated run branch into the rig's
     // default branch and restart the gateway so skills/engine reload.
     const logFile = path.join(runDir, "deploy.log");
+    let baseSha, mergeBase;
+    try {
+      baseSha = sh(`git -C ${JSON.stringify(run.worktree)} rev-parse ${run.baseBranch}`).trim();
+      mergeBase = sh(`git -C ${JSON.stringify(run.worktree)} merge-base ${run.baseBranch} HEAD`).trim();
+    } catch (err) {
+      return { ok: false, summary: `base drift check failed: ${String(err.message || err).slice(0, 300)}` };
+    }
+    const iterations = run.recovery ? run.recovery.iterations : 0;
+    const pre = classifyRecovery({ drifted: baseSha !== mergeBase, conflicted: false, iterations });
+    if (pre.action === "escalate") {
+      return { ok: false, recover: "escalate", summary: pre.reason };
+    }
+    if (pre.action !== "merge") {
+      log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing factory/${run.id} in the worktree`);
+      const rb = runCommand(`git rebase ${JSON.stringify(run.baseBranch)}`, run.worktree, logFile, 10);
+      let conflicted = false;
+      if (!rb.ok) {
+        const unmerged = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2);
+        conflicted = unmerged.ok && unmerged.output.trim() !== "";
+        if (!conflicted) {
+          runCommand("git rebase --abort", run.worktree, logFile, 2);
+          return { ok: false, summary: `rebase onto ${run.baseBranch} failed without conflicts (aborted, see deploy.log): ${rb.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
+        }
+        writeConflictContext(run, mergeBase, baseSha, logFile);
+      }
+      const decision = classifyRecovery({ drifted: true, conflicted, iterations });
+      if (!run.recovery) run.recovery = { iterations: 0, attempts: [] };
+      run.recovery.iterations += 1;
+      run.recovery.attempts.push({ at: nowIso(), fromSha: mergeBase, toSha: baseSha, conflicted, outcome: decision.action });
+      // Founder steering: a clean rebase re-runs only the deterministic gates,
+      // so the executor skips the review agent while `pending` is "reverify".
+      run.recovery.pending = decision.action;
+      saveRun(run);
+      return {
+        ok: false,
+        recover: decision.action,
+        summary: conflicted
+          ? `rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)}) conflicted`
+          : `clean rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)})`,
+      };
+    }
+    if (run.recovery && run.recovery.pending) {
+      delete run.recovery.pending;
+      saveRun(run);
+    }
     const r = runCommand(
       `git merge --no-ff factory/${run.id} -m "self-improvement: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})"`,
       rig.path,
@@ -1061,6 +1172,92 @@ function cmdCleanup(argv) {
 
 // ---------- executor ----------
 
+/** Deploy-step recovery orchestration: cap escalations, the synthetic
+ *  resolve-conflicts agent step (with escalation.md handling), and the
+ *  loop-back target. Returns { loopTo } for the executor to continue the step
+ *  loop, or null when the run is terminal (state set + founder notified
+ *  here). The worktree and branch are always left intact — and any in-flight
+ *  rebase aborted — so `factory-run resume` can restart the run. */
+function handleRecovery(run, workflow, deployDef, result) {
+  const id = run.id;
+  const runDir = runDirOf(id);
+  const logFile = path.join(runDir, "deploy.log");
+  const attempts = (run.recovery && run.recovery.attempts) || [];
+  const last = attempts[attempts.length - 1];
+  if (result.recover === "escalate") {
+    setState(run, "failed", `deploy recovery escalation: ${result.summary}`);
+    notify(
+      run,
+      `:rotating_light: Run ${id} needs a human: ${result.summary} — the base branch keeps advancing past this run.\n` +
+        `Worktree and branch \`factory/${id}\` are intact. Restart with \`factory-run resume ${id}\` ` +
+        `(or rewind: \`factory-run resume ${id} --step <step-id>\`).\nRun dir: ${runDir}`
+    );
+    return null;
+  }
+  if (result.recover === "resolve") {
+    const escalationPath = path.join(runDir, "escalation.md");
+    fs.rmSync(escalationPath, { force: true }); // a stale escalation must not veto this cycle
+    const started = nowIso();
+    setState(run, `running:${RESOLVE_STEP.id}`, null);
+    notify(run, `:gear: Run ${id} (${run.rig}): ${result.summary} — step *${RESOLVE_STEP.id}* started.`);
+    const r = runAgentStep(run, RESOLVE_STEP);
+    const fail = (outcome, summary, notice) => {
+      if (last) last.outcome = outcome;
+      if (rebaseInProgress(run.worktree)) runCommand("git rebase --abort", run.worktree, logFile, 2);
+      try {
+        tStep(id, RESOLVE_STEP.id, r.attempt, "fail", summary, started, r.usage);
+      } catch {}
+      setState(run, "failed", summary);
+      notify(run, notice);
+      return null;
+    };
+    if (fs.existsSync(escalationPath)) {
+      const text = fs.readFileSync(escalationPath, "utf8");
+      return fail(
+        "escalated",
+        `resolve-conflicts escalated: ${(text.split("\n").find((l) => l.trim()) || "see escalation.md").slice(0, 300)}`,
+        `:rotating_light: Run ${id} escalated by the conflict-resolution agent (rebase aborted; branch intact; ` +
+          `\`factory-run resume ${id}\` once addressed):\n\n${text.slice(0, 2800)}`
+      );
+    }
+    if (!r.ok) {
+      return fail("failed", r.summary, `:x: Run ${id} FAILED at step *${RESOLVE_STEP.id}*: ${r.summary}\nRun dir: ${runDir}`);
+    }
+    // The agent claims success — verify the rebase really completed before
+    // trusting the branch: no in-flight rebase, a clean tree, and HEAD
+    // containing the rebase target captured at drift time.
+    const status = git(run.worktree, ["status", "--porcelain"]);
+    const onTarget = !last || git(run.worktree, ["merge-base", "--is-ancestor", last.toSha, "HEAD"]).status === 0;
+    if (rebaseInProgress(run.worktree) || status.status !== 0 || status.stdout.trim() !== "" || !onTarget) {
+      return fail(
+        "incomplete",
+        "resolve-conflicts agent finished but the rebase is not complete (rebase aborted; see deploy.log)",
+        `:x: Run ${id}: conflict resolution did not complete the rebase; rebase aborted, branch intact. Resume with \`factory-run resume ${id}\`.`
+      );
+    }
+    if (last) last.outcome = "resolved";
+    saveRun(run);
+    try {
+      tStep(id, RESOLVE_STEP.id, r.attempt, "ok", r.summary, started, r.usage);
+    } catch {}
+  }
+  const target = deployDef.onRecover || "checks";
+  const backIdx = workflow.steps.findIndex((s) => s.id === target);
+  if (backIdx === -1) {
+    setState(run, "failed", `deploy onRecover target '${target}' is not a workflow step`);
+    notify(run, `:x: Run ${id} FAILED: deploy onRecover target '${target}' is not a workflow step.`);
+    return null;
+  }
+  const n = run.recovery.iterations;
+  const what =
+    result.recover === "resolve"
+      ? "conflicts resolved by agent; full gates re-run"
+      : "re-running deterministic gates (review skipped)";
+  setState(run, "recovering", `cycle ${n}/${RECOVERY_CAP}: ${result.summary} — ${what}`);
+  notify(run, `:arrows_counterclockwise: Run ${id}: ${result.summary}; ${what}. Looping back to *${target}* (recovery cycle ${n}/${RECOVERY_CAP}).`);
+  return { loopTo: backIdx };
+}
+
 function execRun(id) {
   const run = loadRun(id);
   const runDir = runDirOf(id);
@@ -1118,7 +1315,17 @@ function execRun(id) {
       const stepStarted = nowIso();
       execCounts[step.id] = (execCounts[step.id] || 0) + 1;
 
-      if (step.type === "agent") {
+      if (step.type === "agent" && step.id === "review" && run.recovery && run.recovery.pending === "reverify") {
+        // Founder steering: a clean recovery rebase re-runs only the
+        // deterministic gates — no code changed, the review verdict stands.
+        result = { ok: true, summary: "review skipped: clean-rebase re-verification runs deterministic gates only" };
+      } else if (step.type === "agent") {
+        if (run.recovery && run.recovery.pending === "reverify") {
+          // Any other agent step (e.g. a checks failure looping back to
+          // implement) changes code — the review skip no longer applies.
+          delete run.recovery.pending;
+          saveRun(run);
+        }
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
         result = runAgentStep(run, step);
@@ -1185,11 +1392,20 @@ function execRun(id) {
         result = { ok: false, summary: `unknown step type ${step.type}` };
       }
 
-      log(runDir, `step '${step.id}': ${result.ok ? "OK" : "FAIL"} (${result.summary})`);
+      log(runDir, `step '${step.id}': ${result.ok ? "OK" : result.recover ? `RECOVER:${result.recover}` : "FAIL"} (${result.summary})`);
       try {
-        tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : "fail", result.summary, stepStarted, result.usage);
+        // Recovery cycles get their own telemetry status so deploy failure
+        // stats stay honest (a drift loop-back is not a broken deploy).
+        tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : result.recover ? "recover" : "fail", result.summary, stepStarted, result.usage);
         if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
       } catch {}
+
+      if (result.recover) {
+        const rec = handleRecovery(run, workflow, step, result);
+        if (!rec) return;
+        i = rec.loopTo;
+        continue;
+      }
 
       if (!result.ok) {
         if (result.terminal) {
@@ -1412,14 +1628,44 @@ function detachExec(id) {
   child.unref();
 }
 
-function cmdResume(id) {
-  const run = loadRun(id); // validates
+/** Pure core of `resume --step/--back` (exercised by selftest): the stepIndex
+ *  a resume should restart at. Rewind-only — a step after the current one is
+ *  rejected (skipping gates forward is never allowed). */
+function resolveResumeStep(stepIds, currentIndex, opts = {}) {
+  if (opts.step) {
+    const idx = stepIds.indexOf(opts.step);
+    if (idx === -1) throw new Error(`unknown step '${opts.step}' (workflow steps: ${stepIds.join(", ")})`);
+    if (idx > currentIndex) {
+      throw new Error(`step '${opts.step}' is after the current step '${stepIds[Math.min(currentIndex, stepIds.length - 1)]}'; resume can only rewind`);
+    }
+    return idx;
+  }
+  if (opts.back) return Math.max(0, currentIndex - 1);
+  return currentIndex;
+}
+
+function cmdResume(argv) {
+  // First positional that is neither a flag nor --step's value.
+  const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--step"));
+  const run = loadRun(id);
   if (["done", "cancelled"].includes(run.state)) {
     console.error(`run ${id} is ${run.state}; nothing to resume`);
     process.exit(1);
   }
+  const wf = loadWorkflow(run.workflow);
+  const idx = resolveResumeStep(
+    wf.steps.map((s) => s.id),
+    run.stepIndex || 0,
+    { step: argOf(argv, "--step"), back: argv.includes("--back") }
+  );
+  if (idx !== (run.stepIndex || 0)) {
+    run.stepIndex = idx;
+    run.updatedAt = nowIso();
+    run.history.push({ state: run.state, detail: `resume rewound to step '${wf.steps[idx].id}' (index ${idx})`, at: run.updatedAt });
+    saveRun(run);
+  }
   detachExec(id);
-  console.log(`resumed ${id} at step ${run.stepIndex}`);
+  console.log(`resumed ${id} at step ${run.stepIndex} (${wf.steps[Math.min(run.stepIndex, wf.steps.length - 1)].id})`);
 }
 
 function cmdStatus(argv) {
@@ -1440,6 +1686,11 @@ function cmdStatus(argv) {
     if (usage) console.log(`  ${usage.replace(/:moneybag: /, "")}`);
     if (id) {
       for (const h of r.history.slice(-10)) console.log(`  ${h.at}  ${h.state}${h.detail ? ` — ${h.detail}` : ""}`);
+      if (r.recovery) {
+        const a = r.recovery.attempts || [];
+        const detail = a.map((x) => `${x.conflicted ? "conflicted" : "clean"}→${x.outcome}`).join(", ");
+        console.log(`  recovery: ${r.recovery.iterations}/${RECOVERY_CAP} cycle(s)${detail ? ` — ${detail}` : ""}`);
+      }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
       console.log(`  worktree: ${r.worktree}`);
       console.log(`  run dir:  ${runDirOf(r.id)}`);
@@ -1501,6 +1752,11 @@ function cmdSelftest() {
       }
     }
     console.log(`workflow ${wf}: ${w.steps.length} steps ok`);
+  }
+  {
+    const p = fs.existsSync(path.join(ORCH_DIR, "prompts", `${RESOLVE_STEP.prompt}.md`));
+    console.log(`prompt ${RESOLVE_STEP.prompt} (synthetic ${RESOLVE_STEP.id}): ${okMark(p)}`);
+    if (!p) problems.push(`missing prompt ${RESOLVE_STEP.prompt} for synthetic step ${RESOLVE_STEP.id}`);
   }
   for (const bin of ["claude", "openclaw", "git", "npx"]) {
     const found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
@@ -1566,6 +1822,38 @@ function cmdSelftest() {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart check failed: ${name}`);
   }
+  // Deploy-recovery decision core (pure — no git access). The cap semantics:
+  // `iterations` counts cycles already burned, so the 5th attempt (4 burned)
+  // still runs and a 6th (5 burned) escalates instead of rebasing.
+  const rec = (over) => classifyRecovery({ drifted: true, conflicted: false, iterations: 0, ...over }).action;
+  const recoveryChecks = [
+    ["no drift merges untouched", rec({ drifted: false }) === "merge"],
+    ["no drift merges even at cap", rec({ drifted: false, iterations: RECOVERY_CAP }) === "merge"],
+    ["clean rebase re-verifies", rec({}) === "reverify"],
+    ["conflicted rebase spawns resolution", rec({ conflicted: true }) === "resolve"],
+    ["last capped attempt still runs", rec({ iterations: RECOVERY_CAP - 1 }) === "reverify"],
+    ["attempt past the cap escalates", rec({ iterations: RECOVERY_CAP }) === "escalate"],
+    ["conflict past the cap escalates too", rec({ conflicted: true, iterations: RECOVERY_CAP + 2 }) === "escalate"],
+  ];
+  for (const [name, ok] of recoveryChecks) {
+    console.log(`recovery ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`recovery check failed: ${name}`);
+  }
+  // Resume step rewind (pure — no run dirs touched).
+  const wfSteps = ["plan", "plan-gate", "implement", "checks", "review", "tests", "deploy", "notify"];
+  const resumeChecks = [
+    ["plain resume keeps the current step", resolveResumeStep(wfSteps, 6, {}) === 6],
+    ["--step rewinds to an earlier step", resolveResumeStep(wfSteps, 6, { step: "checks" }) === 3],
+    ["--step accepts the current step", resolveResumeStep(wfSteps, 6, { step: "deploy" }) === 6],
+    ["--back rewinds one step", resolveResumeStep(wfSteps, 6, { back: true }) === 5],
+    ["--back at the first step stays put", resolveResumeStep(wfSteps, 0, { back: true }) === 0],
+    ["unknown step rejected", throws(() => resolveResumeStep(wfSteps, 6, { step: "nope" }), /unknown step 'nope'/)],
+    ["later-than-current step rejected", throws(() => resolveResumeStep(wfSteps, 3, { step: "deploy" }), /resume can only rewind/)],
+  ];
+  for (const [name, ok] of resumeChecks) {
+    console.log(`resume-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`resume-step check failed: ${name}`);
+  }
   // Per-attempt step document naming/derivation (pure — no filesystem access).
   const docChecks = [
     ["first attempt unsuffixed", stepDocName("implement", "prompt", 1) === "implement.prompt.md"],
@@ -1597,7 +1885,7 @@ const [, , cmd, ...rest] = process.argv;
 try {
   if (cmd === "start") cmdStart(rest);
   else if (cmd === "exec") execRun(rest[0]);
-  else if (cmd === "resume") cmdResume(resolveRunId(rest[0]));
+  else if (cmd === "resume") cmdResume(rest);
   else if (cmd === "status" || cmd === "list") cmdStatus(rest);
   else if (cmd === "approve") cmdGate(resolveRunId(rest[0]), "approve");
   else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);

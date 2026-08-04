@@ -47,8 +47,16 @@ export function stateKind(state: string): string {
   if (state === "rejected") return "warn";
   if (state === "cancelled") return "muted";
   if (state === "awaiting-approval") return "gate";
-  if (state.startsWith("running:") || state === "deploying" || state === "setup" || state === "queued") return "active";
+  if (state.startsWith("running:") || state === "deploying" || state === "setup" || state === "queued" || state === "recovering") return "active";
   return "muted";
+}
+
+/** CSS modifier for a telemetry step-status badge ("recover" = deploy hit base
+ *  drift and looped the gates back — not a failure). */
+export function stepStatusKind(status: string): string {
+  if (status === "ok") return "ok";
+  if (status === "recover") return "warn";
+  return "fail";
 }
 
 export function stateLabel(state: string): string {
@@ -83,6 +91,9 @@ export function deriveNodes(detail: RunDetail): Record<string, NodeInfo> {
       status = "active";
     } else if (run.state === "awaiting-approval" && step.type === "gate" && i === stepIdx) {
       status = "gate";
+    } else if (last && last.status === "recover") {
+      // Deploy hit base drift and looped the gates back — it will run again.
+      status = run.state === "failed" ? "fail" : "pending";
     } else if (last) {
       status = last.status === "ok" ? "done" : i < stepIdx ? "done" : "fail";
       // a step that failed and looped back may have later ok rows; last row wins

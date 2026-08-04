@@ -13,6 +13,7 @@ import {
   isTerminal,
   stateKind,
   stateLabel,
+  stepStatusKind,
   usageLine,
 } from "../format";
 
@@ -44,6 +45,11 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
           {run.stalled && (
             <Badge kind="warn" title="No state update in over 10 minutes — the executor may be dead.">
               stalled? try: factory-run resume {run.id}
+            </Badge>
+          )}
+          {data.recovery && data.recovery.iterations > 0 && (
+            <Badge kind="warn" title="Deploy found the base branch had advanced; the run branch was rebased and the gates re-ran.">
+              recovery ×{data.recovery.iterations}
             </Badge>
           )}
           {run.worktreeMissing && <Badge kind="muted" title="The run's git worktree directory no longer exists">no worktree</Badge>}
@@ -90,6 +96,7 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         </section>
       )}
 
+      {(data.recovery || data.conflictMd || data.escalationMd) && <RecoveryPanel data={data} />}
       <StepsTable rows={data.steps} />
       <Artifacts data={data} />
       <History data={data} />
@@ -298,7 +305,7 @@ function StepSheet({
           {rows.map((r, i) => (
             <li key={i} className={`attempt attempt-${r.status}`}>
               <div className="attempt-head">
-                <Badge kind={r.status === "ok" ? "ok" : "fail"}>{r.status}</Badge>
+                <Badge kind={stepStatusKind(r.status)}>{r.status}</Badge>
                 <span>attempt {r.attempt}</span>
                 <span>{fmtWhen(r.started_at)}</span>
                 <span>{fmtDuration(r.duration_s)}</span>
@@ -376,6 +383,74 @@ function AttemptDocs({
   );
 }
 
+/** Deploy recovery: rebase cycles, conflict/escalation context, and the
+ *  synthetic resolve-conflicts step's prompt/output documents (which live
+ *  outside the workflow graph, so the StepSheet never shows them). */
+function RecoveryPanel({ data }: { data: RunDetailData }) {
+  const rec = data.recovery;
+  const docs = data.stepDocs["resolve-conflicts"];
+  const docAttempts = [...new Set([...(docs?.prompt ?? []), ...(docs?.output ?? [])])].sort((a, b) => a - b);
+  return (
+    <section className="panel">
+      <h3>Deploy recovery</h3>
+      {rec && (
+        <p>
+          {rec.iterations} recovery cycle(s) — the base branch advanced mid-run, so the run branch was rebased and the
+          verification gates re-ran before merging.
+        </p>
+      )}
+      {rec && rec.attempts.length > 0 && (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>cycle</th>
+                <th>when</th>
+                <th>rebased onto</th>
+                <th>rebase</th>
+                <th>outcome</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rec.attempts.map((a, i) => (
+                <tr key={i}>
+                  <td>{i + 1}</td>
+                  <td>{fmtWhen(a.at)}</td>
+                  <td>
+                    <code>{a.fromSha.slice(0, 8)}</code> → <code>{a.toSha.slice(0, 8)}</code>
+                  </td>
+                  <td>
+                    <Badge kind={a.conflicted ? "warn" : "ok"}>{a.conflicted ? "conflicted" : "clean"}</Badge>
+                  </td>
+                  <td>{a.outcome}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data.escalationMd && (
+        <details open>
+          <summary>escalation.md — the conflict-resolution agent needs a human</summary>
+          <pre className="doc-view">{data.escalationMd}</pre>
+        </details>
+      )}
+      {data.conflictMd && (
+        <details>
+          <summary>conflict.md — last conflict context</summary>
+          <pre className="doc-view">{data.conflictMd}</pre>
+        </details>
+      )}
+      {docAttempts.map((a) => (
+        <div key={a}>
+          <span className="step-def">resolve-conflicts attempt {a}</span>
+          <AttemptDocs runId={data.run.id} stepId="resolve-conflicts" attempt={a} docs={docs} />
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function StepsTable({ rows }: { rows: StepRow[] }) {
   return (
     <section className="panel">
@@ -403,7 +478,7 @@ function StepsTable({ rows }: { rows: StepRow[] }) {
                   <td>{r.step_id}</td>
                   <td>{r.attempt}</td>
                   <td>
-                    <Badge kind={r.status === "ok" ? "ok" : "fail"}>{r.status}</Badge>
+                    <Badge kind={stepStatusKind(r.status)}>{r.status}</Badge>
                   </td>
                   <td>{fmtDuration(r.duration_s)}</td>
                   <td>{fmtCost(r.cost_usd)}</td>

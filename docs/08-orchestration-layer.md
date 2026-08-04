@@ -654,6 +654,53 @@ deletes a worktree directory only when its `.git` gitdir pointer is missing or
 dangling; a valid worktree of any rig repo is never classified as an orphan
 (without a `run.json` it is reported, not touched).
 
+## 12e. Deploy-step merge-conflict recovery (implemented 2026-08-04)
+
+Runs execute in parallel, so by the time a run reaches its harness-merge
+deploy another run may have landed on the base branch. The deploy step never
+attempts a stale-base merge: it first compares the base branch head with the
+run branch's merge-base, and on drift rebases the run branch onto the base
+**inside the worktree**, then loops the pipeline back to the deploy step's
+`onRecover` target (`"checks"` in feature-dev/bug-fix) so the gates re-run
+against the new base before any merge. Rigs with `eas-update` or `none`
+deploys are unchanged (their merge is manual/absent).
+
+- **Clean rebase** (no textual conflicts): only the deterministic gates
+  re-run — `checks` and `tests` — while the agentic `review` step is skipped
+  (recorded as an ok step row with a "review skipped" summary), per founder
+  steering: no code changed, so the review verdict stands and no tokens are
+  burned. The skip is dropped the moment any other agent step runs again
+  (e.g. a checks failure looping back to `implement`).
+- **Conflicted rebase**: the engine writes `conflict.md` into the run dir
+  (conflicting files/hunks + the base-side commits since the branch point)
+  and spawns the engine-synthetic `resolve-conflicts` agent step (prompt
+  `conflict-resolver.md`) through the normal agent-step machinery, so its
+  rendered prompt / raw output / telemetry / attempt numbering come for
+  free. The agent resolves each conflict preserving both sides' intent and
+  completes the rebase; it may never `--skip` or drop commits. The engine
+  verifies completion (no in-flight rebase, clean tree, HEAD contains the
+  rebase target) before looping back through the **full** gate set,
+  review included.
+- **Escalation**: on any judgement call (semantic conflicts, contradictory
+  intent, potential work loss, a commit that could only be dropped) the agent
+  aborts the rebase and writes `escalation.md`; the engine Slack-notifies its
+  content, sets the run `failed`, and leaves the worktree/branch intact —
+  `factory-run resume` restarts it. The same posture applies when the cap is
+  reached.
+- **Bounded + persistent**: recovery state lives in `run.json`
+  (`recovery.iterations` plus one attempt entry per cycle: timestamp,
+  drifted-from/to SHAs, conflicted/clean, outcome), so engine restarts and
+  resumes cannot reset the counter. The loop is capped at 5 cycles; each
+  cycle also appears in the run history (state `recovering`) and telemetry
+  records the deploy row with status `recover` (not `fail`, keeping failure
+  stats honest). `factory-run status <id>` prints the cycle count, and the
+  web console shows the recovery panel (cycles, conflict/escalation docs,
+  resolve-conflicts prompt/output viewers).
+- **Rewind on resume**: `factory-run resume <id> --step <step-id>` restarts a
+  non-terminal run from any earlier (or the current) step; a later-than-current
+  or unknown step id is rejected. `--back` rewinds one step. Plain `resume`
+  still resumes at the failed step.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.
