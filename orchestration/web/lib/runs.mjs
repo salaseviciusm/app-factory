@@ -108,6 +108,19 @@ function readCapped(p, cap = 200 * 1024) {
   }
 }
 
+/**
+ * Which file holds the plan at the gate. Workflows may override it per gate
+ * (self-review writes improvement-plan.md), so mirror what the engine reads:
+ * the gate the run is parked on, else the first gate, else plan.md. Basename
+ * only — the workflow file must never point the console outside the run dir.
+ */
+function gatePlanFile(steps, stepIndex) {
+  const gates = steps.filter((s) => s && s.type === "gate");
+  const current = typeof stepIndex === "number" ? steps[stepIndex] : null;
+  const gate = current && current.type === "gate" ? current : gates[0];
+  return path.basename((gate && gate.planFile) || "plan.md");
+}
+
 // Fixed set of run-dir logs the console may serve — a closed list, never
 // dynamic names. Engine/executor always; the rest appear as their steps run.
 const RUN_LOGS = ["engine", "executor", "setup", "checks", "tests", "deploy"];
@@ -220,9 +233,8 @@ export function getRunDetail(orchDir, id) {
     summary = summaryFromDbRow(row, usageForRun(db, id));
   }
   const workflow = readJson(path.join(orchDir, "workflows", `${summary.workflow}.json`), null);
-  const stepIds = workflow && Array.isArray(workflow.steps)
-    ? workflow.steps.map((s) => s && s.id).filter((s) => typeof s === "string")
-    : [];
+  const wfSteps = workflow && Array.isArray(workflow.steps) ? workflow.steps : [];
+  const stepIds = wfSteps.map((s) => s && s.id).filter((s) => typeof s === "string");
   return {
     run: summary,
     repoUrl: repoUrlForRig(orchDir, summary.rig),
@@ -231,7 +243,7 @@ export function getRunDetail(orchDir, id) {
     artifacts: artifactsForRun(db, id),
     workflow,
     recovery: (run && run.recovery) || null,
-    planMd: readCapped(path.join(runDir, "plan.md")),
+    planMd: readCapped(path.join(runDir, gatePlanFile(wfSteps, summary.stepIndex))),
     findingsMd: readCapped(path.join(runDir, "findings.md")),
     steeringMd: readCapped(path.join(runDir, "steering.md")),
     deviationsMd: readCapped(path.join(runDir, "deviations.md")),
