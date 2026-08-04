@@ -627,6 +627,33 @@ fragment (`version-badge`) addresses a run; ambiguous fragments error listing
 all candidates, and `exec` (internal) stays exact-only. Legacy base36 ids are
 plain run-dir names and keep working with zero migration.
 
+## 12d. Worktree/branch cleanup (implemented 2026-08-04)
+
+Every run creates `orchestration/worktrees/<id>` plus a `factory/<id>` branch
+in its rig repo, and each worktree carries full rig setup (~1–2 GB). Cleanup
+reclaims both, two ways:
+
+- **At run completion:** after a run reaches `done`, the executor calls
+  cleanup for that run (wrapped so a cleanup failure can never change the
+  terminal state). On harness-merge rigs the deploy step already merged the
+  branch, so the worktree and branch are reclaimed immediately; on
+  manual-merge rigs the branch is unmerged at completion, so cleanup skips and
+  the "worktree kept for merge review" flow is preserved.
+- **On demand:** `factory-run cleanup [--dry-run] [--json]
+  [--remove-unmerged-worktrees]` sweeps every run plus an orphan scan of the
+  worktrees dir, printing per-item action/skip reason and a freed-bytes total.
+
+Safety rules: a run is only cleaned when terminal (`done`/`failed`/
+`rejected`/`cancelled`), its worktree has no uncommitted changes, and
+`factory/<id>` is an ancestor of the rig's default branch — checked against
+the run's own rig repo (multi-rig correct). Deletion is never forced: `git
+worktree remove` without `--force` and `git branch -d` (never `-D`). Clean
+worktrees on unmerged branches are only removed with
+`--remove-unmerged-worktrees`, and the branch is always kept. The orphan scan
+deletes a worktree directory only when its `.git` gitdir pointer is missing or
+dangling; a valid worktree of any rig repo is never classified as an orphan
+(without a `run.json` it is reported, not touched).
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.
