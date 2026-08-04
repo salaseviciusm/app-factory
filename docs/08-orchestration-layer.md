@@ -505,16 +505,32 @@ Placeholder for additional papers the founder wants forced into the next revisio
 
 The factory improves itself through the same graph machinery it uses for apps.
 
-**Telemetry, not context dumps.** Every run writes structured records to
-`orchestration/telemetry.db` (SQLite via `node:sqlite`, zero dependencies):
+**Structured telemetry plus captured context.** Every run writes structured
+records to `orchestration/telemetry.db` (SQLite via `node:sqlite`, zero
+dependencies):
 
 - `runs`: id, workflow, rig, prompt, state, parent run, timestamps
 - `steps`: per-attempt outcome, summary, duration (implement loops visible as
   attempts), and per-agent-step **cost/tokens** (`cost_usd`, `input_tokens`,
   `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`) parsed from each
-  step's `claude --output-format json` result
+  step's result envelope (reconstructed from its stream-json transcript)
 - `artifacts`: commits (sha + subject), review verdicts, review findings,
   deploy/artifact URLs, harness merge commits
+
+Alongside the structured rows, every agent step streams its **full working
+transcript** (`claude --output-format stream-json --verbose`, stdout fed to a
+file descriptor so MB-scale transcripts survive timeouts and kills) to
+`<step>[.N].transcript.jsonl` in the run dir. The prior single-object envelope
+is reconstructed from the transcript's `"type":"result"` event into
+`<step>[.N].output.json`, so `parseUsage`, the report backfill, and the web
+console are unchanged; when a timeout/kill leaves no result event, usage falls
+back to the last assistant event's `message.usage` so failed attempts are still
+priced. `factory-run context <run_id> [--json]` turns this into a per-step
+context/cost report (prompt bytes, steering/findings injections, tokens by
+category, cost, duration, assistant turns, tool_use counts, models, steps
+ranked by cache-read tokens), and `factory-run context --sessions
+[--sessions-dir <dir>] [--days N]` inventories the OpenClaw session transcripts
+(founder ↔ OpenClaw conversations) so the self-review loop can sample them.
 
 **Cost/token accounting (for effort tuning).** Agent-step cost and token counts
 are captured into `steps` as each step completes. They surface in three places,

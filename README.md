@@ -224,8 +224,12 @@ shell out to `factory-run`, are rate-limited, and append to
 `orchestration/web/audit.log`.
 
 **Self-evaluation loop:** every run writes structured telemetry (commits, review
-verdicts/findings, step durations, artifact links — never context dumps) to
-`orchestration/telemetry.db`; `factory-run report` digests it. The `self-review`
+verdicts/findings, step durations, artifact links, per-step cost/tokens) to
+`orchestration/telemetry.db`, and every agent step keeps its full `stream-json`
+working transcript in the run dir; `factory-run report` digests the telemetry,
+`factory-run context <run_id>` shows where each step's context and cost went,
+and `factory-run context --sessions` inventories the OpenClaw chat transcripts
+that start runs. The `self-review`
 workflow (weekly cron Sundays 17:00, or ask the bot to "review the factory")
 analyzes that evidence, posts a one-improvement plan to `#factory-builds`, and on
 your approval spawns a full feature-dev run on the `app-factory` rig itself —
