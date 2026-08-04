@@ -48,6 +48,7 @@ pre {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px max(14px, env(safe-area-inset-left));
@@ -91,6 +92,29 @@ pre {
 
 .lock-btn {
   margin-left: auto;
+}
+
+/* Compact header on phones so brand + nav + Lock fit one row without a page
+   horizontal scrollbar (nothing is clipped — flex-wrap above is the net). */
+@media (max-width: 560px) {
+  .topbar {
+    gap: 8px;
+  }
+
+  .topbar nav a {
+    padding: 6px 9px;
+  }
+
+  .topbar .lock-btn {
+    padding: 6px 10px;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 460px) {
+  .brand-text {
+    display: none;
+  }
 }
 
 .content {
