@@ -420,10 +420,33 @@ function renderPrompt(templateName, run) {
     .replaceAll("{{FINDINGS}}", findings);
 }
 
+/** Filename of one attempt's prompt/output document. Attempt 1 stays
+ *  unsuffixed (implement.prompt.md) so pre-existing run dirs read as
+ *  attempt 1; retries get implement.2.prompt.md, .3, … */
+function stepDocName(stepId, kind, attempt) {
+  const ext = kind === "prompt" ? "prompt.md" : "output.json";
+  return attempt <= 1 ? `${stepId}.${ext}` : `${stepId}.${attempt}.${ext}`;
+}
+
+/** Highest attempt among existing prompt/output files for a step, 0 when none.
+ *  Pure core (exercised by selftest); `names` = fs.readdirSync(runDir). */
+function maxStepAttempt(names, stepId) {
+  const re = new RegExp(`^${stepId}\\.(?:(\\d+)\\.)?(?:prompt\\.md|output\\.json)$`);
+  let max = 0;
+  for (const name of names) {
+    const m = name.match(re);
+    if (m) max = Math.max(max, m[1] ? parseInt(m[1], 10) : 1);
+  }
+  return max;
+}
+
 function runAgentStep(run, step) {
   const runDir = runDirOf(run.id);
+  // Attempt derived from files on disk (not in-memory loop counters) so
+  // numbering survives engine restarts and never overwrites earlier attempts.
+  const attempt = maxStepAttempt(fs.readdirSync(runDir), step.id) + 1;
   const prompt = renderPrompt(step.prompt, run);
-  const promptFile = path.join(runDir, `${step.id}.prompt.md`);
+  const promptFile = path.join(runDir, stepDocName(step.id, "prompt", attempt));
   fs.writeFileSync(promptFile, prompt);
   const args = [
     "-p", prompt,
@@ -431,7 +454,7 @@ function runAgentStep(run, step) {
     "--dangerously-skip-permissions",
   ];
   if (step.model) args.push("--model", step.model);
-  log(runDir, `agent step '${step.id}' starting (model=${step.model || "default"}, cwd=${run.worktree})`);
+  log(runDir, `agent step '${step.id}' starting (attempt ${attempt}, model=${step.model || "default"}, cwd=${run.worktree})`);
   const res = spawnSync("claude", args, {
     cwd: run.worktree,
     encoding: "utf8",
@@ -440,12 +463,12 @@ function runAgentStep(run, step) {
     maxBuffer: 256 * 1024 * 1024,
     env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "factory-run" },
   });
-  fs.writeFileSync(path.join(runDir, `${step.id}.output.json`), res.stdout || "");
+  fs.writeFileSync(path.join(runDir, stepDocName(step.id, "output", attempt)), res.stdout || "");
   if (res.error && res.error.code === "ETIMEDOUT") {
-    return { ok: false, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m` };
+    return { ok: false, attempt, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m` };
   }
   if (res.status !== 0) {
-    return { ok: false, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}` };
+    return { ok: false, attempt, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}` };
   }
   let parsed = null;
   try {
@@ -454,7 +477,29 @@ function runAgentStep(run, step) {
     /* non-json output tolerated */
   }
   const resultText = parsed && typeof parsed.result === "string" ? parsed.result : (res.stdout || "");
-  return { ok: true, summary: resultText.slice(0, 2000), usage: parseUsage(parsed) };
+  return { ok: true, attempt, summary: resultText.slice(0, 2000), usage: parseUsage(parsed) };
+}
+
+/** Preserve the live findings.md as the next findings.N.md archive copy.
+ *  findings.md itself must stay deletable on review PASS (renderPrompt injects
+ *  it into every later agent prompt), so history lives in the archives. Called
+ *  after every findings write and defensively before the PASS delete; skips
+ *  when findings.md is absent or identical to the newest archive. */
+function archiveFindings(runDir) {
+  const live = path.join(runDir, "findings.md");
+  if (!fs.existsSync(live)) return;
+  const text = fs.readFileSync(live, "utf8");
+  let max = 0;
+  for (const name of fs.readdirSync(runDir)) {
+    const m = name.match(/^findings\.(\d+)\.md$/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  if (max > 0) {
+    try {
+      if (fs.readFileSync(path.join(runDir, `findings.${max}.md`), "utf8") === text) return;
+    } catch {}
+  }
+  fs.writeFileSync(path.join(runDir, `findings.${max + 1}.md`), text);
 }
 
 // ---------- deterministic steps ----------
@@ -476,6 +521,7 @@ function runCommandsStep(run, step, rig) {
         path.join(runDir, "findings.md"),
         `Deterministic ${step.source} failed.\n\nCommand: \`${cmd}\`\n\nOutput tail:\n\n\`\`\`\n${tail}\n\`\`\`\n`
       );
+      archiveFindings(runDir);
       return { ok: false, summary: `${step.source} failed at: ${cmd}` };
     }
   }
@@ -493,6 +539,7 @@ function evaluateReview(run) {
     for (const f of review.findings || []) tArtifact(run.id, "review", "finding", f);
   } catch {}
   if (review.verdict === "PASS") {
+    archiveFindings(runDir);
     fs.rmSync(path.join(runDir, "findings.md"), { force: true });
     return { ok: true, summary: "agentic review PASS" };
   }
@@ -501,6 +548,7 @@ function evaluateReview(run) {
     path.join(runDir, "findings.md"),
     `Agentic cross-validation FAILED.\n\nFindings:\n\n${findings}\n`
   );
+  archiveFindings(runDir);
   return { ok: false, summary: `agentic review FAIL (${(review.findings || []).length} findings)` };
 }
 
@@ -1019,6 +1067,10 @@ function execRun(id) {
   const rig = resolveRig(run.rig);
   const workflow = loadWorkflow(run.workflow);
   const loops = {};
+  // True per-step execution count for telemetry: `loops` only increments for
+  // the step that failed, so a looped-back step would repeat attempt numbers.
+  // Agent steps report their file-derived attempt instead (resume-safe).
+  const execCounts = {};
 
   try {
     tRun(run);
@@ -1064,12 +1116,15 @@ function execRun(id) {
       run.stepIndex = i;
       let result;
       const stepStarted = nowIso();
+      execCounts[step.id] = (execCounts[step.id] || 0) + 1;
 
       if (step.type === "agent") {
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
         result = runAgentStep(run, step);
-        if (result.ok && step.id === "review") result = evaluateReview(run);
+        if (result.ok && step.id === "review") {
+          result = { ...evaluateReview(run), attempt: result.attempt, usage: result.usage };
+        }
         if (result.ok && step.id === "implement") recordCommits(run);
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
@@ -1132,7 +1187,7 @@ function execRun(id) {
 
       log(runDir, `step '${step.id}': ${result.ok ? "OK" : "FAIL"} (${result.summary})`);
       try {
-        tStep(id, step.id, (loops[step.id] || 0) + 1, result.ok ? "ok" : "fail", result.summary, stepStarted, result.usage);
+        tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : "fail", result.summary, stepStarted, result.usage);
         if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
       } catch {}
 
@@ -1510,6 +1565,19 @@ function cmdSelftest() {
   for (const [name, ok] of webChecks) {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart check failed: ${name}`);
+  }
+  // Per-attempt step document naming/derivation (pure — no filesystem access).
+  const docChecks = [
+    ["first attempt unsuffixed", stepDocName("implement", "prompt", 1) === "implement.prompt.md"],
+    ["retry attempts suffixed", stepDocName("implement", "output", 3) === "implement.3.output.json"],
+    ["empty dir means no attempts", maxStepAttempt([], "implement") === 0],
+    ["unsuffixed file reads as attempt 1", maxStepAttempt(["implement.prompt.md", "plan.md"], "implement") === 1],
+    ["highest suffix wins across kinds", maxStepAttempt(["implement.prompt.md", "implement.2.prompt.md", "implement.3.output.json"], "implement") === 3],
+    ["other steps' files ignored", maxStepAttempt(["review.2.prompt.md", "review.output.json"], "implement") === 0],
+  ];
+  for (const [name, ok] of docChecks) {
+    console.log(`step-doc ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`step-doc check failed: ${name}`);
   }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);

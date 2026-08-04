@@ -604,6 +604,15 @@ textarea {
   overflow-y: auto;
 }
 
+.attempt-docs {
+  margin-top: 6px;
+}
+
+.attempt-docs .doc-view {
+  margin-bottom: 0;
+  font-size: 0.8rem;
+}
+
 /* ---------- tables ---------- */
 
 .table-scroll {

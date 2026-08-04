@@ -108,10 +108,97 @@ function readCapped(p, cap = 200 * 1024) {
   }
 }
 
+// Fixed set of run-dir logs the console may serve — a closed list, never
+// dynamic names. Engine/executor always; the rest appear as their steps run.
+const RUN_LOGS = ["engine", "executor", "setup", "checks", "tests", "deploy"];
+
+// Per-attempt step documents the engine writes: <step>.prompt.md /
+// <step>.output.json for attempt 1, <step>.N.prompt.md / .N.output.json for
+// retries. Kind whitelist maps to the file extension.
+const STEP_DOC_KINDS = { prompt: "prompt.md", output: "output.json" };
+const STEP_ID_RE = /^[a-z0-9-]+$/;
+const STEP_DOC_RE = /^([a-z0-9-]+)\.(?:(\d+)\.)?(prompt\.md|output\.json)$/;
+const MAX_ATTEMPT = 999;
+const STEP_DOC_CAP = 256 * 1024;
+
+function stepDocFileName(stepId, kind, attempt) {
+  const ext = STEP_DOC_KINDS[kind];
+  return attempt <= 1 ? `${stepId}.${ext}` : `${stepId}.${attempt}.${ext}`;
+}
+
+/** Available attempts per step/kind from one readdir, restricted to the
+ *  workflow-declared step ids: { [stepId]: { prompt: [1,2], output: [1] } }.
+ *  Steps with no documents are omitted. */
+function listStepDocs(runDir, stepIds) {
+  const out = {};
+  let names = [];
+  try {
+    names = fs.readdirSync(runDir);
+  } catch {
+    return out;
+  }
+  const declared = new Set(stepIds);
+  for (const name of names) {
+    const m = STEP_DOC_RE.exec(name);
+    if (!m || !declared.has(m[1])) continue;
+    const kind = m[3] === "prompt.md" ? "prompt" : "output";
+    const entry = (out[m[1]] ||= { prompt: [], output: [] });
+    entry[kind].push(m[2] ? parseInt(m[2], 10) : 1);
+  }
+  for (const entry of Object.values(out)) {
+    entry.prompt.sort((a, b) => a - b);
+    entry.output.sort((a, b) => a - b);
+  }
+  return out;
+}
+
+/** Step ids declared by a run's workflow file, or null when unloadable. */
+function workflowStepIds(orchDir, workflowName) {
+  if (typeof workflowName !== "string" || !STEP_ID_RE.test(workflowName)) return null;
+  const workflow = readJson(path.join(orchDir, "workflows", `${workflowName}.json`), null);
+  if (!workflow || !Array.isArray(workflow.steps)) return null;
+  return workflow.steps.map((s) => s && s.id).filter((s) => typeof s === "string");
+}
+
+/**
+ * One step attempt's rendered prompt or raw SDK output, tail-capped like logs.
+ * `stepId` is validated against the run's workflow-declared step ids (never
+ * used as a free-form path segment), `kind` against STEP_DOC_KINDS, `attempt`
+ * as a bounded positive int (string form accepted; omitted/null = latest;
+ * unsuffixed file = attempt 1). Returns { text } on success or
+ * { status: 400|404, error } — never file content for invalid input.
+ */
+export function readStepDoc(orchDir, id, stepId, kind, attempt) {
+  if (typeof id !== "string" || !RUN_ID_RE.test(id)) return { status: 400, error: "invalid run id" };
+  if (typeof stepId !== "string" || !STEP_ID_RE.test(stepId)) return { status: 400, error: "invalid step id" };
+  if (!Object.prototype.hasOwnProperty.call(STEP_DOC_KINDS, kind)) return { status: 400, error: "invalid kind" };
+  let n = null;
+  if (attempt !== undefined && attempt !== null && attempt !== "") {
+    if (!/^\d{1,4}$/.test(String(attempt))) return { status: 400, error: "invalid attempt" };
+    n = parseInt(attempt, 10);
+    if (n < 1 || n > MAX_ATTEMPT) return { status: 400, error: "invalid attempt" };
+  }
+  const runDir = path.join(runsDirOf(orchDir), id);
+  const run = readJson(path.join(runDir, "run.json"), null);
+  if (!run || !run.id) return { status: 404, error: `no such run: ${id}` };
+  const stepIds = workflowStepIds(orchDir, run.workflow);
+  if (!stepIds) return { status: 404, error: `workflow '${run.workflow}' not found` };
+  if (!stepIds.includes(stepId)) return { status: 400, error: `step '${stepId}' not in workflow` };
+  if (n === null) {
+    const attempts = (listStepDocs(runDir, [stepId])[stepId] || {})[kind] || [];
+    if (attempts.length === 0) return { status: 404, error: "no such document" };
+    n = attempts[attempts.length - 1];
+  }
+  const text = readCapped(path.join(runDir, stepDocFileName(stepId, kind, n)), STEP_DOC_CAP);
+  if (text === null) return { status: 404, error: "no such document" };
+  return { text };
+}
+
 /**
  * Full detail for one run: run.json (or the DB row when the dir is gone),
  * telemetry step attempts + artifacts, the workflow definition, and the small
- * run-dir documents the founder needs at the gate (plan, findings, review).
+ * run-dir documents the founder needs at the gate (plan, findings, review,
+ * steering, deviations) plus the available per-attempt step documents.
  * Returns null when the run exists nowhere. `id` must already be validated.
  */
 export function getRunDetail(orchDir, id) {
@@ -127,6 +214,9 @@ export function getRunDetail(orchDir, id) {
     summary = summaryFromDbRow(row, usageForRun(db, id));
   }
   const workflow = readJson(path.join(orchDir, "workflows", `${summary.workflow}.json`), null);
+  const stepIds = workflow && Array.isArray(workflow.steps)
+    ? workflow.steps.map((s) => s && s.id).filter((s) => typeof s === "string")
+    : [];
   return {
     run: summary,
     repoUrl: repoUrlForRig(orchDir, summary.rig),
@@ -136,13 +226,16 @@ export function getRunDetail(orchDir, id) {
     workflow,
     planMd: readCapped(path.join(runDir, "plan.md")),
     findingsMd: readCapped(path.join(runDir, "findings.md")),
+    steeringMd: readCapped(path.join(runDir, "steering.md")),
+    deviationsMd: readCapped(path.join(runDir, "deviations.md")),
     review: readJson(path.join(runDir, "review.json"), null),
-    logs: ["engine", "executor"].filter((n) => fs.existsSync(path.join(runDir, `${n}.log`))),
+    stepDocs: listStepDocs(runDir, stepIds),
+    logs: RUN_LOGS.filter((n) => fs.existsSync(path.join(runDir, `${n}.log`))),
   };
 }
 
 /** Tail of a run-dir log. Only whitelisted names — never arbitrary paths. */
 export function readRunLog(orchDir, id, name) {
-  if (!["engine", "executor"].includes(name)) return null;
+  if (!RUN_LOGS.includes(name)) return null;
   return readCapped(path.join(runsDirOf(orchDir), id, `${name}.log`), 256 * 1024);
 }

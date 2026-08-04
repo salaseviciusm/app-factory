@@ -68,6 +68,12 @@ export const api = {
   run: (id: string) => request<import("./types").RunDetail>(`/api/runs/${encodeURIComponent(id)}`),
   log: (id: string, name: string) =>
     request<string>(`/api/runs/${encodeURIComponent(id)}/log/${encodeURIComponent(name)}`, { asText: true }),
+  stepDoc: (id: string, stepId: string, kind: import("./types").StepDocKind, attempt?: number) =>
+    request<string>(
+      `/api/runs/${encodeURIComponent(id)}/step/${encodeURIComponent(stepId)}/${encodeURIComponent(kind)}` +
+        (attempt != null ? `?attempt=${attempt}` : ""),
+      { asText: true }
+    ),
   settings: () => request<import("./types").SettingsResponse>("/api/settings"),
   start: (body: { rig: string; workflow: string; prompt: string; auto: boolean }) =>
     post<{ ok: boolean; runId: string }>("/api/runs", body),

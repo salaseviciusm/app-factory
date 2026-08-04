@@ -77,6 +77,14 @@ export interface HistoryEntry {
   at: string;
 }
 
+/** Per-attempt documents available for one step (attempt numbers, ascending). */
+export interface StepDocAttempts {
+  prompt: number[];
+  output: number[];
+}
+
+export type StepDocKind = keyof StepDocAttempts;
+
 export interface RunDetail {
   run: RunSummary;
   repoUrl: string | null;
@@ -86,7 +94,10 @@ export interface RunDetail {
   workflow: Workflow | null;
   planMd: string | null;
   findingsMd: string | null;
+  steeringMd: string | null;
+  deviationsMd: string | null;
   review: { verdict?: string; findings?: string[] } | null;
+  stepDocs: Record<string, StepDocAttempts>;
   logs: string[];
 }
 

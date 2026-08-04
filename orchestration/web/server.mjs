@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
-import { listRuns, getRunDetail, readRunLog, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
+import { listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
 import {
   loadToken,
   createToken,
@@ -185,7 +185,7 @@ function currentRunState(id) {
 
 // ---------- API routes ----------
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, query) {
   // Every /api/* request requires the token, reads included — run prompts and
   // telemetry are not for whoever happens to reach the port.
   if (!tokenEquals(bearerToken(req), TOKEN)) {
@@ -208,6 +208,14 @@ async function handleApi(req, res, pathname) {
       const text = readRunLog(ORCH_DIR, m[1], m[2]);
       if (text === null) return sendJson(res, 404, { error: "no such log" });
       return sendText(res, 200, text);
+    }
+    if ((m = /^\/api\/runs\/([^/]+)\/step\/([^/]+)\/([^/]+)$/.exec(pathname))) {
+      // readStepDoc validates every segment (run id, workflow-declared step id,
+      // kind whitelist, bounded attempt) and maps bad input to 400, missing
+      // files to 404 — never a path lookup from unvalidated input.
+      const doc = readStepDoc(ORCH_DIR, m[1], m[2], m[3], query.get("attempt") ?? undefined);
+      if (doc.error) return sendJson(res, doc.status, { error: doc.error });
+      return sendText(res, 200, doc.text);
     }
     if (pathname === "/api/workflows") return sendJson(res, 200, { workflows: listWorkflows() });
     if (pathname === "/api/settings") {
@@ -377,15 +385,16 @@ function serveStatic(req, res, pathname) {
 // ---------- server ----------
 
 const server = http.createServer(async (req, res) => {
-  let pathname;
+  let url;
   try {
-    pathname = new URL(req.url, `http://${req.headers.host || "localhost"}`).pathname;
+    url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   } catch {
     return sendText(res, 400, "bad request\n");
   }
+  const pathname = url.pathname;
   try {
     if (pathname === "/api" || pathname.startsWith("/api/")) {
-      await handleApi(req, res, pathname);
+      await handleApi(req, res, pathname, url.searchParams);
     } else {
       serveStatic(req, res, pathname);
     }
