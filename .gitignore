@@ -7,3 +7,7 @@ openclaw/secrets.env
 orchestration/runs/
 orchestration/worktrees/
 orchestration/telemetry.db
+orchestration/web/frontend/node_modules/
+orchestration/web/frontend/dist/
+orchestration/web/.token
+orchestration/web/audit.log

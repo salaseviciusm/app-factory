@@ -201,6 +201,28 @@ Slack voice notes automatically and echoes the transcript in-thread.
 **Verify:** `orchestration/bin/factory-run selftest` is green; send the bot a
 voice note saying "status" and watch the transcript + reply.
 
+**Factory web console:** a phone-friendly web UI over the same engine — run
+list, per-run node graph with step telemetry (cost/tokens/duration), start
+runs, and the full gate loop (approve / reject with feedback / steer / cancel):
+
+```sh
+orchestration/bin/factory-web        # builds the frontend on first launch,
+                                     # generates + prints FACTORY_WEB_TOKEN once,
+                                     # serves http://127.0.0.1:4620
+```
+
+The server binds 127.0.0.1 and requires the token for every API call. To reach
+it from your phone, keep the loopback bind and put Tailscale in front:
+
+```sh
+tailscale serve --bg http://127.0.0.1:4620
+```
+
+then open `https://<machine>.<tailnet>.ts.net` on the phone and paste the token
+(printed at first launch; stored in `orchestration/web/.token`). All mutations
+shell out to `factory-run`, are rate-limited, and append to
+`orchestration/web/audit.log`.
+
 **Self-evaluation loop:** every run writes structured telemetry (commits, review
 verdicts/findings, step durations, artifact links — never context dumps) to
 `orchestration/telemetry.db`; `factory-run report` digests it. The `self-review`
