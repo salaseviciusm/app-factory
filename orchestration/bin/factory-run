@@ -19,6 +19,7 @@
  *   factory-run reject <run_id> "<feedback>"
  *   factory-run steer <run_id> "<instruction>"
  *   factory-run cancel <run_id>
+ *   factory-run cleanup [--dry-run] [--json] [--remove-unmerged-worktrees]
  *   factory-run preflight [--rig <name>]   (live external-CLI contract checks)
  *   factory-run selftest
  *
@@ -84,8 +85,10 @@ function tRun(run) {
     .run(run.id, run.workflow, run.rig, run.prompt, run.state, run.auto ? 1 : 0, run.parentRun || null, run.createdAt);
 }
 
+const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled"];
+
 function tRunState(run) {
-  const terminal = ["done", "failed", "rejected", "cancelled"].includes(run.state);
+  const terminal = TERMINAL_STATES.includes(run.state);
   tdb()
     .prepare(`UPDATE runs SET state = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ?`)
     .run(run.state, terminal ? nowIso() : null, run.id);
@@ -826,6 +829,155 @@ function runPreflight(rigNames) {
   return { ok: failed.length === 0, probes, summary };
 }
 
+// ---------- cleanup (worktree/branch reclamation) ----------
+//
+// Every run creates orchestration/worktrees/<id> plus a factory/<id> branch in
+// its rig repo, and each worktree carries full rig setup (~GBs). Cleanup
+// reclaims both once a run is terminal and its branch is merged into the rig's
+// default branch. It never forces: in-flight runs, dirty worktrees, and
+// unmerged branches are skipped with a reason, and each run is checked against
+// its own rig repo (skip-hero runs against skip-hero main, not app-factory's).
+
+function git(repoPath, args) {
+  return spawnSync("git", ["-C", repoPath, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function dirSizeBytes(p) {
+  try {
+    return (parseInt(sh(`du -sk ${JSON.stringify(p)}`), 10) || 0) * 1024;
+  } catch {
+    return 0;
+  }
+}
+
+function fmtBytes(n) {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(2)} GB`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} kB`;
+  return `${n} B`;
+}
+
+/** Pure decision core for cleanupRun (exercised by selftest). Returns
+ *  {action, reason}: "skip" (leave everything), "none" (nothing left),
+ *  "clean" (remove worktree if present, delete merged branch if present),
+ *  "remove-worktree" (opt-in: reclaim a clean worktree while keeping its
+ *  unmerged branch). */
+function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged }, opts = {}) {
+  if (!TERMINAL_STATES.includes(state)) return { action: "skip", reason: `state '${state}' is not terminal` };
+  if (!worktreeExists && !branchExists) return { action: "none", reason: "nothing to clean" };
+  if (worktreeExists && dirty) return { action: "skip", reason: "worktree has uncommitted changes" };
+  if (branchExists && !merged) {
+    if (worktreeExists && opts.removeUnmergedWorktrees) {
+      return { action: "remove-worktree", reason: "unmerged branch kept; clean worktree removed (--remove-unmerged-worktrees)" };
+    }
+    return { action: "skip", reason: "branch not merged into default branch" };
+  }
+  return { action: "clean", reason: branchExists ? "merged and clean" : "branch already deleted; reclaiming clean worktree" };
+}
+
+/** Reclaim one run's worktree/branch when safe. No forced deletion anywhere:
+ *  `git worktree remove` without --force, `git branch -d` (which itself
+ *  refuses unmerged branches). Returns {id, action, reason, freedBytes}. */
+function cleanupRun(run, opts = {}) {
+  const worktree = path.join(WORKTREES_DIR, run.id);
+  const branch = `factory/${run.id}`;
+  let rig;
+  try {
+    rig = resolveRig(run.rig);
+  } catch (err) {
+    return { id: run.id, action: "skip", reason: String(err.message || err), freedBytes: 0 };
+  }
+  const worktreeExists = fs.existsSync(worktree);
+  const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
+  let dirty = false;
+  if (worktreeExists) {
+    const st = git(worktree, ["status", "--porcelain"]);
+    if (st.status !== 0) {
+      // Not a functioning worktree; the orphan scan verifies its gitdir
+      // pointer before deleting anything, so leave it for that pass.
+      return { id: run.id, action: "skip", reason: "git status failed in worktree (left for the orphan scan)", freedBytes: 0 };
+    }
+    dirty = st.stdout.trim() !== "";
+  }
+  const merged = branchExists && git(rig.path, ["merge-base", "--is-ancestor", branch, rig.defaultBranch]).status === 0;
+  const decision = classifyCleanup({ state: run.state, worktreeExists, branchExists, dirty, merged }, opts);
+  const result = { id: run.id, action: decision.action, reason: decision.reason, freedBytes: 0 };
+  if (decision.action === "skip" || decision.action === "none") return result;
+  if (opts.dryRun) {
+    return { ...result, action: `would-${decision.action}`, freedBytes: worktreeExists ? dirSizeBytes(worktree) : 0 };
+  }
+  if (worktreeExists) {
+    const bytes = dirSizeBytes(worktree);
+    const rm = git(rig.path, ["worktree", "remove", worktree]);
+    if (rm.status !== 0) {
+      return { ...result, action: "error", reason: `git worktree remove failed: ${(rm.stderr || rm.stdout || "").trim().slice(0, 200)}` };
+    }
+    result.freedBytes = bytes;
+  }
+  git(rig.path, ["worktree", "prune"]);
+  if (decision.action === "clean" && branchExists) {
+    const del = git(rig.path, ["branch", "-d", branch]);
+    if (del.status !== 0) {
+      return { ...result, action: "error", reason: `git branch -d failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
+    }
+  }
+  return result;
+}
+
+/** Scan WORKTREES_DIR for directories that are no longer valid git worktrees
+ *  (no .git file, or a gitdir pointer targeting a deleted path) and remove
+ *  them. A directory that is a valid worktree of some rig repo is never an
+ *  orphan — without a run.json it is only reported, not touched. */
+function scanOrphans(opts = {}) {
+  if (!fs.existsSync(WORKTREES_DIR)) return [];
+  const results = [];
+  const runIds = new Set(listRunIds());
+  for (const entry of fs.readdirSync(WORKTREES_DIR)) {
+    const dir = path.join(WORKTREES_DIR, entry);
+    if (!fs.lstatSync(dir).isDirectory()) continue;
+    let gitdir = null;
+    try {
+      const m = fs.readFileSync(path.join(dir, ".git"), "utf8").match(/^gitdir:\s*(.+?)\s*$/m);
+      if (m) gitdir = path.resolve(dir, m[1]);
+    } catch {}
+    if (gitdir && fs.existsSync(gitdir)) {
+      if (!runIds.has(entry)) results.push({ id: entry, action: "report", reason: "valid worktree without a run — left in place", freedBytes: 0 });
+      continue;
+    }
+    const bytes = dirSizeBytes(dir);
+    if (!opts.dryRun) fs.rmSync(dir, { recursive: true, force: true });
+    results.push({
+      id: entry,
+      action: opts.dryRun ? "would-remove-orphan" : "remove-orphan",
+      reason: "gitdir pointer missing or dangling",
+      freedBytes: bytes,
+    });
+  }
+  return results;
+}
+
+function cmdCleanup(argv) {
+  const opts = {
+    dryRun: argv.includes("--dry-run"),
+    removeUnmergedWorktrees: argv.includes("--remove-unmerged-worktrees"),
+  };
+  const asJson = argv.includes("--json");
+  const results = listRunIds().map((id) => cleanupRun(loadRun(id), opts));
+  results.push(...scanOrphans(opts));
+  const freedBytes = results.reduce((n, r) => n + (r.freedBytes || 0), 0);
+  if (asJson) {
+    console.log(JSON.stringify({ dryRun: opts.dryRun, freedBytes, results }, null, 2));
+    return;
+  }
+  for (const r of results) {
+    console.log(`${r.action.padEnd(20)} ${r.id}: ${r.reason}${r.freedBytes ? ` [${fmtBytes(r.freedBytes)}]` : ""}`);
+  }
+  console.log(`\n${opts.dryRun ? "would free" : "freed"} ${fmtBytes(freedBytes)} (${results.length} item(s) examined)`);
+}
+
 // ---------- executor ----------
 
 function execRun(id) {
@@ -979,6 +1131,16 @@ function execRun(id) {
       saveRun(run);
     }
     setState(run, "done", null);
+    // Reclaim the worktree/branch when already merged (harness-merge rigs
+    // merge during deploy). Manual-merge rigs skip as unmerged, preserving the
+    // "worktree kept for merge review" flow. A cleanup failure must never
+    // change the run's terminal state.
+    try {
+      const c = cleanupRun(run, {});
+      log(runDir, `cleanup: ${c.action} (${c.reason})`);
+    } catch (err) {
+      log(runDir, `cleanup error (run stays done): ${String(err.message || err)}`);
+    }
   } catch (err) {
     setState(run, "failed", String(err.message || err));
     notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
@@ -1283,6 +1445,25 @@ function cmdSelftest() {
     console.log(`run-id ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`run-id check failed: ${name}`);
   }
+  // Cleanup decision core (pure — no git or filesystem access).
+  const cls = (over, opts) =>
+    classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, ...over }, opts).action;
+  const cleanupChecks = [
+    ["in-flight run skipped", cls({ state: "running:implement" }) === "skip"],
+    ["dirty worktree skipped even when merged", cls({ dirty: true }) === "skip"],
+    ["unmerged branch skipped by default", cls({ merged: false }) === "skip"],
+    ["merged and clean reclaimed", cls({}) === "clean"],
+    ["failed run with merged branch reclaimed", cls({ state: "failed" }) === "clean"],
+    ["branch gone, clean worktree removed", cls({ branchExists: false, merged: false }) === "clean"],
+    ["worktree gone, merged branch deleted", cls({ worktreeExists: false }) === "clean"],
+    ["nothing left is a no-op", cls({ worktreeExists: false, branchExists: false, merged: false }) === "none"],
+    ["unmerged worktree removal is opt-in", cls({ merged: false }, { removeUnmergedWorktrees: true }) === "remove-worktree"],
+    ["opt-in never deletes the unmerged branch", cls({ merged: false, worktreeExists: false }, { removeUnmergedWorktrees: true }) === "skip"],
+  ];
+  for (const [name, ok] of cleanupChecks) {
+    console.log(`cleanup ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`cleanup check failed: ${name}`);
+  }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
     process.exit(1);
@@ -1307,11 +1488,12 @@ try {
   else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);
   else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
+  else if (cmd === "cleanup") cmdCleanup(rest);
   else if (cmd === "preflight") cmdPreflight(rest);
   else if (cmd === "selftest") cmdSelftest();
   else if (cmd === "report") cmdReport(rest);
   else {
-    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|report|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|cleanup|report|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
