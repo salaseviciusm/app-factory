@@ -22,6 +22,8 @@
  *   factory-run steer <run_id> "<instruction>"
  *   factory-run cancel <run_id>
  *   factory-run cleanup [--dry-run] [--json] [--remove-unmerged-worktrees]
+ *   factory-run context <run_id> [--json]  (per-step context/cost analysis)
+ *   factory-run context --sessions [--sessions-dir <dir>] [--days N]
  *   factory-run preflight [--rig <name>]   (live external-CLI contract checks)
  *   factory-run selftest
  *
@@ -41,7 +43,8 @@ const RUNS_DIR = path.join(ORCH_DIR, "runs");
 const WORKTREES_DIR = path.join(ORCH_DIR, "worktrees");
 const RIGS = JSON.parse(fs.readFileSync(path.join(ORCH_DIR, "rigs.json"), "utf8"));
 
-// ---------- telemetry (SQLite, node:sqlite — structured artifacts, not context dumps) ----------
+// ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
+// step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
 
 let _tdb = null;
 function tdb() {
@@ -124,6 +127,69 @@ function parseUsage(parsed) {
     cacheReadTokens: u.cache_read_input_tokens || 0,
     cacheCreationTokens: u.cache_creation_input_tokens || 0,
   };
+}
+
+/** Extract {result, usage} from stream-json transcript lines (pure, exercised
+ *  by selftest). `result` is the `"type":"result"` event object (the prior
+ *  `--output-format json` envelope) or null when the transcript was truncated
+ *  by a timeout/kill; then `usage` falls back to the last assistant event's
+ *  `message.usage` so failed attempts stop costing "null". Garbage lines are
+ *  skipped, never thrown. */
+function resultFromTranscript(lines) {
+  let result = null;
+  let lastAssistantUsage = null;
+  for (const line of lines) {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    if (ev.type === "result") result = ev;
+    else if (ev.type === "assistant" && ev.message && ev.message.usage) lastAssistantUsage = ev.message.usage;
+  }
+  if (result) return { result, usage: parseUsage(result) };
+  if (lastAssistantUsage) {
+    const u = lastAssistantUsage;
+    return {
+      result: null,
+      usage: {
+        costUsd: null,
+        inputTokens: u.input_tokens || 0,
+        outputTokens: u.output_tokens || 0,
+        cacheReadTokens: u.cache_read_input_tokens || 0,
+        cacheCreationTokens: u.cache_creation_input_tokens || 0,
+      },
+    };
+  }
+  return { result: null, usage: null };
+}
+
+/** Deterministic transcript stats for `context` (pure, exercised by selftest):
+ *  assistant turns, tool_use counts by tool name, models seen. Garbage lines
+ *  are skipped, never thrown. */
+function transcriptStats(lines) {
+  const stats = { assistantTurns: 0, toolUses: {}, models: [] };
+  const models = new Set();
+  for (const line of lines) {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!ev || typeof ev !== "object" || ev.type !== "assistant" || !ev.message) continue;
+    stats.assistantTurns += 1;
+    if (ev.message.model) models.add(ev.message.model);
+    for (const block of Array.isArray(ev.message.content) ? ev.message.content : []) {
+      if (block && block.type === "tool_use" && block.name) {
+        stats.toolUses[block.name] = (stats.toolUses[block.name] || 0) + 1;
+      }
+    }
+  }
+  stats.models = [...models];
+  return stats;
 }
 
 /** Sum cost/tokens across all telemetry step rows for a run (in-progress or done). */
@@ -422,18 +488,30 @@ function renderPrompt(templateName, run) {
     .replaceAll("{{FINDINGS}}", findings);
 }
 
-/** Filename of one attempt's prompt/output document. Attempt 1 stays
- *  unsuffixed (implement.prompt.md) so pre-existing run dirs read as
+/** Filename of one attempt's prompt/output/transcript document. Attempt 1
+ *  stays unsuffixed (implement.prompt.md) so pre-existing run dirs read as
  *  attempt 1; retries get implement.2.prompt.md, .3, … */
 function stepDocName(stepId, kind, attempt) {
-  const ext = kind === "prompt" ? "prompt.md" : "output.json";
+  const ext = kind === "prompt" ? "prompt.md" : kind === "transcript" ? "transcript.jsonl" : "output.json";
   return attempt <= 1 ? `${stepId}.${ext}` : `${stepId}.${attempt}.${ext}`;
 }
 
-/** Highest attempt among existing prompt/output files for a step, 0 when none.
- *  Pure core (exercised by selftest); `names` = fs.readdirSync(runDir). */
+/** Inverse of stepDocName (pure, exercised by selftest): parse a run-dir
+ *  filename into {step, attempt, kind} or null when it is not a step document.
+ *  Attempt-suffix aware: implement.2.output.json is step "implement" attempt 2,
+ *  never step "implement.2" (the report-backfill mis-parse); unsuffixed = 1. */
+function parseStepDoc(name) {
+  const m = name.match(/^(.+?)\.(?:(\d+)\.)?(prompt\.md|output\.json|transcript\.jsonl)$/);
+  if (!m) return null;
+  const kinds = { "prompt.md": "prompt", "output.json": "output", "transcript.jsonl": "transcript" };
+  return { step: m[1], attempt: m[2] ? parseInt(m[2], 10) : 1, kind: kinds[m[3]] };
+}
+
+/** Highest attempt among existing prompt/output/transcript files for a step,
+ *  0 when none. Pure core (exercised by selftest); `names` =
+ *  fs.readdirSync(runDir). */
 function maxStepAttempt(names, stepId) {
-  const re = new RegExp(`^${stepId}\\.(?:(\\d+)\\.)?(?:prompt\\.md|output\\.json)$`);
+  const re = new RegExp(`^${stepId}\\.(?:(\\d+)\\.)?(?:prompt\\.md|output\\.json|transcript\\.jsonl)$`);
   let max = 0;
   for (const name of names) {
     const m = name.match(re);
@@ -450,36 +528,56 @@ function runAgentStep(run, step) {
   const prompt = renderPrompt(step.prompt, run);
   const promptFile = path.join(runDir, stepDocName(step.id, "prompt", attempt));
   fs.writeFileSync(promptFile, prompt);
+  // Full working context goes to <step>[.N].transcript.jsonl: stdout streams
+  // to a file descriptor (transcripts are MBs and must survive timeouts/kills),
+  // never through the in-memory buffer. --verbose is required by the claude CLI
+  // for stream-json in print mode.
+  const transcriptFile = path.join(runDir, stepDocName(step.id, "transcript", attempt));
   const args = [
     "-p", prompt,
-    "--output-format", "json",
+    "--output-format", "stream-json",
+    "--verbose",
     "--dangerously-skip-permissions",
   ];
   if (step.model) args.push("--model", step.model);
   log(runDir, `agent step '${step.id}' starting (attempt ${attempt}, model=${step.model || "default"}, cwd=${run.worktree})`);
-  const res = spawnSync("claude", args, {
-    cwd: run.worktree,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: (step.timeoutMinutes || 30) * 60 * 1000,
-    maxBuffer: 256 * 1024 * 1024,
-    env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "factory-run" },
-  });
-  fs.writeFileSync(path.join(runDir, stepDocName(step.id, "output", attempt)), res.stdout || "");
+  const fd = fs.openSync(transcriptFile, "w");
+  let res;
+  try {
+    res = spawnSync("claude", args, {
+      cwd: run.worktree,
+      encoding: "utf8",
+      stdio: ["ignore", fd, "pipe"],
+      timeout: (step.timeoutMinutes || 30) * 60 * 1000,
+      maxBuffer: 256 * 1024 * 1024,
+      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "factory-run" },
+    });
+  } finally {
+    fs.closeSync(fd);
+  }
+  // Reconstruct the prior single-object envelope from the transcript's result
+  // event so parseUsage, the report backfill, and the web console keep reading
+  // <step>[.N].output.json unchanged. Wrapped: telemetry parsing must never
+  // fail a step.
+  let extracted = { result: null, usage: null };
+  try {
+    extracted = resultFromTranscript(fs.readFileSync(transcriptFile, "utf8").split("\n"));
+  } catch {}
+  fs.writeFileSync(
+    path.join(runDir, stepDocName(step.id, "output", attempt)),
+    extracted.result ? JSON.stringify(extracted.result, null, 2) + "\n" : ""
+  );
   if (res.error && res.error.code === "ETIMEDOUT") {
-    return { ok: false, attempt, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m` };
+    return { ok: false, attempt, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m`, usage: extracted.usage };
   }
   if (res.status !== 0) {
-    return { ok: false, attempt, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}` };
+    return { ok: false, attempt, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}`, usage: extracted.usage };
   }
-  let parsed = null;
-  try {
-    parsed = JSON.parse(res.stdout);
-  } catch {
-    /* non-json output tolerated */
-  }
-  const resultText = parsed && typeof parsed.result === "string" ? parsed.result : (res.stdout || "");
-  return { ok: true, attempt, summary: resultText.slice(0, 2000), usage: parseUsage(parsed) };
+  const resultText =
+    extracted.result && typeof extracted.result.result === "string"
+      ? extracted.result.result
+      : `(no result event in ${path.basename(transcriptFile)})`;
+  return { ok: true, attempt, summary: resultText.slice(0, 2000), usage: extracted.usage };
 }
 
 /** Preserve the live findings.md as the next findings.N.md archive copy.
@@ -1512,17 +1610,19 @@ function cmdReport(argv) {
       if (!r) continue;
       tRun(r);
       tRunState(r);
-      // Backfill per-step cost/tokens from each step's claude JSON output, for
-      // rows that predate usage capture (only touches NULL cost_usd rows).
+      // Backfill per-step cost/tokens from each attempt's claude JSON envelope,
+      // for rows that predate usage capture (only touches NULL cost_usd rows).
+      // parseStepDoc keeps attempts apart: implement.2.output.json updates
+      // step "implement" attempt 2 only — never every row of the step.
       for (const f of fs.readdirSync(path.join(RUNS_DIR, d))) {
-        const m = f.match(/^(.+)\.output\.json$/);
-        if (!m) continue;
+        const doc = parseStepDoc(f);
+        if (!doc || doc.kind !== "output") continue;
         const u = parseUsage(readJson(path.join(RUNS_DIR, d, f), null));
         if (!u || u.costUsd == null) continue;
         db.prepare(
           `UPDATE steps SET cost_usd = ?, input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ?
-           WHERE run_id = ? AND step_id = ? AND cost_usd IS NULL`
-        ).run(u.costUsd, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheCreationTokens, r.id, m[1]);
+           WHERE run_id = ? AND step_id = ? AND attempt = ? AND cost_usd IS NULL`
+        ).run(u.costUsd, u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheCreationTokens, r.id, doc.step, doc.attempt);
       }
       const hasSteps = db.prepare(`SELECT COUNT(*) n FROM steps WHERE run_id = ?`).get(r.id).n > 0;
       if (!hasSteps) {
@@ -1617,6 +1717,190 @@ function cmdReport(argv) {
   lines.push("", "## Recent artifacts (commits, deploys)", "");
   for (const a of artifacts) lines.push(`- [${a.run_id}] ${a.type}: ${(a.value || "").replace(/\n/g, " ").slice(0, 160)}`);
   console.log(lines.join("\n"));
+}
+
+// ---------- context (per-step context/cost analysis) ----------
+//
+// Deterministic parsing/aggregation over one run dir's step documents — where
+// the tokens and cost actually went, per step/attempt. LLM-side inference
+// stays in the self-reviewer prompt; this command only reports numbers.
+
+/** Analyze one run dir: per step/attempt, prompt size, steering/findings
+ *  injection flags, usage (envelope first, transcript fallback), and — when a
+ *  transcript exists — assistant turns, tool_use counts, and models. Rows are
+ *  ordered by prompt-file mtime (execution order). */
+function analyzeRunContext(id) {
+  const runDir = runDirOf(id);
+  const rows = [];
+  for (const name of fs.readdirSync(runDir)) {
+    const doc = parseStepDoc(name);
+    if (!doc || doc.kind !== "prompt") continue;
+    const promptPath = path.join(runDir, name);
+    const promptText = fs.readFileSync(promptPath, "utf8");
+    const row = {
+      step: doc.step,
+      attempt: doc.attempt,
+      promptBytes: Buffer.byteLength(promptText),
+      steeringInjected: promptText.includes("Founder steering"),
+      findingsInjected: promptText.includes("Previous validation FAILED"),
+      usage: null,
+      usageSource: null,
+      durationMs: null,
+      transcript: null,
+      mtimeMs: fs.statSync(promptPath).mtimeMs,
+    };
+    const envelope = readJson(path.join(runDir, stepDocName(doc.step, "output", doc.attempt)), null);
+    const u = parseUsage(envelope);
+    if (u) {
+      row.usage = u;
+      row.usageSource = "envelope";
+      row.durationMs = typeof envelope.duration_ms === "number" ? envelope.duration_ms : null;
+    }
+    const transcriptPath = path.join(runDir, stepDocName(doc.step, "transcript", doc.attempt));
+    if (fs.existsSync(transcriptPath)) {
+      try {
+        const lines = fs.readFileSync(transcriptPath, "utf8").split("\n");
+        row.transcript = transcriptStats(lines);
+        if (!row.usage) {
+          const ex = resultFromTranscript(lines);
+          if (ex.usage) {
+            row.usage = ex.usage;
+            row.usageSource = "transcript-fallback";
+          }
+        }
+      } catch {
+        /* an unreadable transcript must not fail the report */
+      }
+    }
+    rows.push(row);
+  }
+  rows.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const totals = { costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+  for (const r of rows) {
+    if (!r.usage) continue;
+    totals.costUsd += r.usage.costUsd || 0;
+    totals.inputTokens += r.usage.inputTokens || 0;
+    totals.outputTokens += r.usage.outputTokens || 0;
+    totals.cacheReadTokens += r.usage.cacheReadTokens || 0;
+    totals.cacheCreationTokens += r.usage.cacheCreationTokens || 0;
+  }
+  return { runDir, rows, totals };
+}
+
+/** Count user/assistant messages in an OpenClaw session transcript's lines
+ *  (pure, exercised by selftest). Garbage lines are skipped, never thrown. */
+function sessionMessageCounts(lines) {
+  const counts = { user: 0, assistant: 0 };
+  for (const line of lines) {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const role = ev && ev.message && ev.message.role;
+    if (role === "user") counts.user += 1;
+    else if (role === "assistant") counts.assistant += 1;
+  }
+  return counts;
+}
+
+const OPENCLAW_SESSIONS_DIR = "~/.openclaw/agents/main/sessions";
+
+/** `context --sessions`: inventory OpenClaw session transcripts (the founder ↔
+ *  OpenClaw conversations that start runs) — discoverable, not ingested. */
+function cmdContextSessions(argv) {
+  const dir = expandHome(argOf(argv, "--sessions-dir") || OPENCLAW_SESSIONS_DIR);
+  const days = Number(argOf(argv, "--days") || 30);
+  const asJson = argv.includes("--json");
+  if (!fs.existsSync(dir)) {
+    console.log(`no OpenClaw session directory at ${dir} — nothing to inventory (pass --sessions-dir to override)`);
+    return;
+  }
+  const since = Date.now() - days * 864e5;
+  const sessions = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith(".jsonl")) continue;
+    const p = path.join(dir, name);
+    let st;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      continue;
+    }
+    if (st.mtimeMs < since) continue;
+    let counts = { user: 0, assistant: 0 };
+    try {
+      counts = sessionMessageCounts(fs.readFileSync(p, "utf8").split("\n"));
+    } catch {}
+    sessions.push({
+      file: name,
+      path: p,
+      mtime: new Date(st.mtimeMs).toISOString(),
+      bytes: st.size,
+      userMessages: counts.user,
+      assistantMessages: counts.assistant,
+    });
+  }
+  sessions.sort((a, b) => (a.mtime < b.mtime ? 1 : -1));
+  if (asJson) {
+    console.log(JSON.stringify({ dir, days, sessions }, null, 2));
+    return;
+  }
+  console.log(`# OpenClaw sessions in ${dir} (last ${days} days: ${sessions.length} transcript(s))\n`);
+  for (const s of sessions) {
+    console.log(
+      `${s.mtime.slice(0, 16)}  ${fmtBytes(s.bytes).padStart(9)}  ${String(s.userMessages).padStart(4)} user / ${String(s.assistantMessages).padStart(4)} assistant  ${s.file}`
+    );
+  }
+}
+
+function cmdContext(argv) {
+  if (argv.includes("--sessions")) return cmdContextSessions(argv);
+  const asJson = argv.includes("--json");
+  const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--sessions-dir" && argv[i - 1] !== "--days"));
+  const { runDir, rows, totals } = analyzeRunContext(id);
+  if (asJson) {
+    const steps = rows.map(({ mtimeMs, ...rest }) => rest);
+    console.log(JSON.stringify({ runId: id, runDir, steps, totals }, null, 2));
+    return;
+  }
+  console.log(`# Context report: ${id} (${runDir})\n`);
+  if (rows.length === 0) console.log("no agent-step documents in this run dir");
+  for (const r of rows) {
+    console.log(`${r.step} (attempt ${r.attempt})`);
+    console.log(
+      `  prompt ${fmtBytes(r.promptBytes)} · steering: ${r.steeringInjected ? "yes" : "no"} · findings: ${r.findingsInjected ? "yes" : "no"}`
+    );
+    if (r.usage) {
+      const u = r.usage;
+      const cost = u.costUsd != null ? `$${u.costUsd.toFixed(2)}` : "n/a";
+      const dur = r.durationMs != null ? ` · ${Math.round(r.durationMs / 1000)}s` : "";
+      console.log(
+        `  cost ${cost} · tokens in ${fmtTokens(u.inputTokens)} (+ ${fmtTokens(u.cacheReadTokens)} cache read, ${fmtTokens(u.cacheCreationTokens)} cache create) / out ${fmtTokens(u.outputTokens)}${dur} [${r.usageSource}]`
+      );
+    } else {
+      console.log("  usage: none captured (no envelope, no usable transcript)");
+    }
+    if (r.transcript) {
+      console.log(
+        `  transcript: ${r.transcript.assistantTurns} assistant turn(s) · models: ${r.transcript.models.join(", ") || "n/a"}`
+      );
+      const tools = Object.entries(r.transcript.toolUses).sort((a, b) => b[1] - a[1]);
+      if (tools.length) console.log(`  tools: ${tools.map(([name, n]) => `${name}×${n}`).join(", ")}`);
+    }
+    console.log("");
+  }
+  console.log(
+    `## Run totals\ncost $${totals.costUsd.toFixed(2)} · tokens in ${fmtTokens(totals.inputTokens)} (+ ${fmtTokens(totals.cacheReadTokens)} cache read, ${fmtTokens(totals.cacheCreationTokens)} cache create) / out ${fmtTokens(totals.outputTokens)}\n`
+  );
+  const ranked = rows.filter((r) => r.usage).sort((a, b) => (b.usage.cacheReadTokens || 0) - (a.usage.cacheReadTokens || 0));
+  if (ranked.length) {
+    console.log("## Steps by cache-read tokens (context actually processed)");
+    for (const r of ranked) {
+      console.log(`  ${fmtTokens(r.usage.cacheReadTokens || 0).padStart(8)}  ${r.step} (attempt ${r.attempt})`);
+    }
+  }
 }
 
 function detachExec(id) {
@@ -1858,14 +2142,56 @@ function cmdSelftest() {
   const docChecks = [
     ["first attempt unsuffixed", stepDocName("implement", "prompt", 1) === "implement.prompt.md"],
     ["retry attempts suffixed", stepDocName("implement", "output", 3) === "implement.3.output.json"],
+    ["transcript kind unsuffixed", stepDocName("implement", "transcript", 1) === "implement.transcript.jsonl"],
+    ["transcript kind suffixed", stepDocName("implement", "transcript", 2) === "implement.2.transcript.jsonl"],
     ["empty dir means no attempts", maxStepAttempt([], "implement") === 0],
     ["unsuffixed file reads as attempt 1", maxStepAttempt(["implement.prompt.md", "plan.md"], "implement") === 1],
     ["highest suffix wins across kinds", maxStepAttempt(["implement.prompt.md", "implement.2.prompt.md", "implement.3.output.json"], "implement") === 3],
+    ["transcript-only file counts as its attempt", maxStepAttempt(["implement.2.transcript.jsonl"], "implement") === 2],
     ["other steps' files ignored", maxStepAttempt(["review.2.prompt.md", "review.output.json"], "implement") === 0],
+    ["parse: unsuffixed output is attempt 1", JSON.stringify(parseStepDoc("implement.output.json")) === JSON.stringify({ step: "implement", attempt: 1, kind: "output" })],
+    ["parse: suffixed output keeps step name", JSON.stringify(parseStepDoc("implement.2.output.json")) === JSON.stringify({ step: "implement", attempt: 2, kind: "output" })],
+    ["parse: transcript kind recognized", JSON.stringify(parseStepDoc("review.3.transcript.jsonl")) === JSON.stringify({ step: "review", attempt: 3, kind: "transcript" })],
+    ["parse: prompt kind recognized", JSON.stringify(parseStepDoc("plan.prompt.md")) === JSON.stringify({ step: "plan", attempt: 1, kind: "prompt" })],
+    ["parse: non-step files rejected", parseStepDoc("findings.2.md") === null && parseStepDoc("run.json") === null && parseStepDoc("review.json") === null],
   ];
   for (const [name, ok] of docChecks) {
     console.log(`step-doc ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`step-doc check failed: ${name}`);
+  }
+  // Transcript envelope extraction + context stats (pure — no filesystem access).
+  const assistantEv = JSON.stringify({
+    type: "assistant",
+    message: {
+      model: "claude-opus-5",
+      usage: { input_tokens: 5, output_tokens: 7, cache_read_input_tokens: 600, cache_creation_input_tokens: 40 },
+      content: [{ type: "tool_use", name: "Bash" }, { type: "text", text: "hi" }],
+    },
+  });
+  const resultEv = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    total_cost_usd: 1.5,
+    result: "IMPLEMENTED",
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 1000, cache_creation_input_tokens: 50 },
+  });
+  const tNormal = resultFromTranscript(["{garbage", assistantEv, resultEv, ""]);
+  const tTruncated = resultFromTranscript([assistantEv, '{"type":"assistant"', ""]);
+  const tGarbage = resultFromTranscript(["total garbage", "{}", "[1,2]"]);
+  const tStats = transcriptStats([assistantEv, assistantEv, resultEv, "garbage"]);
+  const transcriptChecks = [
+    ["result event yields the envelope", tNormal.result !== null && tNormal.result.result === "IMPLEMENTED"],
+    ["result event yields usage with cost", tNormal.usage !== null && tNormal.usage.costUsd === 1.5 && tNormal.usage.cacheReadTokens === 1000],
+    ["truncated transcript falls back to assistant usage", tTruncated.result === null && tTruncated.usage !== null && tTruncated.usage.cacheReadTokens === 600 && tTruncated.usage.costUsd === null],
+    ["garbage-only transcript yields nothing", tGarbage.result === null && tGarbage.usage === null],
+    ["assistant turns counted", tStats.assistantTurns === 2],
+    ["tool_use counted by name", tStats.toolUses.Bash === 2],
+    ["models deduped", tStats.models.length === 1 && tStats.models[0] === "claude-opus-5"],
+    ["session roles counted, garbage skipped", JSON.stringify(sessionMessageCounts(['{"type":"message","message":{"role":"user"}}', '{"type":"message","message":{"role":"assistant"}}', '{"type":"session"}', "junk"])) === JSON.stringify({ user: 1, assistant: 1 })],
+  ];
+  for (const [name, ok] of transcriptChecks) {
+    console.log(`transcript ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`transcript check failed: ${name}`);
   }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
@@ -1895,8 +2221,9 @@ try {
   else if (cmd === "preflight") cmdPreflight(rest);
   else if (cmd === "selftest") cmdSelftest();
   else if (cmd === "report") cmdReport(rest);
+  else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|cleanup|report|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|cleanup|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
