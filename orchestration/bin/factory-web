@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+/*
+ * factory-web: launcher for the factory web console.
+ *
+ * Builds the frontend if orchestration/web/frontend/dist is missing (npm deps
+ * live only in the frontend build — the server itself is zero-dependency Node),
+ * ensures a FACTORY_WEB_TOKEN exists (generated + persisted to web/.token with
+ * mode 0600 and printed once on first launch), then starts web/server.mjs.
+ *
+ * Usage:
+ *   factory-web [--host <addr>] [--port <n>] [--rebuild]
+ *
+ * Access paths:
+ *
+ * 1. RECOMMENDED — phone access over the tailnet, nothing exposed on LAN/WAN:
+ *    keep the default 127.0.0.1 bind and put `tailscale serve` in front:
+ *
+ *        factory-web                                  # binds 127.0.0.1:4620
+ *        tailscale serve --bg http://127.0.0.1:4620   # TLS, tailnet-only
+ *
+ *    Open https://<machine>.<tailnet>.ts.net from the phone and paste the
+ *    token into the login screen. `tailscale serve status` / `tailscale serve
+ *    reset` to inspect / tear down.
+ *
+ * 2. DISCOURAGED — direct non-loopback bind (e.g. --host 0.0.0.0): the server
+ *    prints a loud warning, and refuses to start at all unless a token is
+ *    already configured (FACTORY_WEB_TOKEN env or web/.token). No TLS; anyone
+ *    who can reach the port only needs the token to drive the factory.
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const ORCH_DIR = path.resolve(__dirname, "..");
+const WEB_DIR = path.join(ORCH_DIR, "web");
+const FRONTEND_DIR = path.join(WEB_DIR, "frontend");
+const DIST_INDEX = path.join(FRONTEND_DIR, "dist", "index.html");
+
+const argv = process.argv.slice(2);
+
+function run(cmd, args, cwd) {
+  const res = spawnSync(cmd, args, { cwd, stdio: "inherit" });
+  if (res.status !== 0) {
+    console.error(`error: ${cmd} ${args.join(" ")} exited ${res.status}`);
+    process.exit(res.status || 1);
+  }
+}
+
+if (argv.includes("--rebuild") || !fs.existsSync(DIST_INDEX)) {
+  console.log("building frontend (orchestration/web/frontend)...");
+  if (!fs.existsSync(path.join(FRONTEND_DIR, "node_modules"))) {
+    run("npm", ["install", "--no-fund", "--no-audit"], FRONTEND_DIR);
+  }
+  run("npm", ["run", "build"], FRONTEND_DIR);
+}
+
+// Token generation/printing and the non-loopback refusal live in server.mjs so
+// a directly-started server enforces the same posture. Pass flags through.
+const serverArgv = argv.filter((a) => a !== "--rebuild");
+const res = spawnSync(process.execPath, [path.join(WEB_DIR, "server.mjs"), ...serverArgv], {
+  stdio: "inherit",
+});
+process.exit(res.status || 0);
