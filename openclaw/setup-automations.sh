@@ -70,6 +70,19 @@ openclaw cron add "0 17 * * 0" \
   --timeout-seconds 600 \
   < /dev/null
 
+# Slack leaked-socket watchdog — every 10 min. Deterministic command job (sh -lc
+# on the Gateway, no agent): scans the current gateway log for the socket-mode
+# leak signature (health-monitor disconnect flaps / "N active connections"
+# warnings) and issues a detached full-gateway restart when it matches, with a
+# 60-min cooldown. See openclaw/slack-leak-watchdog.sh.
+# (Flag set live-verified against 2026.7.1-2 via a --disabled probe job.)
+openclaw cron add \
+  --name "slack-leak-watchdog" \
+  --declaration-key "slack-leak-watchdog" \
+  --cron "*/10 * * * *" \
+  --command "$(cd "$(dirname "$0")" && pwd)/slack-leak-watchdog.sh" \
+  < /dev/null
+
 # --- Phase 3 additions (do not enable yet — see docs/07-roadmap.md) ---
 # nightly analytics pull, weekly marketing calendar prep, weekly retro prompt
 
