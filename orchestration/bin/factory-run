@@ -21,6 +21,10 @@
  *   factory-run cancel <run_id>
  *   factory-run preflight [--rig <name>]   (live external-CLI contract checks)
  *   factory-run selftest
+ *
+ * Run ids are readable task slugs (<workflow-prefix>-<slug>, e.g.
+ * feature-version-badge). Every <run_id> above except `exec` also accepts any
+ * unambiguous prefix or substring of an id.
  */
 "use strict";
 
@@ -231,6 +235,72 @@ function loadWorkflow(name) {
 
 function runDirOf(id) {
   return path.join(RUNS_DIR, id);
+}
+
+// Run ids are human-readable task slugs: <workflow-prefix>-<slug> derived from
+// the prompt (e.g. feature-version-badge), numeric suffix only on collision.
+// Degenerate prompts fall back to the legacy base36 timestamp shape. Every CLI
+// verb accepts any unambiguous prefix or substring of an id (exec excepted).
+
+const SLUG_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "add", "be", "by", "can", "could", "create",
+  "do", "fix", "for", "from", "in", "is", "it", "its", "make", "my", "need", "new",
+  "of", "on", "or", "our", "please", "should", "so", "some", "that", "the", "then",
+  "this", "to", "up", "update", "want", "we", "with", "would", "you", "your",
+]);
+const SLUG_MAX_LEN = 28;
+const SLUG_MAX_WORDS = 4;
+
+/** Derive a [a-z0-9-] slug from a prompt: first few meaningful words, capped at
+ *  a word boundary. Returns "" when the prompt has no usable words. */
+function slugify(prompt) {
+  const words = String(prompt || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter((w) => w && !SLUG_STOPWORDS.has(w))
+    .slice(0, SLUG_MAX_WORDS);
+  let slug = "";
+  for (const w of words) {
+    const next = slug ? `${slug}-${w}` : w;
+    if (next.length > SLUG_MAX_LEN) break;
+    slug = next;
+  }
+  return slug;
+}
+
+/** First free id among base, base-2, base-3, … (exists: (id) => bool). */
+function uniqueRunId(base, exists) {
+  let id = base;
+  for (let n = 2; exists(id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+function listRunIds() {
+  if (!fs.existsSync(RUNS_DIR)) return [];
+  return fs.readdirSync(RUNS_DIR).filter((d) => fs.existsSync(path.join(RUNS_DIR, d, "run.json")));
+}
+
+/** Resolve a full id, unique id-prefix, or unique substring against `ids`.
+ *  Pure core of resolveRunId, also exercised by selftest. */
+function resolveRunIdFrom(input, ids) {
+  if (!input) throw new Error("missing run id");
+  if (ids.includes(input)) return input;
+  const prefixed = ids.filter((d) => d.startsWith(input));
+  // Prefix matches are a subset of substring matches, so an ambiguous prefix
+  // can never be salvaged by the substring pass — error right away.
+  const matches = prefixed.length ? prefixed : ids.filter((d) => d.includes(input));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(`ambiguous run id '${input}': matches ${matches.sort().join(", ")}`);
+  }
+  throw new Error(`no such run: ${input}`);
+}
+
+function resolveRunId(input) {
+  const id = resolveRunIdFrom(input, listRunIds());
+  if (id !== input) console.error(`(resolved '${input}' -> ${id})`);
+  return id;
 }
 
 function loadRun(id) {
@@ -921,7 +991,9 @@ function execRun(id) {
 function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun }) {
   const rig = resolveRig(rigName);
   loadWorkflow(wfName);
-  const id = `${wfName.split("-")[0]}-${Date.now().toString(36)}`;
+  const slug = slugify(prompt);
+  const base = `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
+  const id = uniqueRunId(base, (candidate) => fs.existsSync(runDirOf(candidate)));
   const runDir = runDirOf(id);
   fs.mkdirSync(runDir, { recursive: true });
   const run = {
@@ -1101,7 +1173,8 @@ function cmdResume(id) {
 }
 
 function cmdStatus(argv) {
-  const id = argv.find((a) => !a.startsWith("--"));
+  const fragment = argv.find((a) => !a.startsWith("--"));
+  const id = fragment ? resolveRunId(fragment) : undefined;
   const asJson = argv.includes("--json");
   const ids = id ? [id] : fs.existsSync(RUNS_DIR) ? fs.readdirSync(RUNS_DIR).filter((d) => fs.existsSync(path.join(RUNS_DIR, d, "run.json"))) : [];
   const runs = ids.map((rid) => loadRun(rid)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -1184,6 +1257,32 @@ function cmdSelftest() {
     console.log(`binary ${bin}: ${okMark(found)}`);
     if (!found) problems.push(`binary ${bin} not on PATH`);
   }
+  // Run-id minting and resolution (pure — nothing touches RUNS_DIR).
+  const throws = (fn, re) => {
+    try {
+      fn();
+      return false;
+    } catch (err) {
+      return re.test(String(err.message));
+    }
+  };
+  const fakeIds = ["feature-version-badge", "feature-version-badge-2", "bug-leaked-sockets", "feature-msdn5cuj"];
+  const idChecks = [
+    ["slug derivation", slugify("Add a version badge to the settings screen") === "version-badge-settings"],
+    ["slug charset/length", /^[a-z0-9]+(-[a-z0-9]+)*$/.test(slugify("Fix the LEAKED sockets!! ASAP")) && slugify("Fix the LEAKED sockets!! ASAP").length <= 28],
+    ["degenerate prompt falls back", slugify("!!! \u{1F680}") === ""],
+    ["collision suffixing", uniqueRunId("feature-version-badge", (id) => fakeIds.includes(id)) === "feature-version-badge-3"],
+    ["exact id wins over prefix", resolveRunIdFrom("feature-version-badge", fakeIds) === "feature-version-badge"],
+    ["unique prefix resolves", resolveRunIdFrom("bug-leak", fakeIds) === "bug-leaked-sockets"],
+    ["unique substring resolves", resolveRunIdFrom("leaked-sockets", fakeIds) === "bug-leaked-sockets"],
+    ["legacy id resolves", resolveRunIdFrom("feature-msdn5cuj", fakeIds) === "feature-msdn5cuj"],
+    ["ambiguous fragment rejected", throws(() => resolveRunIdFrom("feature-", fakeIds), /^ambiguous run id 'feature-': matches feature-msdn5cuj, feature-version-badge, feature-version-badge-2$/)],
+    ["no-match fragment rejected", throws(() => resolveRunIdFrom("zzz", fakeIds), /no such run/)],
+  ];
+  for (const [name, ok] of idChecks) {
+    console.log(`run-id ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`run-id check failed: ${name}`);
+  }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
     process.exit(1);
@@ -1202,12 +1301,12 @@ const [, , cmd, ...rest] = process.argv;
 try {
   if (cmd === "start") cmdStart(rest);
   else if (cmd === "exec") execRun(rest[0]);
-  else if (cmd === "resume") cmdResume(rest[0]);
+  else if (cmd === "resume") cmdResume(resolveRunId(rest[0]));
   else if (cmd === "status" || cmd === "list") cmdStatus(rest);
-  else if (cmd === "approve") cmdGate(rest[0], "approve");
-  else if (cmd === "reject") cmdGate(rest[0], "reject", rest[1]);
-  else if (cmd === "steer") cmdSteer(rest[0], rest.slice(1).join(" "));
-  else if (cmd === "cancel") cmdCancel(rest[0]);
+  else if (cmd === "approve") cmdGate(resolveRunId(rest[0]), "approve");
+  else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);
+  else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
+  else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
   else if (cmd === "preflight") cmdPreflight(rest);
   else if (cmd === "selftest") cmdSelftest();
   else if (cmd === "report") cmdReport(rest);
