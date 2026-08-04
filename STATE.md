@@ -38,6 +38,20 @@ Vertical slice of `docs/08-orchestration-layer.md` implemented and live:
   orchestration work is uncommitted, so approve the first self-review only after a
   commit pass.
 
+## In flight
+
+- **feature-deploy-step-recover-merge** (app-factory rig, started 2026-08-04 22:45) —
+  deploy step must survive base-branch drift: detect drift → rebase in the worktree →
+  agentic conflict resolution → **re-run checks + review + tests** before merging out,
+  capped at 5 recovery iterations then escalate to the founder. Also makes failed runs
+  resumable from the *previous* step. Awaiting plan gate.
+  Prompted by `feature-expose-per-step-agent` failing at deploy 2026-08-04 21:42:
+  runs 09e0030 and 184a5fe landed on main mid-flight, both editing
+  `orchestration/bin/factory-run` — the same file that run rewrote. Hand-merged as
+  `c934b96`; no work lost. Open follow-up (not in this run's scope): serialize runs
+  that target the app-factory rig, since self-improvement runs editing the harness
+  will keep colliding.
+
 ## Phase
 
 **Phase 0 — Foundation, bring-up nearly complete.** OpenClaw 2026.7.1-2 onboarded

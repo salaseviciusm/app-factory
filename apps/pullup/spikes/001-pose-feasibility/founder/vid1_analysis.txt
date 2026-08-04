@@ -1,0 +1,49 @@
+=== founder/vid1.csv ===
+frames: 954   duration: 31.80s
+all 9 key joints >= 0.3: 347/954 = 36.4%
+at least one wrist >= 0.3:        637/954 = 66.8%
+per-joint frames >= 0.30:
+   nose :  462/954 =  48.4%
+   lSho :  525/954 =  55.0%
+   rSho :  586/954 =  61.4%
+   lElb :  546/954 =  57.2%
+   rElb :  632/954 =  66.2%
+   lWri :  496/954 =  52.0%
+   rWri :  634/954 =  66.5%
+   lHip :  443/954 =  46.4%
+   rHip :  449/954 =  47.1%
+
+nose-Y range: 0.298..0.980 (span 0.682)   rep-top band >= 0.673
+detected rep tops (peaks): 11 at frames [84, 220, 229, 244, 267, 275, 309, 353, 381, 810, 950]
+
+--- TOP-OF-REP tracking (the occlusion stress point) ---
+peak_frame  t_sec  nose_y  wrist_y  chin_over_bar  elbow_ang  noseConf  wristConf  allkeyOK
+     84     2.80     nan     nan    False          nan    0.000     0.000     False
+    220     7.37   0.964   0.590    True         155.7    0.828     0.846     True
+    227     7.60     nan   0.592    False        145.8    0.229     0.768     False
+    244     8.17   0.886   0.600    True         137.0    0.893     0.814     True
+    267     8.93     nan   0.723    False         53.7    0.249     0.839     False
+    273     9.13   0.793   0.792    True          31.6    0.625     0.825     True
+    308    10.30     nan   0.564    False        148.1    0.000     0.822     False
+    353    11.80   0.704   0.351    True         168.5    0.803     0.784     True
+    381    12.73   0.706   0.352    True         169.9    0.793     0.776     True
+    812    27.10     nan   0.584    False        155.5    0.143     0.674     False
+    948    31.63     nan   0.770    False        165.3    0.000     0.000     False
+
+top-of-rep summary: reps=11  chin-over-bar detected=5/11
+  wrist conf at top: min=0.000 max=0.846 mean=0.650
+  all-key-joints usable at top: 5/11
+
+--- per-rep ROM (elbow angle & nose-Y travel) ---
+rep  bottomFrame->topFrame  noseY_travel  elbowAng@bottom  elbowAng@top  elbow_ROM
+  1     39->84             0.513          nan            nan         nan
+  2     86->220            0.100          nan          155.7         nan
+  3    228->229            0.000        146.2          145.6         0.5
+  4    241->244            0.009        136.2          137.0        -0.9
+  5    266->267            0.001         66.5           53.7        12.8
+  6    274->275            0.001         40.0           40.2        -0.2
+  7    277->309            0.077         40.2          147.2      -107.0
+  8    330->353            0.046        167.8          168.5        -0.6
+  9    361->381            0.010        175.4          169.9         5.5
+ 10    510->810            0.493         74.8          155.1       -80.4
+ 11    811->950            0.190        155.1          165.3       -10.2

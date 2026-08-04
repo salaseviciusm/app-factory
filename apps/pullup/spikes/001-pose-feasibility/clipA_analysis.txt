@@ -1,0 +1,33 @@
+=== clipA.csv ===
+frames: 218   duration: 9.05s
+all 9 key joints >= 0.3: 39/218 = 17.9%
+at least one wrist >= 0.3:        218/218 = 100.0%
+per-joint frames >= 0.30:
+   nose :  207/218 =  95.0%
+   lSho :  180/218 =  82.6%
+   rSho :  178/218 =  81.7%
+   lElb :  218/218 = 100.0%
+   rElb :  205/218 =  94.0%
+   lWri :  218/218 = 100.0%
+   rWri :  218/218 = 100.0%
+   lHip :   46/218 =  21.1%
+   rHip :   47/218 =  21.6%
+
+nose-Y range: 0.116..0.822 (span 0.706)   rep-top band >= 0.505
+detected rep tops (peaks): 3 at frames [31, 111, 184]
+
+--- TOP-OF-REP tracking (the occlusion stress point) ---
+peak_frame  t_sec  nose_y  wrist_y  chin_over_bar  elbow_ang  noseConf  wristConf  allkeyOK
+     31     1.29   0.508   0.442    True          33.0    0.711     0.801     False
+    111     4.63     nan   0.645    False         43.3    0.150     0.807     False
+    184     7.67   0.823   0.757    True          37.6    0.638     0.833     True
+
+top-of-rep summary: reps=3  chin-over-bar detected=2/3
+  wrist conf at top: min=0.801 max=0.833 mean=0.814
+  all-key-joints usable at top: 1/3
+
+--- per-rep ROM (elbow angle & nose-Y travel) ---
+rep  bottomFrame->topFrame  noseY_travel  elbowAng@bottom  elbowAng@top  elbow_ROM
+  1      0->31             0.392          nan           33.0         nan
+  2     64->111            0.544        132.0           43.3        88.7
+  3    136->184            0.446        160.0           37.6       122.4

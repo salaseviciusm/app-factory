@@ -1,0 +1,47 @@
+=== founder/pullup.csv ===
+frames: 3668   duration: 122.27s
+all 9 key joints >= 0.3: 1/3668 = 0.0%
+at least one wrist >= 0.3:        2236/3668 = 61.0%
+per-joint frames >= 0.30:
+   nose :  132/3668 =   3.6%
+   lSho : 2492/3668 =  67.9%
+   rSho : 2464/3668 =  67.2%
+   lElb : 2462/3668 =  67.1%
+   rElb : 2475/3668 =  67.5%
+   lWri : 1850/3668 =  50.4%
+   rWri : 1624/3668 =  44.3%
+   lHip : 2493/3668 =  68.0%
+   rHip : 2546/3668 =  69.4%
+
+nose-Y range: 0.575..0.979 (span 0.404)   rep-top band >= 0.797
+detected rep tops (peaks): 10 at frames [139, 152, 190, 233, 302, 454, 570, 3528, 3567, 3666]
+
+--- TOP-OF-REP tracking (the occlusion stress point) ---
+peak_frame  t_sec  nose_y  wrist_y  chin_over_bar  elbow_ang  noseConf  wristConf  allkeyOK
+    141     4.73   0.873   0.473    True           0.3    0.722     0.205     False
+    152     5.10     nan   0.473    False          0.3    0.000     0.000     False
+    188     6.30     nan   0.473    False          0.3    0.000     0.000     False
+    233     7.80     nan   0.473    False          0.3    0.000     0.000     False
+    302    10.10     nan   0.458    False        130.5    0.000     0.000     False
+    452    15.10     nan   0.458    False        130.5    0.000     0.000     False
+    570    19.03     nan   0.682    False        153.1    0.132     0.774     False
+   3526    117.57     nan   0.412    False        140.9    0.000     0.765     False
+   3569    119.00     nan   0.746    False        177.1    0.000     0.759     False
+   3666    122.23     nan   0.818    False         37.6    0.000     0.000     False
+
+top-of-rep summary: reps=10  chin-over-bar detected=1/10
+  wrist conf at top: min=0.000 max=0.774 mean=0.250
+  all-key-joints usable at top: 0/10
+
+--- per-rep ROM (elbow angle & nose-Y travel) ---
+rep  bottomFrame->topFrame  noseY_travel  elbowAng@bottom  elbowAng@top  elbow_ROM
+  1    113->139            0.296          nan            0.3         nan
+  2    140->152            0.083          0.3            0.3         0.0
+  3    158->190            0.082          0.3            0.3         0.0
+  4    200->233            0.011          0.3            0.3         0.0
+  5    241->302            0.050        130.5          130.5         0.0
+  6    311->454            0.097        130.5          130.5         0.0
+  7    461->570            0.006        130.5          153.1       -22.7
+  8    590->3528           0.001        143.6          149.8        -6.2
+  9   3535->3567           0.324        162.9          166.0        -3.1
+ 10   3568->3666           0.000        176.9           37.6       139.3

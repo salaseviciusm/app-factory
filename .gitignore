@@ -12,3 +12,9 @@ orchestration/web/frontend/dist/
 orchestration/web/.token
 orchestration/web/audit.log
 orchestration/web/server.log
+
+# Spike inputs and build outputs: raw capture media and compiled binaries stay local
+apps/*/spikes/**/input/
+apps/*/spikes/**/*.mp4
+apps/*/spikes/**/*.mov
+apps/*/spikes/**/*.png

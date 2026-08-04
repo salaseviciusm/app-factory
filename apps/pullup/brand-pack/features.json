@@ -1,0 +1,16 @@
+{
+  "onboarding": { "enabled": true, "steps": ["welcome", "permission-notifications", "first-goal"] },
+  "monetization": {
+    "model": "subscription",
+    "entitlement": "pro",
+    "paywallPlacement": "post-aha"
+  },
+  "analytics": {
+    "enabled": true,
+    "events": ["focus-block-started", "focus-block-completed", "focus-streak-extended"],
+    "activationEvent": "focus-block-completed",
+    "habitEvent": "focus-block-started"
+  },
+  "notifications": { "enabled": true },
+  "reviewPrompt": { "enabled": true, "milestoneEvent": "focus-streak-extended" }
+}

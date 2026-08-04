@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="1060" viewBox="0 0 1060 1060" font-family="-apple-system, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1060" height="1060" fill="#ffffff"/>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5b6470"/>
+    </marker>
+    <marker id="arrowVeto" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#c2410c"/>
+    </marker>
+    <marker id="arrowPass" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#15803d"/>
+    </marker>
+    <style>
+      .t{fill:#0f172a;font-size:14px}
+      .h{fill:#0f172a;font-size:15px;font-weight:700}
+      .s{fill:#475569;font-size:12px}
+      .lbl{fill:#5b6470;font-size:11.5px;font-style:italic}
+      .box{rx:10;stroke-width:1.5}
+      .reuse{fill:#eef2f7;stroke:#94a3b8}
+      .build{fill:#e6f7f1;stroke:#2db48a}
+      .core{fill:#fff4e6;stroke:#f59e0b}
+      .gt{fill:#f3e8ff;stroke:#a855f7}
+    </style>
+  </defs>
+
+  <text x="40" y="40" class="h" font-size="20">Agent Harness — Architecture (v0)</text>
+  <text x="40" y="62" class="s">Compose on OpenClaw + pi; build only the validation heads + design-first gate. Codename `harness`.</text>
+
+  <!-- legend -->
+  <g transform="translate(720,26)">
+    <rect x="0" y="0" width="16" height="12" rx="3" class="reuse"/><text x="22" y="10" class="s">reuse</text>
+    <rect x="90" y="0" width="16" height="12" rx="3" class="build"/><text x="112" y="10" class="s">build</text>
+    <rect x="170" y="0" width="16" height="12" rx="3" class="core"/><text x="192" y="10" class="s">adopt</text>
+    <rect x="280" y="0" width="16" height="12" rx="3" class="gt"/><text x="302" y="10" class="s">ground truth</text>
+  </g>
+
+  <!-- Clients -->
+  <rect x="40" y="86" width="220" height="58" rx="10" class="box build"/>
+  <text x="150" y="112" class="h" text-anchor="middle">📱 Expo mobile</text>
+  <text x="150" y="131" class="s" text-anchor="middle">approve · kick off · watch heads</text>
+  <rect x="288" y="86" width="220" height="58" rx="10" class="box build"/>
+  <text x="398" y="112" class="h" text-anchor="middle">💻 Laptop CLI / TUI</text>
+  <text x="398" y="131" class="s" text-anchor="middle">drive workflows locally</text>
+
+  <!-- Gateway -->
+  <rect x="40" y="170" width="468" height="52" rx="10" class="box reuse"/>
+  <text x="274" y="192" class="h" text-anchor="middle">OpenClaw Gateway</text>
+  <text x="274" y="211" class="s" text-anchor="middle">channels · cron · sessions · memory · worktree isolation</text>
+  <line x1="150" y1="144" x2="180" y2="168" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="398" y1="144" x2="368" y2="168" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Design-first gate -->
+  <rect x="40" y="248" width="300" height="86" rx="10" class="box build"/>
+  <text x="190" y="272" class="h" text-anchor="middle">Design-First Gate</text>
+  <text x="190" y="292" class="s" text-anchor="middle">interview → design.md + *.svg</text>
+  <text x="190" y="310" class="s" text-anchor="middle">→ explore · edit · APPROVE</text>
+  <text x="190" y="328" class="lbl" text-anchor="middle">no build before approval</text>
+  <!-- ground truth chip -->
+  <rect x="366" y="260" width="142" height="62" rx="10" class="box gt"/>
+  <text x="437" y="284" class="h" text-anchor="middle" font-size="13">Approved Design</text>
+  <text x="437" y="303" class="s" text-anchor="middle">= ground truth</text>
+  <line x1="340" y1="291" x2="364" y2="291" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="274" y1="222" x2="190" y2="246" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Orchestrator -->
+  <rect x="90" y="360" width="200" height="50" rx="10" class="box build"/>
+  <text x="190" y="382" class="h" text-anchor="middle">Orchestrator</text>
+  <text x="190" y="400" class="s" text-anchor="middle">plans · spawns workers</text>
+  <line x1="190" y1="334" x2="190" y2="358" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="205" y="350" class="lbl">approved brief</text>
+
+  <!-- Workers -->
+  <rect x="70" y="446" width="240" height="70" rx="10" class="box reuse"/>
+  <text x="190" y="474" class="h" text-anchor="middle">Workers</text>
+  <text x="190" y="494" class="s" text-anchor="middle">per-repo git worktrees</text>
+  <text x="190" y="510" class="lbl" text-anchor="middle">plan · diff · change</text>
+  <line x1="190" y1="410" x2="190" y2="444" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Heads (novel core) -->
+  <rect x="560" y="240" width="460" height="300" rx="14" class="box core"/>
+  <text x="790" y="266" class="h" text-anchor="middle" font-size="17">Validation Heads · pi-hydra (adopt)</text>
+  <text x="790" y="285" class="s" text-anchor="middle">live oversight · heads = markdown files · noop / print / queue / steer / interrupt</text>
+  <text x="790" y="300" class="lbl" text-anchor="middle">we author: assumption + drift · reuse: quality / security</text>
+
+  <rect x="584" y="304" width="200" height="96" rx="10" class="box core"/>
+  <text x="684" y="328" class="h" text-anchor="middle" font-size="13">Assumption Head</text>
+  <text x="684" y="348" class="s" text-anchor="middle">extracts assumptions,</text>
+  <text x="684" y="364" class="s" text-anchor="middle">checks vs ground truth;</text>
+  <text x="684" y="382" class="lbl" text-anchor="middle">no false assumptions</text>
+
+  <rect x="796" y="304" width="200" height="96" rx="10" class="box core"/>
+  <text x="896" y="328" class="h" text-anchor="middle" font-size="13">Drift / Scope Head</text>
+  <text x="896" y="348" class="s" text-anchor="middle">diffs output vs approved</text>
+  <text x="896" y="364" class="s" text-anchor="middle">design; flags creep;</text>
+  <text x="896" y="382" class="lbl" text-anchor="middle">doesn't stray</text>
+
+  <rect x="584" y="414" width="200" height="96" rx="10" class="box core"/>
+  <text x="684" y="438" class="h" text-anchor="middle" font-size="13">Verify Head</text>
+  <text x="684" y="458" class="s" text-anchor="middle">builds / tests /</text>
+  <text x="684" y="474" class="s" text-anchor="middle">acceptance criteria</text>
+  <text x="684" y="492" class="lbl" text-anchor="middle">adversarial</text>
+
+  <rect x="796" y="414" width="200" height="96" rx="10" class="box core"/>
+  <text x="896" y="438" class="h" text-anchor="middle" font-size="13">Visual-Test Head</text>
+  <text x="896" y="458" class="s" text-anchor="middle">drives sim, screenshots,</text>
+  <text x="896" y="474" class="s" text-anchor="middle">asserts vs mocks</text>
+  <text x="896" y="492" class="lbl" text-anchor="middle">UI matches design</text>
+
+  <!-- ground truth into heads -->
+  <path d="M437 322 C 437 420, 470 250, 558 300" fill="none" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="470" y="250" class="lbl" fill="#a855f7">ground truth →</text>
+
+  <!-- worker <-> heads loop -->
+  <path d="M310 462 C 430 462, 440 380, 558 350" fill="none" stroke="#5b6470" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="360" y="430" class="lbl">propose →</text>
+  <path d="M558 470 C 440 520, 420 500, 312 486" fill="none" stroke="#c2410c" stroke-width="1.8" marker-end="url(#arrowVeto)"/>
+  <text x="360" y="520" class="lbl" fill="#c2410c">← veto: the specific violation</text>
+
+  <!-- pass -> merge -->
+  <rect x="360" y="580" width="200" height="52" rx="10" class="box build"/>
+  <text x="460" y="602" class="h" text-anchor="middle">Merge + write memory</text>
+  <text x="460" y="620" class="s" text-anchor="middle">step accepted</text>
+  <path d="M790 542 C 700 590, 600 606, 562 606" fill="none" stroke="#15803d" stroke-width="1.8" marker-end="url(#arrowPass)"/>
+  <text x="600" y="565" class="lbl" fill="#15803d">all heads pass →</text>
+
+  <!-- Simulator -->
+  <rect x="796" y="560" width="224" height="66" rx="10" class="box build"/>
+  <text x="908" y="584" class="h" text-anchor="middle" font-size="13">iOS Simulator (MCP)</text>
+  <text x="908" y="603" class="s" text-anchor="middle">simctl · screenshot → vision</text>
+  <line x1="896" y1="510" x2="900" y2="558" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Memory / repos -->
+  <rect x="40" y="580" width="288" height="66" rx="10" class="box reuse"/>
+  <text x="184" y="604" class="h" text-anchor="middle" font-size="13">Repos + .harness memory</text>
+  <text x="184" y="623" class="s" text-anchor="middle">files-over-chat · never forget (D3)</text>
+  <line x1="190" y1="516" x2="188" y2="578" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="360" y1="606" x2="330" y2="606" stroke="#5b6470" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Substrate band -->
+  <rect x="40" y="690" width="980" height="70" rx="12" fill="#0f172a"/>
+  <text x="530" y="720" text-anchor="middle" fill="#e2e8f0" font-size="15" font-weight="700">Substrate (reused)</text>
+  <text x="530" y="742" text-anchor="middle" fill="#94a3b8" font-size="13">pi — pi-ai (multi-provider) · pi-agent-core (loop)     +     OpenClaw runtime (the stack pi already powers)</text>
+</svg>
