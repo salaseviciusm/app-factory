@@ -610,6 +610,23 @@ detail), and exits non-zero on any failure.
 **Escape hatch:** `FACTORY_RUN_NO_PREFLIGHT=1` skips the run-start preflight
 (engine tests, offline work). The standalone command always runs.
 
+## 12c. Human-readable run ids with prefix resolution (implemented 2026-08-04)
+
+Run ids are minted as `<workflow-prefix>-<task-slug>` (e.g.
+`feature-version-badge`, `bug-leaked-sockets`): the slug is derived from the
+run prompt by a pure heuristic in `createRun()` (lowercase, `[a-z0-9-]` only,
+stopwords dropped, first few meaningful words, capped at a word boundary), a
+numeric suffix (`-2`, `-3`, …) is appended only when the run dir already
+exists, and prompts with no usable words fall back to the legacy
+`<prefix>-<base36>` shape. Worktree paths, `factory/<id>` branches, telemetry
+rows, and Slack messages all derive from the minted id, so nothing else
+changes. On the read path, every CLI verb that takes an id (`status`,
+`resume`, `approve`, `reject`, `steer`, `cancel`) resolves its argument via
+exact match → unique id-prefix → unique substring, so any unambiguous
+fragment (`version-badge`) addresses a run; ambiguous fragments error listing
+all candidates, and `exec` (internal) stays exact-only. Legacy base36 ids are
+plain run-dir names and keep working with zero migration.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.

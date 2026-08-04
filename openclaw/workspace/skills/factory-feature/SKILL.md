@@ -36,6 +36,14 @@ Start a bug fix: same, with `--workflow bug-fix`.
 The command prints a run id and returns immediately. Tell the founder the run id
 and that the plan will arrive shortly for approval.
 
+Run ids are readable task slugs derived from the prompt (`feature-version-badge`,
+`bug-leaked-sockets`), and every verb below accepts any unambiguous prefix or
+fragment of an id — so when the founder says "approve the version badge run" you
+can pass `version-badge` directly without looking up the exact id. On an
+ambiguous fragment the command exits non-zero listing the matching ids; pick the
+right one and rerun. Older runs keep their legacy `feature-msdn5cuj`-style ids
+and resolve the same way.
+
 Plan gate: the engine posts the plan to #factory-builds and waits. When the founder
 says "approve"/"go"/"looks good" (in any channel, referring to the run):
 
