@@ -9,6 +9,7 @@
       "path": "~/src/running-with-pace",
       "tier": "production",
       "defaultBranch": "main",
+      "notifyChannelName": "factory-pace",
       "setup": [
         "npm install",
         "cd pace-react-native && npm install"
@@ -31,12 +32,14 @@
       "path": "~/src/app-factory",
       "tier": "production",
       "defaultBranch": "main",
+      "notifyChannelName": "factory-app-factory",
       "setup": [],
       "checks": [
         "node --check orchestration/bin/factory-run",
         "orchestration/bin/factory-run selftest",
         "for f in orchestration/web/server.mjs orchestration/web/lib/*.mjs orchestration/bin/factory-web; do node --check \"$f\" || exit 1; done",
-        "bash -n openclaw/apply-slack.sh openclaw/apply-voice.sh openclaw/setup-automations.sh"
+        "bash -n openclaw/apply-slack.sh openclaw/apply-voice.sh openclaw/setup-automations.sh openclaw/slack-heartbeat.sh",
+        "node --check openclaw/lib/slack-channel.mjs"
       ],
       "tests": [
         "node --test orchestration/web/lib/*.test.mjs"
@@ -50,6 +53,7 @@
       "path": "~/src/skip-hero",
       "tier": "production",
       "defaultBranch": "main",
+      "notifyChannelName": "factory-skiphero",
       "setup": [
         "npm install"
       ],
@@ -73,6 +77,7 @@
     "basePath": "~/src/app-factory/apps",
     "tier": "quickfire",
     "defaultBranch": "main",
+    "notifyChannelName": "factory-app-${app}",
     "setup": [
       "npm install"
     ],

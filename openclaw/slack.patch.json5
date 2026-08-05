@@ -19,9 +19,19 @@
         "${FACTORY_STANDUP_CHANNEL}": { requireMention: false },
         // #factory-approvals — gate confirmations
         "${FACTORY_APPROVALS_CHANNEL}": { requireMention: false },
-        // #factory-builds — build/pipeline status; run-gate approvals are typed
-        // here as plain replies, so no @mention required
+        // #factory-builds — fallback for run notifications when a per-rig
+        // channel cannot be resolved; run-gate approvals are typed here as
+        // plain replies, so no @mention required
         "${FACTORY_BUILDS_CHANNEL}": { requireMention: false },
+        // #factory-status + per-repo run channels — resolved by NAME (created
+        // on demand) by apply-slack.sh at apply time, so founder replies (e.g.
+        // gate approvals) typed in them reach the agent. Re-run apply-slack.sh
+        // after stamping a new quickfire app to allowlist its channel.
+        "${FACTORY_STATUS_CHANNEL}": { requireMention: false },
+        "${FACTORY_PACE_CHANNEL}": { requireMention: false },
+        "${FACTORY_SKIPHERO_CHANNEL}": { requireMention: false },
+        "${FACTORY_APP_FACTORY_CHANNEL}": { requireMention: false },
+        ${EXTRA_APP_CHANNELS}
       },
       // DMs from the founder only
       dmPolicy: "allowlist",
