@@ -2287,6 +2287,47 @@ function cmdResume(argv) {
   console.log(`resumed ${id} at step ${run.stepIndex} (${wf.steps[Math.min(run.stepIndex, wf.steps.length - 1)].id})`);
 }
 
+/** Machine-readable step/gate facts for `status --json`, so consumers (the
+ *  standup skill, the web console) never parse human-formatted `history`
+ *  detail strings. `currentStep` mirrors what the human output prints (raw
+ *  stepIndex over total, id/type from the workflow, index clamped for id
+ *  lookup). For awaiting-approval runs, `gate` says which kind of founder
+ *  gate is pending: a plan gate, or a discussion awaiting a reply (with
+ *  pendingReplies/lastActivityAt from the discussion helpers). */
+function statusExtras(run) {
+  let wf;
+  try {
+    wf = loadWorkflow(run.workflow);
+  } catch {
+    return { currentStep: null, gate: null };
+  }
+  const step = wf.steps[Math.min(run.stepIndex || 0, wf.steps.length - 1)];
+  const currentStep = { index: run.stepIndex || 0, total: wf.steps.length, id: step.id, type: step.type };
+  if (run.state !== "awaiting-approval") return { currentStep, gate: null };
+  if (step.type === "discussion") {
+    const runDir = runDirOf(run.id);
+    // A run dir can be absent (pruned, or a synthetic run in selftest); report
+    // the gate kind rather than letting `status --json` die on one bad run.
+    if (!fs.existsSync(runDir)) return { currentStep, gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null } };
+    const turns = readDiscussionTurns(runDir, step.id);
+    const repliesPath = path.join(runDir, "discussion-replies.jsonl");
+    const replies = fs.existsSync(repliesPath)
+      ? parseReplyLines(fs.readFileSync(repliesPath, "utf8").split("\n"))
+      : [];
+    return {
+      currentStep,
+      gate: {
+        kind: "discussion",
+        pendingReplies: countPendingReplies(turns, replies),
+        lastActivityAt: discussionLastActivity(turns, replies),
+      },
+    };
+  }
+  // Plan gate (or any non-discussion approval wait): no reply mechanism, so
+  // pendingReplies is null; last activity is the state transition that posted it.
+  return { currentStep, gate: { kind: "plan-gate", pendingReplies: null, lastActivityAt: run.updatedAt || null } };
+}
+
 function cmdStatus(argv) {
   const fragment = argv.find((a) => !a.startsWith("--"));
   const id = fragment ? resolveRunId(fragment) : undefined;
@@ -2294,7 +2335,7 @@ function cmdStatus(argv) {
   const ids = id ? [id] : fs.existsSync(RUNS_DIR) ? fs.readdirSync(RUNS_DIR).filter((d) => fs.existsSync(path.join(RUNS_DIR, d, "run.json"))) : [];
   const runs = ids.map((rid) => loadRun(rid)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   if (asJson) {
-    console.log(JSON.stringify(runs.map((r) => ({ ...r, usage: runUsage(r.id) })), null, 2));
+    console.log(JSON.stringify(runs.map((r) => ({ ...r, usage: runUsage(r.id), ...statusExtras(r) })), null, 2));
     return;
   }
   for (const r of runs) {
@@ -2588,6 +2629,24 @@ function cmdSelftest() {
   for (const [name, ok] of discussionOutcomeChecks) {
     console.log(`discussion ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`discussion check failed: ${name}`);
+  }
+  // status --json enrichment (statusExtras against the repo's own workflows/):
+  // machine-readable current step + gate kind so no consumer parses history
+  // detail strings. The discussion gate branch reads a live run dir and is
+  // covered by the discussion helpers above.
+  const sx = (over) =>
+    statusExtras({ id: "selftest-0000", workflow: "feature-dev", stepIndex: 1, state: "running:plan", updatedAt: "2026-01-01T00:00:00.000Z", ...over });
+  const statusChecks = [
+    ["currentStep carries index/total/id/type", (() => { const c = sx({ stepIndex: 2 }).currentStep; return c.index === 2 && c.total === 8 && c.id === "implement" && c.type === "agent"; })()],
+    ["non-awaiting run has no gate", sx({}).gate === null],
+    ["awaiting-approval at a gate step is a plan gate", (() => { const g = sx({ workflow: "self-review", stepIndex: 1, state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z"; })()],
+    ["awaiting-approval at a discussion step is a discussion gate", (() => { const g = sx({ state: "awaiting-approval" }).gate; return g !== null && g.kind === "discussion"; })()],
+    ["completed run clamps to the last step", sx({ stepIndex: 8, state: "done" }).currentStep.id === "notify"],
+    ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null })],
+  ];
+  for (const [name, ok] of statusChecks) {
+    console.log(`status-json ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`status-json check failed: ${name}`);
   }
   // Per-rig notify routing core (pure — checked against the live rigs.json so
   // a rig losing its notifyChannelName shows up here, plus synthetic configs).

@@ -1,6 +1,11 @@
 # Factory State
 
 > Maintained by the chief of staff. Humans may edit; agents must keep it truthful.
+> This file is narrative (phase, active apps, yesterday/today plans) and stays
+> hand-written. Run and gate status is engine-owned: `factory-run status` (or
+> `status --json`) is the authority on in-flight runs, pending gates, and costs —
+> the "Awaiting founder" / "In-flight" sections below are narrative context only,
+> not authoritative run/gate state.
 > Last updated: 2026-08-05 18:00 (EOD sync — every in-flight item reconciled against
 > `factory-run list`, git log and branch state; stale entries corrected below)
 
