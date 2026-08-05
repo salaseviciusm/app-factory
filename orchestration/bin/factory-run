@@ -58,6 +58,9 @@ const {
   lastActivityAt: discussionLastActivity,
   resolveOutcome,
 } = require(path.join(ORCH_DIR, "web", "lib", "discussion.mjs"));
+// Plan-profile lint core (strict plan markdown contract) — same web-lib
+// require(esm) pattern; bin/plan-lint wraps it for agents' self-checks.
+const { lintPlan } = require(path.join(ORCH_DIR, "web", "lib", "plan-md.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -606,6 +609,7 @@ function renderPrompt(step, run, extra) {
   let rendered = tpl
     .replaceAll("{{PROMPT}}", run.prompt)
     .replaceAll("{{RUN_DIR}}", runDir)
+    .replaceAll("{{ORCH_DIR}}", ORCH_DIR)
     .replaceAll("{{BASE_BRANCH}}", run.baseBranch)
     .replaceAll("{{STEERING}}", steering)
     .replaceAll("{{FINDINGS}}", findings);
@@ -784,6 +788,36 @@ function evaluateReview(run) {
   return { ok: false, summary: `agentic review FAIL (${(review.findings || []).length} findings)` };
 }
 
+/** Validate the run's plan.md against the strict plan profile (plan-md.mjs).
+ *  The web console renders plans from this contract, so a violating plan must
+ *  never survive the step that wrote it: on failure the line-numbered problems
+ *  land in findings.md (archived like review findings) and the attempt fails,
+ *  so the existing findings/retry loop re-prompts the writing agent with
+ *  {{FINDINGS}} injected. On success stale lint findings are cleared exactly
+ *  like a review PASS. */
+function evaluatePlanMd(run, label) {
+  const runDir = runDirOf(run.id);
+  const planPath = path.join(runDir, "plan.md");
+  const problems = fs.existsSync(planPath)
+    ? lintPlan(fs.readFileSync(planPath, "utf8"))
+    : [{ line: 1, message: "plan.md was not written" }];
+  if (problems.length === 0) {
+    archiveFindings(runDir);
+    fs.rmSync(path.join(runDir, "findings.md"), { force: true });
+    return { ok: true, summary: `plan.md conforms to the plan profile (${label})` };
+  }
+  const list = problems.map((p, i) => `${i + 1}. plan.md line ${p.line}: ${p.message}`).join("\n");
+  fs.writeFileSync(
+    path.join(runDir, "findings.md"),
+    `Plan markdown validation FAILED (${label}).\n\n` +
+      `\`${planPath}\` must follow the strict plan profile from your prompt. Fix every finding, ` +
+      `self-check with \`node ${path.join(ORCH_DIR, "bin", "plan-lint")} ${planPath}\`, and re-complete your task.\n\n` +
+      `Findings:\n\n${list}\n`
+  );
+  archiveFindings(runDir);
+  return { ok: false, summary: `plan lint FAIL ${label}: ${problems.length} problem(s)` };
+}
+
 /** Record the run branch's commits as telemetry artifacts (idempotent-ish: replaces prior rows). */
 function recordCommits(run) {
   try {
@@ -896,25 +930,44 @@ function runDiscussionStep(run, step) {
   // turn — an unsent turn is the invisible-gate failure mode, so fail loud.
   // Turn telemetry is recorded here (telemetryDone), one ok row per attempt.
   const runTurn = () => {
-    const replies = readReplies();
-    const started = nowIso();
-    setState(run, `running:${step.id}`, `discussion turn ${turns.length + 1}/${maxTurns}`);
-    const r = runAgentStep(run, step, {
-      "{{DISCUSSION}}": assembleConversation(turns, replies),
-      "{{TURN}}": String(turns.length + 1),
-      "{{MAX_TURNS}}": String(maxTurns),
-    });
-    consumed = replies.length;
-    try {
-      tStep(id, step.id, r.attempt, r.ok ? "ok" : "fail", r.summary, started, r.usage);
-    } catch {}
-    if (!r.ok) return r;
-    turns = readDiscussionTurns(runDir, step.id);
+    for (let lintRetried = false; ; lintRetried = true) {
+      const replies = readReplies();
+      const started = nowIso();
+      setState(run, `running:${step.id}`, `discussion turn ${turns.length + 1}/${maxTurns}`);
+      const r = runAgentStep(run, step, {
+        "{{DISCUSSION}}": assembleConversation(turns, replies),
+        "{{TURN}}": String(turns.length + 1),
+        "{{MAX_TURNS}}": String(maxTurns),
+      });
+      consumed = replies.length;
+      try {
+        tStep(id, step.id, r.attempt, r.ok ? "ok" : "fail", r.summary, started, r.usage);
+      } catch {}
+      if (!r.ok) return r;
+      turns = readDiscussionTurns(runDir, step.id);
+      // Plan discussions rewrite plan.md each turn; a turn that leaves it
+      // violating the plan profile must not reach the founder (the web console
+      // renders from that contract). Findings re-prompt exactly one retry turn
+      // (attempt-numbered like any turn), then the step fails loudly.
+      if (step.prompt === "plan-discussion") {
+        const v = evaluatePlanMd(run, `after discussion turn ${turns.length}`);
+        if (!v.ok) {
+          log(runDir, `${v.summary} — ${lintRetried ? "failing the step" : "re-prompting one retry turn with findings"}`);
+          if (!lintRetried) continue;
+          return { ok: false, summary: v.summary };
+        }
+      }
+      return postTurn(r.summary);
+    }
+  };
+
+  /** Post a validated turn to the founder and park the run on the reply. */
+  const postTurn = (turnText) => {
     const opening = turns.length === 1 ? ` (${run.workflow} on ${run.rig})` : "";
     const sent = notify(
       run,
       `:speech_balloon: Run ${id}${opening} — *${step.id}* turn ${turns.length}/${maxTurns}:\n\n` +
-        (r.summary || "").slice(0, 2800) +
+        (turnText || "").slice(0, 2800) +
         `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
         `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
     );
@@ -1720,6 +1773,12 @@ function execRun(id) {
         result = runAgentStep(run, step);
         if (result.ok && step.id === "review") {
           result = { ...evaluateReview(run), attempt: result.attempt, usage: result.usage };
+        }
+        if (result.ok && step.id === "plan") {
+          // The web console renders plan.md from the strict plan profile — a
+          // violating plan fails the attempt (findings.md written) so the
+          // workflow's onFail loop re-runs the plan step with findings.
+          result = { ...evaluatePlanMd(run, "after the plan step"), attempt: result.attempt, usage: result.usage };
         }
         if (result.ok && step.id === "implement") recordCommits(run);
       } else if (step.type === "commands") {
@@ -2647,6 +2706,50 @@ function cmdSelftest() {
   for (const [name, ok] of statusChecks) {
     console.log(`status-json ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`status-json check failed: ${name}`);
+  }
+  // Plan-profile lint core (pure — from web/lib/plan-md.mjs; the deep coverage
+  // lives in plan-md.test.mjs — this proves the engine's require(esm) wiring
+  // enforces the same profile evaluatePlanMd fails attempts on).
+  const goodPlan = [
+    "# Plan: Selftest fixture",
+    "",
+    "## What and why",
+    "",
+    "Words with `<pre>` as inline code.",
+    "",
+    "## Angles considered",
+    "",
+    "- **Angle**: choice.",
+    "",
+    "## Touch points",
+    "",
+    "- `file.ts` — change.",
+    "",
+    "## Acceptance criteria",
+    "",
+    "1. Testable.",
+    "",
+    "## Out of scope",
+    "",
+    "- Nothing else.",
+    "",
+    "## Open questions",
+    "",
+    "- (none)",
+    "",
+  ].join("\n");
+  const planLintChecks = [
+    ["conforming plan lints clean", lintPlan(goodPlan).length === 0],
+    ["inline-code html is sanctioned", lintPlan(goodPlan).every((p) => !/HTML/.test(p.message))],
+    ["missing section flagged", lintPlan(goodPlan.replace("## Out of scope", "## Scope out")).some((p) => p.message.includes("missing required section `## Out of scope`"))],
+    ["raw html flagged", lintPlan(goodPlan.replace("Words with `<pre>` as inline code.", "<script>alert(1)</script>")).some((p) => p.message.includes("raw HTML"))],
+    ["table flagged", lintPlan(goodPlan.replace("1. Testable.", "| a | b |")).some((p) => p.message.includes("table"))],
+    ["unclosed fence flagged", lintPlan(`${goodPlan}\n\`\`\`js\ndangling`).some((p) => p.message.includes("never closed"))],
+    ["empty plan flagged, never thrown", lintPlan("").length === 1 && lintPlan(null).length === 1],
+  ];
+  for (const [name, ok] of planLintChecks) {
+    console.log(`plan-lint ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`plan-lint check failed: ${name}`);
   }
   // Per-rig notify routing core (pure — checked against the live rigs.json so
   // a rig losing its notifyChannelName shows up here, plus synthetic configs).

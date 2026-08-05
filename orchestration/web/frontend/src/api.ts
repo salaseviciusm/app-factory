@@ -83,5 +83,6 @@ export const api = {
     post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/reject`, { feedback }),
   steer: (id: string, instruction: string) =>
     post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/steer`, { instruction }),
+  reply: (id: string, text: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/reply`, { text }),
   cancel: (id: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/cancel`, {}),
 };
