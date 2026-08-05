@@ -6,6 +6,9 @@
   paused the idea at the spec gate 2026-08-03 09:20.** Do not advance to Stage 3+ (brand/
   design/architecture) until the founder un-pauses.
 - **Last updated:** 2026-08-03 09:20 (founder hold)
+- **Last verified:** 2026-08-05 18:00 (EOD sync) — still accurate. No pullup runs in
+  `factory-run list`, no subagents, no commits touching `apps/pullup/` since `1e98a1d`
+  (2026-08-04, which tracked the existing artifacts in git). Hold unchanged for 2 days.
 
 ## HOLD (2026-08-03)
 
@@ -44,7 +47,9 @@ answers the spec-gate questions.
 
 ## Blocked
 
-Not hard-blocked, but **two open founder dependencies** before build:
+Not hard-blocked, but **two founder dependencies** before build — both **parked, not
+pending**, since the 2026-08-03 hold. Nothing here is waiting on an answer today; they
+become live again only if the founder un-pauses the app:
 1. **Spec gate** — founder to answer the product-lead's open questions in `spec.md`.
 2. **One clean front/¾ pull-up clip** (face visible, phone upright) to close end-to-end
    validation on the founder's actual conditions. `IMG_0451.MOV` never resolved to disk —
