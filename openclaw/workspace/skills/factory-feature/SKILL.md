@@ -91,4 +91,6 @@ Cancel: `factory-run cancel <run_id>`.
 - On failures, read `~/src/app-factory/orchestration/runs/<run_id>/engine.log` and the
   failing step log, summarize the cause in one or two sentences, and propose the next
   action (retry, steer, or drop).
-- Update STATE.md when runs start and land, per your chief-of-staff duties.
+- Keep STATE.md's narrative current (phase, active apps, plans) per your
+  chief-of-staff duties — but do not duplicate run or gate status into it;
+  `factory-run status` is the authority on runs, gates, and costs.

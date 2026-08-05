@@ -284,3 +284,26 @@ but full per-step context is now captured on disk as evidence.
 **Why:** the self-review loop can only fix what it can see; context/cost analysis
 must start from true numbers. Run dirs grow by MBs per step — acceptable, reclaimed
 by existing cleanup; rollback is a `git revert` of the merge commit.
+
+## D23 — Standup reads run/gate status from the engine; STATE.md stays hand-written narrative (2026-08-05)
+
+**Context:** the daily standup learned about pending gates and in-flight runs by
+grepping STATE.md's hand-written "Awaiting founder" section, so it reported whatever
+a human last wrote there — approved-hours-ago gates, or nothing for a genuinely
+blocked run. Meanwhile `factory-run` already knows every run's state, step, gate,
+and cost.
+**Decision:** the standup sources run/gate/cost facts from the engine —
+`factory-run status --json` (now enriched with a machine-readable `currentStep`
+and, for awaiting-approval runs, a `gate` object distinguishing a plan gate from a
+discussion awaiting a founder reply) plus `report --json` / the telemetry db for
+aggregates — never by parsing human-formatted output or STATE.md. A discussion
+awaiting a founder reply counts as a pending gate; a run ending `killed` is a
+completed success (early kill = money saved), never a failure. STATE.md stays a
+committed, hand-written narrative (phase, active apps, yesterday/today plans) —
+no codegen, no auto-writing — and loses only the run/gate-status duty.
+**Why (founder-stated, 2026-08-05):** the founder's 30-second morning read must be
+trustworthy without changing its format or the 08:00 post / 11:00 reply-cutoff
+ritual; hand-maintained state had already drifted from engine truth. The
+factory-status skill shares the same disease (its step 1 reads STATE.md and even
+instructs fixing it when stale) — flagged, deliberately untouched here as a
+separate founder decision.

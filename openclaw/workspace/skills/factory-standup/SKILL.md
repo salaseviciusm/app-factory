@@ -11,10 +11,27 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
 
 ## Gather (in order)
 
-1. `~/src/app-factory/STATE.md` — current phase, active apps, yesterday's plan.
-2. Per active app: `apps/<name>/STATUS.md` (stage, in-flight tasks, blockers) and
+1. Runs, gates, costs — from the engine, never from STATE.md:
+   `~/src/app-factory/orchestration/bin/factory-run status --json`. Every run carries
+   its `state`, a `currentStep` (`{index, total, id, type}`), per-run `usage`
+   (cost/tokens), and — for runs in state `awaiting-approval` — a `gate` object
+   (`kind`: `plan-gate` or `discussion`, plus `pendingReplies` and `lastActivityAt`).
+   - **Pending gates** = every run in state `awaiting-approval`. A run in a
+     discussion step awaiting a founder reply IS a pending gate — surface it in
+     "Needs founder" exactly like a plan gate, with how long it has been waiting
+     (`gate.lastActivityAt`).
+   - **Yesterday's completions** = runs that reached a terminal state since the last
+     standup. `done` landed. `killed` is ALSO a completed success — the founder ended
+     a spec discussion with "don't build"; an early kill is money saved. Never report
+     `killed` as a failure. `failed` / `rejected` / `cancelled` are the didn't-land
+     bucket; give each its one-line cause.
+   - **Costs**: per-run `usage` from `status --json`; for aggregates (yesterday's or
+     the week's spend) use `factory-run report --days N --json` (telemetry-db digest).
+2. `~/src/app-factory/STATE.md` — narrative only: current phase, active apps and their
+   stages, yesterday's plan. Do not source run states, pending gates, or costs from it;
+   the engine (step 1) is the authority on those.
+3. Per active app: `apps/<name>/STATUS.md` (stage, in-flight tasks, blockers) and
    recent git log in its workspace.
-3. Pending gates: grep STATE.md "Awaiting founder" section.
 4. Portfolio pulse (only once analytics exist — Phase 3+): last nightly digest.
 5. Yesterday's standup thread: which proposals were adjusted, which proceeded by cutoff.
 
