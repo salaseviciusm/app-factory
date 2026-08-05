@@ -84,4 +84,6 @@ export const api = {
   steer: (id: string, instruction: string) =>
     post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/steer`, { instruction }),
   cancel: (id: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/cancel`, {}),
+  resume: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/resume`, {}),
+  discard: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/discard`, {}),
 };

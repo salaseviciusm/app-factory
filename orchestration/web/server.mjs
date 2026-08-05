@@ -8,7 +8,8 @@
  *         workflows/*.json, rigs.json (served verbatim — ${VAR} placeholders
  *         stay unresolved; openclaw/secrets.env is never read).
  * Writes: nothing directly — every mutation shells out to bin/factory-run
- *         (start/approve/reject/steer/cancel) via execFile with an args array.
+ *         (start/approve/reject/steer/cancel/resume/cleanup --discard) via
+ *         execFile with an args array.
  *
  * Access model: binds 127.0.0.1 by default. For phone access keep the loopback
  * bind and put `tailscale serve` in front (TLS + tailnet-only). Binding any
@@ -288,15 +289,17 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|resume|discard) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|resume|discard)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
   const state = currentRunState(id);
   if (state === null) return sendJson(res, 404, { error: `no such run: ${id}` });
 
-  const args = [action, id];
+  // discard = the founder's explicit "clean this run up" choice: force-remove
+  // the worktree and branch of one terminal run via cleanup --discard.
+  const args = action === "discard" ? ["cleanup", id, "--discard"] : [action, id];
   if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
@@ -320,6 +323,18 @@ async function handleApi(req, res, pathname, query) {
   } else if (action === "cancel") {
     if (TERMINAL_STATES.includes(state)) {
       return sendJson(res, 409, { error: `run is already ${state}` });
+    }
+  } else if (action === "resume") {
+    // Console resume covers kept cancelled runs (the executor picks up at the
+    // interrupted step). The failed/stuck retry flow
+    // (feature-failed-stuck-workflow-runs) should widen this allowed set when
+    // it lands — extend it here rather than adding a parallel control.
+    if (state !== "cancelled") {
+      return sendJson(res, 409, { error: `run is '${state}' — console resume currently covers cancelled runs only` });
+    }
+  } else if (action === "discard") {
+    if (!TERMINAL_STATES.includes(state)) {
+      return sendJson(res, 409, { error: `run is '${state}', not terminal — cancel it first` });
     }
   }
 
