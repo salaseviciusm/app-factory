@@ -62,7 +62,7 @@ openclaw cron add "0 18 * * *" \
 # Weekly self-review — Sunday 17:00. Isolated turn kicks off the self-review
 # workflow; the run engine handles the Slack plan gate + spawned implementation.
 openclaw cron add "0 17 * * 0" \
-  "Run the factory-self-review skill: start a self-review run (factory-run start --rig app-factory --workflow self-review --prompt 'weekly self-review: find the highest-leverage harness improvement'). Your final message must be one short line announcing the run id and that the improvement plan will arrive in #factory-builds for approval." \
+  "Run the factory-self-review skill: start a self-review run (factory-run start --rig app-factory --workflow self-review --prompt 'weekly self-review: find the highest-leverage harness improvement'). Your final message must be one short line announcing the run id and that the improvement plan will arrive in #factory-app-factory for approval." \
   --name "factory-weekly-self-review" \
   --declaration-key "factory-weekly-self-review" \
   --session isolated \
@@ -88,8 +88,9 @@ openclaw cron add \
 # --- Phase 3 additions (do not enable yet — see docs/07-roadmap.md) ---
 # nightly analytics pull, weekly marketing calendar prep, weekly retro prompt
 
-# Slack heartbeat — every 10 min, stamps the three factory channels' topics with
-# "OpenClaw: <online|offline> — heartbeat ...". Deliberately a LaunchAgent, not
+# Slack heartbeat — every 10 min, stamps the #factory-status channel topic with
+# "OpenClaw: <online|offline> — heartbeat ..." (channel auto-created on first
+# run; other channels are never touched). Deliberately a LaunchAgent, not
 # an openclaw cron: it must keep reporting "offline" when the gateway is dead,
 # and must not burn an agent turn every 10 minutes.
 FACTORY_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -125,8 +126,8 @@ launchctl bootout "gui/$(id -u)" "$HEARTBEAT_PLIST" 2> /dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$HEARTBEAT_PLIST"
 
 echo "Factory crons registered. Verify with: openclaw cron list"
-echo "Heartbeat LaunchAgent ${HEARTBEAT_LABEL} loaded (topic stamp every 10 min,"
-echo "log: /tmp/openclaw/heartbeat.log)."
-echo "NOTE: topic writes need the channels:manage + groups:write scopes — re-apply"
-echo "openclaw/slack-app-manifest.json at api.slack.com and reinstall the app to"
-echo "the workspace, or the heartbeat logs missing_scope."
+echo "Heartbeat LaunchAgent ${HEARTBEAT_LABEL} loaded (stamps the #factory-status"
+echo "topic every 10 min, creating the channel on demand; log: /tmp/openclaw/heartbeat.log)."
+echo "NOTE: topic writes + channel creation need the channels:manage + groups:write"
+echo "scopes — re-apply openclaw/slack-app-manifest.json at api.slack.com and reinstall"
+echo "the app to the workspace, or the heartbeat logs missing_scope."

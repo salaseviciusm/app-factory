@@ -5,10 +5,17 @@
 #   1. cp openclaw/secrets.env.example openclaw/secrets.env and fill it in
 #   2. openclaw plugins install @openclaw/slack && openclaw gateway restart
 #   3. this script
-#   4. invite the bot to the three channels in the Slack UI (manifest has no
-#      channels:join scope — manual invite is expected)
+#   4. invite the bot to the hand-created channels (standup/approvals/builds) in
+#      the Slack UI (manifest has no channels:join scope — manual invite is
+#      expected). Channels this script creates on demand (#factory-status and
+#      the per-repo run channels) need no invite: the bot is auto-member of
+#      channels it creates.
 #
 # What it does, idempotently:
+#   - resolves #factory-status + per-repo run channels by NAME via
+#     lib/slack-channel.mjs, creating them on demand (channels:manage scope),
+#     so the agent's channel allowlist covers founder replies in all of them;
+#     re-run this script after stamping a new quickfire app
 #   - renders slack.patch.json5 (${VAR} placeholders) with secrets.env values
 #   - validates with `config patch --dry-run`, then applies
 #   - makes the founder command owner (owner-only commands, exec approvals)
@@ -30,6 +37,32 @@ for v in SLACK_BOT_TOKEN SLACK_APP_TOKEN FACTORY_STANDUP_CHANNEL FACTORY_APPROVA
     exit 1
   fi
 done
+
+# Auto-created channels: resolve by name (creating on demand) so their IDs land
+# in the agent's allowlist without ever being pasted into secrets.env. A pinned
+# FACTORY_STATUS_CHANNEL in secrets.env wins over the name lookup.
+echo "==> Resolving auto-created factory channels (name → ID, created on demand)"
+if [ -z "${FACTORY_STATUS_CHANNEL:-}" ] || [[ "${FACTORY_STATUS_CHANNEL:-}" == *REPLACE* ]]; then
+  FACTORY_STATUS_CHANNEL="$(node "$FACTORY_DIR/lib/slack-channel.mjs" factory-status)"
+fi
+FACTORY_PACE_CHANNEL="$(node "$FACTORY_DIR/lib/slack-channel.mjs" factory-pace)"
+FACTORY_SKIPHERO_CHANNEL="$(node "$FACTORY_DIR/lib/slack-channel.mjs" factory-skiphero)"
+FACTORY_APP_FACTORY_CHANNEL="$(node "$FACTORY_DIR/lib/slack-channel.mjs" factory-app-factory)"
+export FACTORY_STATUS_CHANNEL FACTORY_PACE_CHANNEL FACTORY_SKIPHERO_CHANNEL FACTORY_APP_FACTORY_CHANNEL
+
+# Quickfire apps existing at apply time get their #factory-app-<name> channel
+# allowlisted too (rendered into the ${EXTRA_APP_CHANNELS} template slot).
+EXTRA_APP_CHANNELS="// (no quickfire app channels at apply time)"
+for d in "$FACTORY_DIR/../apps"/*/; do
+  [ -d "$d" ] || continue
+  app="$(basename "$d")"
+  if id="$(node "$FACTORY_DIR/lib/slack-channel.mjs" "factory-app-$app")"; then
+    EXTRA_APP_CHANNELS="$(printf '%s\n        "%s": { requireMention: false },' "$EXTRA_APP_CHANNELS" "$id")"
+  else
+    echo "WARNING: could not resolve/create #factory-app-$app; skipping its allowlist entry" >&2
+  fi
+done
+export EXTRA_APP_CHANNELS
 
 RENDERED="$(mktemp -t slack-patch.XXXXXX.json5)"
 trap 'rm -f "$RENDERED"' EXIT
@@ -73,8 +106,10 @@ openclaw gateway restart < /dev/null || true
 
 cat <<EOF
 
-Slack config applied. Remaining manual step: invite the bot to the three channels
-(/invite @OpenClaw in each), then verify:
+Slack config applied. Remaining manual step: invite the bot to the hand-created
+channels — standup/approvals/builds (/invite @OpenClaw in each; auto-created
+channels like #factory-status and the per-repo run channels need no invite),
+then verify:
   openclaw channels status --probe
   # and in Slack: DM the bot "status"
 EOF

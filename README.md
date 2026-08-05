@@ -113,6 +113,12 @@ openclaw gateway restart
 1. In Slack, create the channels: `#factory-standup`, `#factory-approvals`,
    `#factory-builds`. Note each channel ID (right-click channel → Copy link → the
    `C...` segment) and your own member ID (profile → ⋯ → Copy member ID, `U...`).
+   Do NOT create `#factory-status` or the per-repo run channels
+   (`#factory-pace`, `#factory-skiphero`, `#factory-app-factory`,
+   `#factory-app-<x>`) — the bot creates those on demand
+   (`openclaw/lib/slack-channel.mjs`; the manifest's `channels:manage` scope
+   covers `conversations.create`, and the bot is auto-member of channels it
+   creates, so they need no invite either).
 2. Create the Slack app: <https://api.slack.com/apps/new> → "From a manifest" → paste
    `openclaw/slack-app-manifest.json` from this repo (verbatim copy of OpenClaw 2026.7's
    **recommended** Socket Mode manifest from docs.openclaw.ai/channels/slack; rename the
@@ -147,7 +153,8 @@ openclaw channels status --probe
      `{ source: "env", provider: "default", id: "..." }` — `{ $env: ... }` is not read
    - openclaw CLI calls in scripts need stdin detached (`< /dev/null`); they hang on
      a TTY check otherwise
-6. Invite the bot to the three channels (`/invite @<bot>` in each).
+6. Invite the bot to the three hand-created channels (`/invite @<bot>` in each;
+   auto-created channels need no invite).
 
 **Verify:** DM the bot in Slack: `status` → it should run the `factory-status` skill
 and answer from `STATE.md`. In `#factory-standup` (no mention needed): `run standup`
@@ -169,9 +176,10 @@ agent jobs default to a 30s timeout, so the script sets explicit timeouts.)
 
 **Verify:** `openclaw cron list` shows the three jobs. Tomorrow 08:00 the
 standup appears in `#factory-standup`; reply in-thread and watch it re-plan.
-Within 10 minutes the three channels' topics read `OpenClaw: online — heartbeat …`
-(the `ai.openclaw.factory-heartbeat` LaunchAgent — needs the Step 4 manifest
-re-applied and the app reinstalled, since topic writes use new scopes).
+Within 10 minutes the `#factory-status` topic reads `OpenClaw: online — heartbeat …`
+(the `ai.openclaw.factory-heartbeat` LaunchAgent creates the channel on demand
+and stamps only it — needs the Step 4 manifest re-applied and the app
+reinstalled, since topic writes and channel creation use new scopes).
 
 ### Step 5b — Orchestrated runs (feature-dev / bug-fix on any rig)
 
@@ -185,8 +193,12 @@ review → tests → EAS preview update → Slack notification with install link
   resolves any `apps/<name>` as a **quickfire** rig (template checks only).
 - From Slack (typed or voice note): "add feature X to pace" → the chief of staff
   runs the `factory-feature` skill, which drives
-  `orchestration/bin/factory-run`. The plan lands in `#factory-builds` for
-  approval; say "approve" (or "just do it" up front to skip the gate).
+  `orchestration/bin/factory-run`. The plan lands in the rig's own run channel
+  for approval — `#factory-pace` (running-with-pace), `#factory-skiphero`
+  (skip-hero), `#factory-app-factory` (harness), `#factory-app-<x>`
+  (quickfire apps) — created on demand, falling back to `#factory-builds` if
+  the per-rig channel can't be resolved; say "approve" (or "just do it" up
+  front to skip the gate).
 - From a shell: `orchestration/bin/factory-run start --rig skip-hero
   --workflow feature-dev --prompt "..."`; then `status` / `approve` / `steer` /
   `cancel`. `factory-run selftest` validates the setup.
@@ -231,7 +243,7 @@ working transcript in the run dir; `factory-run report` digests the telemetry,
 and `factory-run context --sessions` inventories the OpenClaw chat transcripts
 that start runs. The `self-review`
 workflow (weekly cron Sundays 17:00, or ask the bot to "review the factory")
-analyzes that evidence, posts a one-improvement plan to `#factory-builds`, and on
+analyzes that evidence, posts a one-improvement plan to `#factory-app-factory`, and on
 your approval spawns a full feature-dev run on the `app-factory` rig itself —
 implement → checks → cross-model review → **merge to main + gateway restart**.
 The harness improves itself through the same validated pipeline as the apps.
