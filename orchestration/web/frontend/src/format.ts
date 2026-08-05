@@ -44,7 +44,9 @@ export function usageLine(u: Usage | null): string | null {
 
 // "killed" is a discussion step's don't-build ending: terminal and a success
 // (early kill = money saved), styled like done — never like failed.
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
+// "awaiting-merge" is a merge-policy "review" run that finished green: terminal
+// (the founder merges factory/<id> by hand), styled as its own pending-action kind.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge"];
 
 export function isTerminal(state: string): boolean {
   return TERMINAL_STATES.includes(state);
@@ -58,6 +60,7 @@ export function stateKind(state: string): string {
   if (state === "rejected") return "warn";
   if (state === "cancelled") return "muted";
   if (state === "awaiting-approval") return "gate";
+  if (state === "awaiting-merge") return "merge";
   if (state.startsWith("running:") || state === "deploying" || state === "setup" || state === "queued" || state === "recovering") return "active";
   return "muted";
 }
@@ -73,6 +76,7 @@ export function stepStatusKind(status: string): string {
 
 export function stateLabel(state: string): string {
   if (state.startsWith("running:")) return `running ${state.slice(8)}`;
+  if (state === "awaiting-merge") return "awaiting merge";
   return state;
 }
 

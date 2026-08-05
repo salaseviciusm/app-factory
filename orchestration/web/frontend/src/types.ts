@@ -8,6 +8,25 @@ export interface Usage {
   pricedSteps: number;
 }
 
+/** The release-decision agent's verdict: which EAS mechanism the preview needs.
+ *  failSafe = the agent errored or was ambiguous, so it defaulted to build. */
+export interface ReleaseDecision {
+  kind: "build" | "update";
+  reasoning: string;
+  evidence: string[];
+  failSafe: boolean;
+  at: string;
+}
+
+/** Preview artifact state persisted in run.json (absent until published). */
+export interface RunPreview {
+  url?: string | null;
+  qrPath?: string | null;
+  kind?: "build" | "update";
+  at?: string;
+  decision?: ReleaseDecision;
+}
+
 export interface RunSummary {
   id: string;
   workflow: string;
@@ -19,6 +38,8 @@ export interface RunSummary {
   childRun: string | null;
   stepIndex: number | null;
   artifactUrl: string | null;
+  preview: RunPreview | null;
+  deployHeld: boolean;
   createdAt?: string;
   updatedAt?: string;
   worktreeMissing: boolean;
@@ -74,6 +95,7 @@ export interface WorkflowStep {
   id: string;
   type: string;
   prompt?: string;
+  agent?: string;
   model?: string;
   timeoutMinutes?: number;
   source?: string;
@@ -84,6 +106,8 @@ export interface WorkflowStep {
   planFile?: string;
   workflow?: string;
   rig?: string;
+  skipWhen?: string;
+  autoApprove?: boolean;
 }
 
 export interface Workflow {
@@ -158,6 +182,9 @@ export interface RunDetail {
   escalationMd: string | null;
   review: { verdict?: string; findings?: string[] } | null;
   checkGate: CheckGate | null;
+  releaseDecision: { kind?: string; reasoning?: string; evidence?: string[] } | null;
+  /** Per-run preview flag: "on" | "off" (explicit) or null (rig default). */
+  previewMode: "on" | "off" | null;
   stepDocs: Record<string, StepDocAttempts>;
   logs: string[];
 }

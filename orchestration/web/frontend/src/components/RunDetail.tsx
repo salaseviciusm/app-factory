@@ -5,6 +5,7 @@ import type {
   RetryClassification,
   RetryEntry,
   RunDetail as RunDetailData,
+  RunPreview,
   StepDocAttempts,
   StepDocKind,
   StepRow,
@@ -41,6 +42,11 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
   const nodes = deriveNodes(data);
   const usage = usageLine(run.usage);
   const selectedDef = workflow?.steps.find((s) => s.id === selectedStep) ?? null;
+  const gateStep =
+    workflow && run.stepIndex != null ? workflow.steps[Math.min(run.stepIndex, workflow.steps.length - 1)] : null;
+  const previewGate =
+    run.state === "awaiting-approval" && gateStep?.type === "gate" && gateStep?.skipWhen === "no-preview";
+  const hasPreviewSteps = workflow?.steps.some((s) => s.skipWhen === "no-preview") ?? false;
 
   return (
     <div className="run-detail">
@@ -82,6 +88,8 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         {error && <div className="error-box">refresh failed: {error}</div>}
       </div>
 
+      {run.state === "awaiting-merge" && <MergeBanner run={run} />}
+      {run.deployHeld && <HeldDeployPanel runId={run.id} refresh={refresh} />}
       {run.state === "awaiting-approval" &&
         (workflow?.steps[run.stepIndex ?? -1]?.type === "commands" ? (
           // A commands step only parks on awaiting-approval for a founder-gated
@@ -92,6 +100,8 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
             runId={run.id}
             planMd={data.planMd}
             isDiscussion={workflow?.steps[run.stepIndex ?? -1]?.type === "discussion"}
+            previewGate={previewGate}
+            preview={run.preview}
             refresh={refresh}
           />
         ))}
@@ -105,6 +115,7 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         <RetryPanel runId={run.id} retry={data.retry} retries={run.retries} refresh={refresh} />
       )}
       {run.state === "cancelled" && run.source !== "db" && <CancelledPanel runId={run.id} refresh={refresh} />}
+      {(run.preview || hasPreviewSteps) && !previewGate && <PreviewPanel data={data} refresh={refresh} />}
 
       {workflow ? (
         <section className="panel">
@@ -138,15 +149,196 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
 
 // ---------- gate + steering controls ----------
 
+/** Bearer-authenticated QR image: <img src> cannot carry the token, so the
+ *  bytes come via fetch and render from an object URL. */
+function QrImage({ runId, name, alt }: { runId: string; name: "qr.png" | "preview-qr.png"; alt: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let revoked: string | null = null;
+    api
+      .artifactUrl(runId, name)
+      .then((url) => {
+        revoked = url;
+        setSrc(url);
+      })
+      .catch(() => setSrc(null));
+    return () => {
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [runId, name]);
+  if (!src) return null;
+  return <img className="qr-image" src={src} alt={alt} />;
+}
+
+/** The run finished green under merge policy "review": the founder merges by hand. */
+function MergeBanner({ run }: { run: { id: string } }) {
+  return (
+    <section className="panel gate-panel">
+      <h3>🔀 Awaiting your merge</h3>
+      <p>
+        This run finished green. Merge branch <code>factory/{run.id}</code> when happy:
+      </p>
+      <pre className="doc-view">git merge factory/{run.id}</pre>
+      <p>
+        Local merge only — the engine never pushes to origin. After you merge, the next cleanup reclaims the
+        worktree and branch.
+      </p>
+    </section>
+  );
+}
+
+/** Deploy parked by policy.deploy "hold" — one tap releases it. */
+function HeldDeployPanel({ runId, refresh }: { runId: string; refresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  return (
+    <section className="panel gate-panel">
+      <h3>📦 Deploy held</h3>
+      <p>This rig's policy holds the deploy for you to release.</p>
+      <div className="gate-actions">
+        <button
+          className="btn btn-approve"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              const r = await api.deploy(runId);
+              setNotice(r.message || "Deploy released — the artifact URL lands here when it finishes.");
+              refresh();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          🚀 Release deploy
+        </button>
+      </div>
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
+/** The release-decision agent's verdict, rendered beside the preview artifact
+ *  so a wrong build-vs-update call is diagnosable. */
+function DecisionCard({ preview }: { preview: RunPreview }) {
+  const d = preview.decision;
+  if (!d) return null;
+  return (
+    <div className="decision-card">
+      <p>
+        Release decision: <Badge kind={d.kind === "build" ? "warn" : "ok"}>{d.kind}</Badge>{" "}
+        {d.failSafe && (
+          <Badge kind="fail" title="The decision agent errored, timed out, or was ambiguous — defaulted to a full build so a native change can never silently ship as an OTA update.">
+            fail-safe
+          </Badge>
+        )}
+      </p>
+      {d.reasoning && <p className="decision-reasoning">{d.reasoning}</p>}
+      {d.evidence && d.evidence.length > 0 && (
+        <details>
+          <summary>decisive evidence ({d.evidence.length})</summary>
+          <ul className="finding-list">
+            {d.evidence.map((e, i) => (
+              <li key={i}>
+                <code>{e}</code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Preview state + controls: the published artifact (link, QR, decision), the
+ *  per-run preview-mode toggle (until the preview step runs), and on-demand
+ *  publishing from the run's worktree. */
+function PreviewPanel({ data, refresh }: { data: RunDetailData; refresh: () => void }) {
+  const { run, workflow } = data;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const previewIdx = workflow ? workflow.steps.findIndex((s) => s.type === "preview") : -1;
+  const toggleable = !isTerminal(run.state) && previewIdx !== -1 && (run.stepIndex ?? 0) <= previewIdx;
+  // On-demand publish needs a live worktree to publish from; the CLI still
+  // validates the rig's deploy mechanism.
+  const canPublish = !run.worktreeMissing && run.source !== "db";
+  const preview = run.preview;
+
+  const act = async (fn: () => Promise<{ message?: string }>, note: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fn();
+      setNotice(r.message || note);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!preview && !toggleable && !canPublish) return null;
+  return (
+    <section className="panel">
+      <h3>Preview</h3>
+      {preview?.url && (
+        <p>
+          <a href={preview.url} target="_blank" rel="noreferrer" className="artifact-link">
+            📱 Open preview ({preview.kind ?? "published"})
+          </a>
+        </p>
+      )}
+      {preview?.qrPath && <QrImage runId={run.id} name="preview-qr.png" alt={`Preview QR for ${run.id}`} />}
+      {preview && <DecisionCard preview={preview} />}
+      {toggleable && (
+        <p>
+          Preview mode:{" "}
+          <strong>{data.previewMode ?? "rig default"}</strong>{" "}
+          <button className="btn btn-ghost" disabled={busy} onClick={() => act(() => api.previewMode(run.id, "on"), "Preview mode on.")}>
+            on
+          </button>{" "}
+          <button className="btn btn-ghost" disabled={busy} onClick={() => act(() => api.previewMode(run.id, "off"), "Preview mode off.")}>
+            off
+          </button>
+        </p>
+      )}
+      {canPublish && (
+        <div className="gate-actions">
+          <button
+            className="btn btn-steer"
+            disabled={busy}
+            onClick={() => act(() => api.preview(run.id), "Preview publish started — the release-decision agent picks build vs update.")}
+          >
+            📤 Publish preview now
+          </button>
+        </div>
+      )}
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
 function GatePanel({
   runId,
   planMd,
   isDiscussion,
+  previewGate,
+  preview,
   refresh,
 }: {
   runId: string;
   planMd: string | null;
   isDiscussion: boolean;
+  previewGate: boolean;
+  preview: RunPreview | null;
   refresh: () => void;
 }) {
   const [mode, setMode] = useState<"idle" | "reject" | "steer" | "edit">("idle");
@@ -175,8 +367,29 @@ function GatePanel({
 
   return (
     <section className="panel gate-panel">
-      <h3>{isDiscussion ? "💬 Plan discussion — awaiting your reply" : "⏳ Awaiting your approval"}</h3>
-      {planMd ? (
+      <h3>
+        {previewGate
+          ? "📱 Preview awaiting your approval"
+          : isDiscussion
+            ? "💬 Plan discussion — awaiting your reply"
+            : "⏳ Awaiting your approval"}
+      </h3>
+      {previewGate ? (
+        <>
+          {preview?.url ? (
+            <p>
+              <a href={preview.url} target="_blank" rel="noreferrer" className="artifact-link">
+                📱 Open preview ({preview.kind ?? "published"})
+              </a>
+            </p>
+          ) : (
+            <div className="empty-state">No preview URL captured — see deploy.log.</div>
+          )}
+          {preview?.qrPath && <QrImage runId={runId} name="preview-qr.png" alt={`Preview QR for ${runId}`} />}
+          {preview && <DecisionCard preview={preview} />}
+          <p>Approving merges and deploys per the rig's policy; rejecting ends the run without merging.</p>
+        </>
+      ) : planMd ? (
         mode === "edit" ? (
           <PlanEditor
             planMd={planMd}
@@ -199,7 +412,7 @@ function GatePanel({
       {mode === "idle" && (
         <div className="gate-actions">
           <button className="btn btn-approve" disabled={busy} onClick={() => act(() => api.approve(runId))}>
-            ✓ Approve
+            {previewGate ? "✓ Approve — merge & deploy" : "✓ Approve"}
           </button>
           {isDiscussion && (
             <button

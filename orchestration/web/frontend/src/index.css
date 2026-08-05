@@ -164,6 +164,35 @@ pre {
   border-color: var(--gate);
   animation: pulse 1.6s ease-in-out infinite;
 }
+/* awaiting-merge: the run is green and parked on the founder's manual merge —
+   a pending founder action (filled, like the gate) but calm (no pulse). */
+.badge-merge {
+  color: #0d1117;
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+/* Preview QR: large enough to scan straight off another device's screen. */
+.qr-image {
+  display: block;
+  width: min(320px, 80vw);
+  max-width: 100%;
+  margin: 12px 0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.decision-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+.decision-reasoning {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
 
 @keyframes pulse {
   50% { opacity: 0.65; }

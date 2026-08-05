@@ -11,6 +11,7 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
   const [workflow, setWorkflow] = useState("feature-dev");
   const [prompt, setPrompt] = useState("");
   const [auto, setAuto] = useState(false);
+  const [preview, setPreview] = useState<"default" | "on" | "off">("default");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +40,13 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.start({ rig: effectiveRig, workflow, prompt: prompt.trim(), auto });
+      const r = await api.start({
+        rig: effectiveRig,
+        workflow,
+        prompt: prompt.trim(),
+        auto,
+        ...(preview === "default" ? {} : { preview: preview === "on" }),
+      });
       onStarted(r.runId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -113,6 +120,17 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
           Auto mode — skip the plan approval gate (<code>--auto</code>)
         </span>
       </label>
+
+      {workflow === "feature-dev" && (
+        <label className="field">
+          <span>Preview before merge/deploy</span>
+          <select value={preview} onChange={(e) => setPreview(e.target.value as "default" | "on" | "off")}>
+            <option value="default">rig default</option>
+            <option value="on">on — publish a preview and gate on approval (--preview)</option>
+            <option value="off">off — straight to merge/deploy (--no-preview)</option>
+          </select>
+        </label>
+      )}
 
       {error && <div className="error-box">{error}</div>}
       <button type="submit" className="btn btn-primary" disabled={busy || !effectiveRig || !prompt.trim()}>
