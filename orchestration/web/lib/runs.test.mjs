@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { TERMINAL_STATES, getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
+import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
 
 const RUN_ID = "feature-test-run";
 
@@ -212,6 +212,37 @@ test("killed is a terminal state and a killed run never reads as stalled", (t) =
   const detail = getRunDetail(orchDir, RUN_ID);
   assert.equal(detail.run.state, "killed");
   assert.equal(detail.run.stalled, false);
+});
+
+test("run detail exposes retries, executor liveness, and the retry classification", (t) => {
+  const retries = [{ at: "2026-01-01T00:30:00.000Z", tier: "resume", step: "implement" }];
+  const orchDir = makeOrchDir(t, {}, {
+    state: "failed",
+    stepIndex: 2,
+    retries,
+    history: [{ state: "failed", detail: "agent step 'implement' exited 1", at: "2026-01-01T01:00:00.000Z" }],
+  });
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.deepEqual(detail.run.retries, retries);
+  // executor.pid absent → probed (failed run) but definitively not alive.
+  assert.equal(detail.run.executorAlive, false);
+  // A resume was already tried at 'implement', so the next retry is triage.
+  assert.equal(detail.retry.eligible, true);
+  assert.equal(detail.retry.tier, "triage");
+  // classifyRunRetry agrees (it backs the server's 409 pre-check)…
+  const decision = classifyRunRetry(orchDir, RUN_ID, {});
+  assert.deepEqual({ eligible: decision.eligible, tier: decision.tier }, { eligible: true, tier: "triage" });
+  // …and reports unknown runs as missing.
+  assert.equal(classifyRunRetry(orchDir, "feature-no-such-run", {}).missing, true);
+});
+
+test("terminal-success runs are not retryable and are not probed for liveness", (t) => {
+  const orchDir = makeOrchDir(t); // state "done"
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.deepEqual(detail.run.retries, []);
+  assert.equal(detail.run.executorAlive, null);
+  assert.equal(detail.retry.eligible, false);
+  assert.match(detail.retry.reason, /done/);
 });
 
 test("readRunLog serves the fixed whitelist and rejects everything else", (t) => {

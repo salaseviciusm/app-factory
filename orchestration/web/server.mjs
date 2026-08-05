@@ -22,7 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
-import { listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
+import { classifyRunRetry, listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
 import {
@@ -299,8 +299,8 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
@@ -308,6 +308,7 @@ async function handleApi(req, res, pathname, query) {
   if (state === null) return sendJson(res, 404, { error: `no such run: ${id}` });
 
   const args = [action, id];
+  let retryTier = null;
   if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
@@ -347,6 +348,18 @@ async function handleApi(req, res, pathname, query) {
       return sendJson(res, 400, { error: `reply requires non-empty 'text' (max ${PROMPT_CAP} chars)` });
     }
     args.push(text);
+  } else if (action === "retry") {
+    // Pre-classify so ineligible states come back 409 with the classifier's
+    // reason (the CLI re-checks under the same rules before acting, so a
+    // state change in between degrades to a 502, never a double execute).
+    const force = body.force === true;
+    const decision = classifyRunRetry(ORCH_DIR, id, { force });
+    if (decision.missing) return sendJson(res, 404, { error: decision.reason });
+    if (!decision.eligible) {
+      return sendJson(res, 409, { error: decision.reason, needsForce: decision.needsForce === true });
+    }
+    retryTier = decision.tier;
+    if (force) args.push("--force");
   }
 
   const r = await factoryRun(args);
@@ -354,7 +367,11 @@ async function handleApi(req, res, pathname, query) {
   if (!r.ok) {
     return sendJson(res, 502, { error: `factory-run ${action} failed: ${(r.stderr || r.stdout).slice(0, 400)}` });
   }
-  return sendJson(res, 200, { ok: true, message: r.stdout.trim().slice(0, 400) });
+  return sendJson(res, 200, {
+    ok: true,
+    ...(retryTier ? { tier: retryTier } : {}),
+    message: r.stdout.trim().slice(0, 400),
+  });
 }
 
 // ---------- static frontend (dist/ only, traversal-proof) ----------

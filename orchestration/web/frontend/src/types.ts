@@ -23,8 +23,29 @@ export interface RunSummary {
   updatedAt?: string;
   worktreeMissing: boolean;
   stalled: boolean;
+  /** Founder-initiated retries recorded in run.json, oldest first. */
+  retries: RetryEntry[];
+  /** Executor pid liveness — probed only for failed/stalled runs, null elsewhere. */
+  executorAlive: boolean | null;
   source: "dir" | "db" | "both";
   usage: Usage | null;
+}
+
+/** One recorded retry: which tier ran, at which workflow step. */
+export interface RetryEntry {
+  at: string;
+  tier: "resume" | "triage";
+  step: string | null;
+}
+
+/** Force-less retry classification for the detail page's Retry button. */
+export interface RetryClassification {
+  eligible: boolean;
+  tier: "resume" | "triage" | null;
+  reason: string;
+  /** Only a live executor blocks the retry — confirm, then send force: true. */
+  needsForce?: boolean;
+  killExecutor?: boolean;
 }
 
 export interface StepRow {
@@ -111,6 +132,7 @@ export interface RunDetail {
   artifacts: ArtifactRow[];
   workflow: Workflow | null;
   recovery: Recovery | null;
+  retry: RetryClassification | null;
   planMd: string | null;
   findingsMd: string | null;
   steeringMd: string | null;

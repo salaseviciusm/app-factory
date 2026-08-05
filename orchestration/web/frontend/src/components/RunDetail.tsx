@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import type { RunDetail as RunDetailData, StepDocAttempts, StepDocKind, StepRow, WorkflowStep } from "../types";
+import type {
+  RetryClassification,
+  RetryEntry,
+  RunDetail as RunDetailData,
+  StepDocAttempts,
+  StepDocKind,
+  StepRow,
+  WorkflowStep,
+} from "../types";
 import { usePolling } from "../hooks/usePolling";
 import { NodeGraph } from "../graph/NodeGraph";
 import { Badge } from "./Badge";
@@ -46,8 +54,8 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
           <Badge kind="muted">{run.workflow}</Badge>
           {run.auto && <Badge kind="muted">auto</Badge>}
           {run.stalled && (
-            <Badge kind="warn" title="No state update in over 10 minutes — the executor may be dead.">
-              stalled? try: factory-run resume {run.id}
+            <Badge kind="warn" title="No state update in over 10 minutes — the executor may be dead. Use the Retry button below.">
+              stalled?
             </Badge>
           )}
           {data.recovery && data.recovery.iterations > 0 && (
@@ -83,6 +91,9 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
       )}
       {!isTerminal(run.state) && run.state !== "awaiting-approval" && (
         <ActionBar runId={run.id} refresh={refresh} />
+      )}
+      {(run.state === "failed" || run.stalled) && data.retry && (
+        <RetryPanel runId={run.id} retry={data.retry} retries={run.retries} refresh={refresh} />
       )}
 
       {workflow ? (
@@ -296,6 +307,86 @@ function ActionBar({ runId, refresh }: { runId: string; refresh: () => void }) {
             </button>
           </div>
         </div>
+      )}
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
+/** One-tap recovery for failed/stalled runs. The server pre-classified which
+ *  tier a retry would run (plain resume vs OpenClaw triage handoff) — the
+ *  button states it up front; a still-live executor asks for confirmation
+ *  before sending force: true (kill, then resume). */
+function RetryPanel({
+  runId,
+  retry,
+  retries,
+  refresh,
+}: {
+  runId: string;
+  retry: RetryClassification;
+  retries: RetryEntry[];
+  refresh: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const act = async (force: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.retry(runId, force);
+      setNotice(
+        r.tier === "triage"
+          ? "Handed to OpenClaw triage — it investigates, then fixes and resumes or posts options in Slack."
+          : "Resumed — the executor restarts at the current step."
+      );
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRetry = () => {
+    if (retry.needsForce) {
+      if (window.confirm(`${retry.reason}\n\nForce retry kills the executor, then resumes. Continue?`)) {
+        void act(true);
+      }
+      return;
+    }
+    void act(false);
+  };
+
+  return (
+    <section className="panel action-bar">
+      <h3>Retry</h3>
+      {retry.eligible || retry.needsForce ? (
+        <>
+          <div className="gate-actions">
+            <button className="btn btn-approve" disabled={busy} onClick={onRetry}>
+              ↻ Retry{retry.needsForce ? " (force)…" : ""}
+            </button>
+          </div>
+          <p className="run-links">
+            {retry.needsForce
+              ? "The executor is still alive — retrying asks for confirmation, then kills it and resumes."
+              : retry.tier === "triage"
+                ? `Will hand the run to OpenClaw triage: ${retry.reason}.`
+                : `Will resume the run: ${retry.reason}.`}
+          </p>
+        </>
+      ) : (
+        <p className="run-links">Retry unavailable: {retry.reason}</p>
+      )}
+      {retries.length > 0 && (
+        <p className="run-links">
+          {retries.length} prior retr{retries.length === 1 ? "y" : "ies"}:{" "}
+          {retries.map((r) => `${r.tier} at ${r.step ?? "?"} (${fmtWhen(r.at)})`).join(", ")}
+        </p>
       )}
       {notice && <div className="notice-box">{notice}</div>}
       {error && <div className="error-box">{error}</div>}
