@@ -1796,6 +1796,12 @@ function handleRecovery(run, workflow, deployDef, result) {
     const fail = (outcome, summary, notice) => {
       if (last) last.outcome = outcome;
       if (rebaseInProgress(run.worktree)) runCommand("git rebase --abort", run.worktree, logFile, 2);
+      // The resolver may have rewritten the branch before failing (e.g. a
+      // completed-but-off-target rebase): reconcile origin and the recorded
+      // commit artifacts with whatever HEAD the run terminates on, so a
+      // failed run never leaves unpushed local-only shas behind.
+      pushRunBranch(run);
+      recordCommits(run);
       try {
         tStep(id, RESOLVE_STEP.id, r.attempt, "fail", summary, started, r.usage);
       } catch {}
@@ -3039,6 +3045,9 @@ function cmdSelftest() {
   // prompts must push per commit (never forbid it) but never switch branches.
   const pushCmd = pushRunBranchCommand("bug-selftest");
   const stepPrompt = (name) => fs.readFileSync(path.join(ORCH_DIR, "prompts", `${name}.md`), "utf8");
+  // The resolver's fail() helper terminates the run: it must reconcile origin
+  // and the recorded shas first, or a failed run strands local-only commits.
+  const resolveFailSrc = (fs.readFileSync(__filename, "utf8").match(/const fail = \(outcome[\s\S]*?return null;\s*\};/) || [""])[0];
   const pushChecks = [
     ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
     ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
@@ -3047,6 +3056,8 @@ function cmdSelftest() {
       const p = stepPrompt(n);
       return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches");
     })],
+    ["resolver failure paths push the branch before terminating", resolveFailSrc.includes("pushRunBranch(run)")],
+    ["resolver failure paths re-record commits", resolveFailSrc.includes("recordCommits(run)")],
   ];
   for (const [name, ok] of pushChecks) {
     console.log(`push ${name}: ${ok ? "ok" : "FAIL"}`);
