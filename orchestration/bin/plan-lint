@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+/*
+ * plan-lint: validate a plan markdown file against the strict plan profile
+ * (web/lib/plan-md.mjs — the same core the engine runs after the plan step and
+ * each plan-discussion turn). Prints line-numbered problems and exits 1 on any
+ * violation; exits 0 on a conforming plan. Zero npm dependencies (CJS
+ * require(esm), the bin/factory-run pattern).
+ *
+ * Usage: plan-lint <file>
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+const { lintPlan } = require(path.join(__dirname, "..", "web", "lib", "plan-md.mjs"));
+
+const file = process.argv[2];
+if (!file || file === "--help" || file === "-h") {
+  console.error("usage: plan-lint <plan.md>");
+  process.exit(file ? 0 : 2);
+}
+
+let text;
+try {
+  text = fs.readFileSync(file, "utf8");
+} catch (err) {
+  console.error(`plan-lint: cannot read ${file}: ${err.message}`);
+  process.exit(2);
+}
+
+const problems = lintPlan(text);
+if (problems.length) {
+  for (const p of problems) console.error(`${file}:${p.line}: ${p.message}`);
+  console.error(`\nplan-lint: ${problems.length} problem(s) — the plan profile is spelled out in orchestration/prompts/planner.md`);
+  process.exit(1);
+}
+console.log(`plan-lint: ${file} conforms to the plan profile`);

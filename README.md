@@ -99,7 +99,7 @@ treats setup as complete) and delete `BOOTSTRAP.md`.
 **Verify:** in the OpenClaw Control UI / WebChat (it prints its local URL; default port
 18789) or via CLI (`openclaw agent --agent main --session-id verify -m "..."`), send:
 `who are you and what skills do you have?` — it should answer as the
-App Factory Chief of Staff and list the five `factory-*` skills.
+App Factory Chief of Staff and list the eight `factory-*` skills.
 
 ### Step 4 — Connect Slack
 
@@ -215,7 +215,9 @@ voice note saying "status" and watch the transcript + reply.
 
 **Factory web console:** a phone-friendly web UI over the same engine — run
 list, per-run node graph with step telemetry (cost/tokens/duration), start
-runs, and the full gate loop (approve / reject with feedback / steer / cancel):
+runs, the full gate loop (approve / reject with feedback / steer / cancel),
+and one-tap Retry for failed or stuck runs (plain resume first; repeat or
+unresumable failures hand off to an OpenClaw triage session):
 
 ```sh
 orchestration/bin/factory-web        # builds the frontend on first launch,

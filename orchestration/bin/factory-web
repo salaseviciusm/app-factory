@@ -50,7 +50,13 @@ function run(cmd, args, cwd) {
 
 if (argv.includes("--rebuild") || !fs.existsSync(DIST_INDEX)) {
   console.log("building frontend (orchestration/web/frontend)...");
-  if (!fs.existsSync(path.join(FRONTEND_DIR, "node_modules"))) {
+  // Sync deps before every build: an existing node_modules proves nothing (a
+  // merge can add packages to a machine with a stale tree). `npm ci` keeps the
+  // tree lockfile-reproducible; fall back to `npm install` when the lockfile
+  // is absent or out of sync with package.json.
+  const ci = spawnSync("npm", ["ci", "--no-fund", "--no-audit"], { cwd: FRONTEND_DIR, stdio: "inherit" });
+  if (ci.status !== 0) {
+    console.error("npm ci failed; falling back to npm install");
     run("npm", ["install", "--no-fund", "--no-audit"], FRONTEND_DIR);
   }
   run("npm", ["run", "build"], FRONTEND_DIR);

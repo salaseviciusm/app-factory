@@ -16,6 +16,11 @@
  *                                        (restart a stopped/failed/cancelled run's
  *                                         executor, optionally rewound to an
  *                                         earlier step)
+ *   factory-run retry <run_id> [--force] (failed/stuck run recovery: first retry at
+ *                                         a step plain-resumes; repeats and
+ *                                         resume-can't-fix failures hand off to an
+ *                                         OpenClaw triage session. --force kills a
+ *                                         still-live executor first)
  *   factory-run status [<run_id>] [--json]
  *   factory-run list [--json]
  *   factory-run approve <run_id>
@@ -62,6 +67,20 @@ const {
   lastActivityAt: discussionLastActivity,
   resolveOutcome,
 } = require(path.join(ORCH_DIR, "web", "lib", "discussion.mjs"));
+// Plan-profile lint core (strict plan markdown contract) — same web-lib
+// require(esm) pattern; bin/plan-lint wraps it for agents' self-checks.
+const { lintPlan } = require(path.join(ORCH_DIR, "web", "lib", "plan-md.mjs"));
+// Retry pure core (stall predicate, executor-command matcher, eligibility/tier
+// classifier) — same web-lib pattern, shared with the server and its tests.
+// TERMINAL_STATES lives there too so all three consumers agree; "killed" is
+// the discussion step's don't-build ending: terminal and a SUCCESS (early
+// kill = money saved), never rendered as a failure.
+const {
+  TERMINAL_STATES,
+  classifyRetry,
+  matchesExecutor,
+  lastFailureDetail,
+} = require(path.join(ORCH_DIR, "web", "lib", "retry.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -109,10 +128,6 @@ function tRun(run) {
     )
     .run(run.id, run.workflow, run.rig, run.prompt, run.state, run.auto ? 1 : 0, run.parentRun || null, run.createdAt);
 }
-
-// "killed" is the discussion step's don't-build ending: terminal and a
-// SUCCESS (early kill = money saved), never rendered as a failure.
-const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
 
 function tRunState(run) {
   const terminal = TERMINAL_STATES.includes(run.state);
@@ -484,63 +499,6 @@ function interruptedStepOf(state) {
   return null;
 }
 
-/** Drop the recorded executor pid on the way out — only our own pid, and only
- *  by re-reading disk, so a terminal state written by cancel while we ran is
- *  never clobbered. */
-function clearExecutorPid(id) {
-  try {
-    const run = loadRun(id);
-    if (run.executorPid === process.pid) {
-      delete run.executorPid;
-      delete run.executorStartedAt;
-      saveRun(run);
-    }
-  } catch {
-    /* run dir pruned mid-run: nothing to clear */
-  }
-}
-
-// Grace between cancel's SIGTERM and the SIGKILL escalation for survivors.
-const CANCEL_GRACE_MS = 8000;
-
-/** Terminate a run's recorded executor process group: the executor (a group
- *  leader — detachExec spawns it detached) plus every spawnSync child and
- *  grandchild, which inherit the group. Verifies the pid is still this run's
- *  executor before signalling (pid reuse must never kill an unrelated
- *  process): SIGTERM the group, wait a bounded grace, SIGKILL survivors.
- *  Returns true when a live executor group was signalled; a missing, stale, or
- *  dead pid returns false — cancel of a queued or already-finished run stays a
- *  pure state flip. */
-function terminateRunProcesses(run) {
-  const pid = run.executorPid;
-  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
-  let cmd;
-  try {
-    cmd = sh(`ps -o command= -p ${pid}`);
-  } catch {
-    return false; // pid not running: nothing to terminate
-  }
-  if (!new RegExp(`factory-run\\s+exec\\s+${run.id}(\\s|$)`).test(cmd)) return false;
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    return false;
-  }
-  const deadline = Date.now() + CANCEL_GRACE_MS;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(-pid, 0);
-    } catch {
-      return true; // whole group gone
-    }
-    execSync("sleep 0.5");
-  }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {}
-  return true;
-}
-
 // ---------- notifications (OpenClaw -> Slack) ----------
 
 /** Resolve ${VAR} placeholders from the environment or openclaw/secrets.env (IDs stay out of git). */
@@ -691,6 +649,7 @@ function renderPrompt(step, run, extra) {
   let rendered = tpl
     .replaceAll("{{PROMPT}}", run.prompt)
     .replaceAll("{{RUN_DIR}}", runDir)
+    .replaceAll("{{ORCH_DIR}}", ORCH_DIR)
     .replaceAll("{{BASE_BRANCH}}", run.baseBranch)
     .replaceAll("{{STEERING}}", steering)
     .replaceAll("{{FINDINGS}}", findings);
@@ -892,6 +851,36 @@ function evaluateReview(run) {
   return { ok: false, summary: `agentic review FAIL (${(review.findings || []).length} findings)` };
 }
 
+/** Validate the run's plan.md against the strict plan profile (plan-md.mjs).
+ *  The web console renders plans from this contract, so a violating plan must
+ *  never survive the step that wrote it: on failure the line-numbered problems
+ *  land in findings.md (archived like review findings) and the attempt fails,
+ *  so the existing findings/retry loop re-prompts the writing agent with
+ *  {{FINDINGS}} injected. On success stale lint findings are cleared exactly
+ *  like a review PASS. */
+function evaluatePlanMd(run, label) {
+  const runDir = runDirOf(run.id);
+  const planPath = path.join(runDir, "plan.md");
+  const problems = fs.existsSync(planPath)
+    ? lintPlan(fs.readFileSync(planPath, "utf8"))
+    : [{ line: 1, message: "plan.md was not written" }];
+  if (problems.length === 0) {
+    archiveFindings(runDir);
+    fs.rmSync(path.join(runDir, "findings.md"), { force: true });
+    return { ok: true, summary: `plan.md conforms to the plan profile (${label})` };
+  }
+  const list = problems.map((p, i) => `${i + 1}. plan.md line ${p.line}: ${p.message}`).join("\n");
+  fs.writeFileSync(
+    path.join(runDir, "findings.md"),
+    `Plan markdown validation FAILED (${label}).\n\n` +
+      `\`${planPath}\` must follow the strict plan profile from your prompt. Fix every finding, ` +
+      `self-check with \`node ${path.join(ORCH_DIR, "bin", "plan-lint")} ${planPath}\`, and re-complete your task.\n\n` +
+      `Findings:\n\n${list}\n`
+  );
+  archiveFindings(runDir);
+  return { ok: false, summary: `plan lint FAIL ${label}: ${problems.length} problem(s)` };
+}
+
 /** Record the run branch's commits as telemetry artifacts (idempotent-ish: replaces prior rows). */
 function recordCommits(run) {
   try {
@@ -1004,25 +993,44 @@ function runDiscussionStep(run, step) {
   // turn — an unsent turn is the invisible-gate failure mode, so fail loud.
   // Turn telemetry is recorded here (telemetryDone), one ok row per attempt.
   const runTurn = () => {
-    const replies = readReplies();
-    const started = nowIso();
-    setState(run, `running:${step.id}`, `discussion turn ${turns.length + 1}/${maxTurns}`);
-    const r = runAgentStep(run, step, {
-      "{{DISCUSSION}}": assembleConversation(turns, replies),
-      "{{TURN}}": String(turns.length + 1),
-      "{{MAX_TURNS}}": String(maxTurns),
-    });
-    consumed = replies.length;
-    try {
-      tStep(id, step.id, r.attempt, r.ok ? "ok" : "fail", r.summary, started, r.usage);
-    } catch {}
-    if (!r.ok) return r;
-    turns = readDiscussionTurns(runDir, step.id);
+    for (let lintRetried = false; ; lintRetried = true) {
+      const replies = readReplies();
+      const started = nowIso();
+      setState(run, `running:${step.id}`, `discussion turn ${turns.length + 1}/${maxTurns}`);
+      const r = runAgentStep(run, step, {
+        "{{DISCUSSION}}": assembleConversation(turns, replies),
+        "{{TURN}}": String(turns.length + 1),
+        "{{MAX_TURNS}}": String(maxTurns),
+      });
+      consumed = replies.length;
+      try {
+        tStep(id, step.id, r.attempt, r.ok ? "ok" : "fail", r.summary, started, r.usage);
+      } catch {}
+      if (!r.ok) return r;
+      turns = readDiscussionTurns(runDir, step.id);
+      // Plan discussions rewrite plan.md each turn; a turn that leaves it
+      // violating the plan profile must not reach the founder (the web console
+      // renders from that contract). Findings re-prompt exactly one retry turn
+      // (attempt-numbered like any turn), then the step fails loudly.
+      if (step.prompt === "plan-discussion") {
+        const v = evaluatePlanMd(run, `after discussion turn ${turns.length}`);
+        if (!v.ok) {
+          log(runDir, `${v.summary} — ${lintRetried ? "failing the step" : "re-prompting one retry turn with findings"}`);
+          if (!lintRetried) continue;
+          return { ok: false, summary: v.summary };
+        }
+      }
+      return postTurn(r.summary);
+    }
+  };
+
+  /** Post a validated turn to the founder and park the run on the reply. */
+  const postTurn = (turnText) => {
     const opening = turns.length === 1 ? ` (${run.workflow} on ${run.rig})` : "";
     const sent = notify(
       run,
       `:speech_balloon: Run ${id}${opening} — *${step.id}* turn ${turns.length}/${maxTurns}:\n\n` +
-        (r.summary || "").slice(0, 2800) +
+        (turnText || "").slice(0, 2800) +
         `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
         `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
     );
@@ -1130,6 +1138,29 @@ function classifyWebRestart(files) {
     restart: owned.length > 0,
     rebuildFrontend: owned.some((f) => f.startsWith("orchestration/web/frontend/")),
   };
+}
+
+// The exact dep-sync + build command for a harness-merge frontend rebuild
+// (single source of truth, exercised by selftest): `npm ci` for lockfile
+// reproducibility, `npm install` fallback when the lockfile is absent or out
+// of sync with package.json. Run synchronously into deploy.log — a detached
+// build inside factory-web races factory-web-up's short readiness wait and
+// hides the real error.
+const WEB_FRONTEND_DIR = "orchestration/web/frontend";
+const WEB_FRONTEND_BUILD_CMD =
+  "(npm ci --no-fund --no-audit || npm install --no-fund --no-audit) && npm run build";
+
+/** Pure decision core for judging the harness-merge web-console restart
+ *  (exercised by selftest). `buildOk` is true when no rebuild was needed. A
+ *  failed build must fail the outcome even if the console answers (it would be
+ *  serving the stale pre-merge frontend). */
+function classifyWebRestartOutcome({ buildOk, downOk, upOk, upOutput }) {
+  if (!buildOk) return { ok: false, reason: "frontend build failed" };
+  if (!downOk) return { ok: false, reason: "factory-web-down failed" };
+  if (!upOk || !upOutput.includes(": up at ")) {
+    return { ok: false, reason: "web console did not come back up" };
+  }
+  return { ok: true, reason: "restarted" };
 }
 
 // Deploy-time base-drift recovery (harness-merge only): concurrent runs land
@@ -1276,17 +1307,37 @@ function deployStep(run, rig) {
     if (!web.restart) {
       return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
     }
-    if (web.rebuildFrontend) runCommand("rm -rf orchestration/web/frontend/dist", rig.path, logFile, 2);
+    // Rebuild synchronously BEFORE the restart: factory-web-up's readiness
+    // wait cannot cover a dep install + build, and a failed build must land in
+    // deploy.log with its exit code, not vanish into a detached server.log.
+    // On success vite refreshes dist/ itself; on failure the old dist stays so
+    // the console restarts on the stale-but-working frontend.
+    let build = { ok: true, output: "" };
+    if (web.rebuildFrontend) {
+      log(runDir, `deploy: rebuilding web frontend (${WEB_FRONTEND_BUILD_CMD})`);
+      build = runCommand(WEB_FRONTEND_BUILD_CMD, path.join(rig.path, WEB_FRONTEND_DIR), logFile, 15);
+    }
     const down = runCommand("orchestration/bin/factory-web-down", rig.path, logFile, 5);
     const up = runCommand("orchestration/bin/factory-web-up", rig.path, logFile, 10);
-    if (down.ok && up.ok && up.output.includes(": up at ")) {
+    const outcome = classifyWebRestartOutcome({ buildOk: build.ok, downOk: down.ok, upOk: up.ok, upOutput: up.output });
+    if (outcome.ok) {
+      if (run.deployWarning) {
+        delete run.deployWarning;
+        saveRun(run);
+      }
       return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway + web console`, url: null };
     }
     // The merge is durable and already on the default branch, so the deploy
-    // stays ok — but the summary must not read as a clean deploy.
+    // stays ok (no bogus recovery) — but the failure must reach the founder
+    // immediately and again in the final notify step, not just deploy.log.
+    const warning = `web console restart FAILED after harness merge (${sha}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
+    run.deployWarning = warning;
+    saveRun(run);
+    const tail = (build.ok ? up.output : build.output).split("\n").filter(Boolean).slice(-15).join("\n").slice(-1500);
+    notify(run, `:rotating_light: Run ${run.id} (${run.rig}): ${warning}${tail ? `\n\`\`\`\n${tail}\n\`\`\`` : ""}`);
     return {
       ok: true,
-      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED — restart manually with factory-web-up, see deploy.log`,
+      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED (${outcome.reason}) — restart manually with factory-web-up, see deploy.log`,
       url: null,
     };
   }
@@ -1787,13 +1838,6 @@ function execRun(id) {
       log(runDir, `run is already '${run.state}'; executor exiting`);
       return;
     }
-    // Record the executor's pid: detachExec spawns it detached, so it leads
-    // its own process group (pgid == pid) and every spawnSync child (claude,
-    // bash, eas) inherits that group — this pid is cancel's handle for
-    // terminating the whole tree. Cleared on every exit path (finally below).
-    run.executorPid = process.pid;
-    run.executorStartedAt = nowIso();
-    saveRun(run);
     tRun(run);
     // Preflight before any worktree or agent step: fail fast on broken external
     // CLI contracts (resumes re-verify too — a resume after a hot-patch was
@@ -1864,6 +1908,12 @@ function execRun(id) {
         if (result.ok && step.id === "review") {
           result = { ...evaluateReview(run), attempt: result.attempt, usage: result.usage };
         }
+        if (result.ok && step.id === "plan") {
+          // The web console renders plan.md from the strict plan profile — a
+          // violating plan fails the attempt (findings.md written) so the
+          // workflow's onFail loop re-runs the plan step with findings.
+          result = { ...evaluatePlanMd(run, "after the plan step"), attempt: result.attempt, usage: result.usage };
+        }
         if (result.ok && step.id === "implement") recordCommits(run);
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
@@ -1898,6 +1948,7 @@ function execRun(id) {
           run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : "No deployable artifact for this rig.",
           `Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (or ask the chief of staff).`,
         ];
+        if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
         const usage = usageLine(id);
         if (usage) lines.push(usage);
         notify(run, lines.join("\n"), run.qrPath);
@@ -2042,8 +2093,6 @@ function execRun(id) {
       notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
     }
     throw err;
-  } finally {
-    clearExecutorPid(id);
   }
 }
 
@@ -2410,6 +2459,61 @@ function detachExec(id) {
     stdio: ["ignore", out, out],
   });
   child.unref();
+  // Executor pid record (executor.pid, not run.json — the child executor
+  // rewrites run.json and would race this write away) for the retry/resume
+  // double-execute guard. A stale file after a normal exit is harmless:
+  // liveness is always re-verified against the pid's live command line.
+  fs.writeFileSync(path.join(runDirOf(id), "executor.pid"), `${child.pid}\n`);
+  return child.pid;
+}
+
+/** Liveness of the run's recorded executor pid: the pid must exist AND its
+ *  `ps` command line must still be this run's `factory-run exec` invocation
+ *  (pid-reuse guard — a recycled pid never counts, and is never killed). */
+function executorStatus(id) {
+  let pid = null;
+  try {
+    pid = parseInt(fs.readFileSync(path.join(runDirOf(id), "executor.pid"), "utf8").trim(), 10) || null;
+  } catch {}
+  if (!pid || pid < 1) return { alive: false, pid: null };
+  const res = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return { alive: res.status === 0 && matchesExecutor(res.stdout, id), pid };
+}
+
+/** Terminate a run's live executor (cancel; forced retry of a stuck run) and
+ *  everything it spawned. detachExec starts the executor detached, so it leads
+ *  its own process group and every spawnSync child and grandchild (claude,
+ *  bash, eas) inherits it — signalling -pid reaps the whole tree, not just the
+ *  executor blocked in spawnSync. SIGTERM the group, brief wait, SIGKILL
+ *  survivors. Callers verify executorStatus(id).alive first, so a stale or
+ *  recycled pid is never signalled. Returns true when the executor is gone. */
+function killExecutor(id, pid) {
+  const signalGroup = (sig) => {
+    try {
+      process.kill(-pid, sig);
+    } catch {
+      // Not a group leader (a foreground `factory-run exec`): direct pid only.
+      try {
+        process.kill(pid, sig);
+      } catch {}
+    }
+  };
+  signalGroup("SIGTERM");
+  for (let i = 0; i < 20 && executorStatus(id).alive; i++) execSync("sleep 0.3");
+  if (executorStatus(id).alive) {
+    signalGroup("SIGKILL");
+    execSync("sleep 0.3");
+  } else {
+    // Leader gone: reap group stragglers that ignored SIGTERM (ESRCH here
+    // just means the whole group already exited).
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {}
+  }
+  return !executorStatus(id).alive;
 }
 
 /** Pure core of `resume --step/--back` (exercised by selftest): the stepIndex
@@ -2439,6 +2543,16 @@ function cmdResume(argv) {
     console.error(`run ${id} is ${run.state}; nothing to resume`);
     process.exit(1);
   }
+  // Double-execute guard: resuming past a live executor would run the step
+  // loop twice against the same worktree.
+  const ex = executorStatus(id);
+  if (ex.alive) {
+    console.error(
+      `run ${id} already has a live executor (pid ${ex.pid}) — resuming would double-execute. ` +
+        `Use 'factory-run retry ${id} --force' to kill it and resume.`
+    );
+    process.exit(1);
+  }
   const wf = loadWorkflow(run.workflow);
   const idx = resolveResumeStep(
     wf.steps.map((s) => s.id),
@@ -2457,6 +2571,119 @@ function cmdResume(argv) {
   );
   detachExec(id);
   console.log(`resumed ${id} at step ${idx} (${wf.steps[Math.min(idx, wf.steps.length - 1)].id})`);
+}
+
+// ---------- retry (failed & stuck runs; two tiers, one command) ----------
+//
+// Tier selection is classifyRetry (web/lib/retry.mjs): a first retry at the
+// current step plain-resumes; a repeat retry, or a failure a resume cannot fix
+// (preflight failure, recovery-cap escalation, escalation.md, missing
+// worktree), hands the run to the OpenClaw chief of staff as a triage session.
+// Stuck (stalled non-terminal) runs additionally gate on executor liveness:
+// killing a live executor requires --force.
+
+/**
+ * The exact `openclaw agent` triage-dispatch argv. Single source of truth
+ * like notifyArgs: the real dispatch and the CLI-absent log line both derive
+ * from it.
+ */
+function triageArgs(runId, brief) {
+  return ["agent", "--agent", "main", "--session-id", `factory-triage-${runId}`, "-m", brief];
+}
+
+function triageBrief(run, stepId, why) {
+  const runDir = runDirOf(run.id);
+  return [
+    `Factory triage handoff for run ${run.id} (${run.workflow} on ${run.rig}), state '${run.state}', step '${stepId}'.`,
+    `Why triage instead of a plain resume: ${why}.`,
+    `Follow your factory-triage skill. Gather evidence first: \`factory-run status ${run.id} --json\`, \`factory-run context ${run.id}\`, and the run dir logs in ${runDir} (engine.log, executor.log, step logs, findings.md, escalation.md).`,
+    `If the evidence clearly indicates a fix: apply it, then \`factory-run resume ${run.id}\` (add --step <step-id> only when the evidence clearly points at an earlier step).`,
+    `If the right fix is unclear: post the options to the founder in the rig's Slack channel and stop. Never guess; never approve or reject gates yourself.`,
+  ].join("\n");
+}
+
+/** Fire-and-forget OpenClaw triage handoff: detached, stdin ignored (the
+ *  openclaw CLI hangs on a TTY check otherwise), output to triage.log. When
+ *  the CLI is absent the exact dispatch is logged instead — offline/test
+ *  environments still see precisely what would have run. Returns true when a
+ *  session was actually dispatched. */
+function dispatchTriage(run, stepId, why) {
+  const runDir = runDirOf(run.id);
+  const brief = triageBrief(run, stepId, why);
+  const args = triageArgs(run.id, brief);
+  if (spawnSync("which", ["openclaw"], { encoding: "utf8" }).status !== 0) {
+    log(runDir, `triage dispatch skipped (openclaw CLI not on PATH); would run: openclaw ${args.slice(0, -1).join(" ")} '${brief.split("\n")[0]} …'`);
+    return false;
+  }
+  const out = fs.openSync(path.join(runDir, "triage.log"), "a");
+  const child = spawn("openclaw", args, { detached: true, stdio: ["ignore", out, out] });
+  child.unref();
+  log(runDir, `triage dispatched: openclaw agent session factory-triage-${run.id} (pid ${child.pid})`);
+  return true;
+}
+
+function cmdRetry(argv) {
+  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+  const force = argv.includes("--force");
+  const run = loadRun(id);
+  const runDir = runDirOf(id);
+  let stepId = null;
+  try {
+    const wf = loadWorkflow(run.workflow);
+    stepId = wf.steps[Math.min(run.stepIndex || 0, wf.steps.length - 1)].id;
+  } catch {}
+  const ex = executorStatus(id);
+  const decision = classifyRetry(run, {
+    now: Date.now(),
+    stepId,
+    escalationPresent: fs.existsSync(path.join(runDir, "escalation.md")),
+    worktreeMissing: Boolean(run.worktree) && !fs.existsSync(run.worktree),
+    executorAlive: ex.alive,
+    executorPid: ex.pid,
+    force,
+    lastFailure: lastFailureDetail(run.history || []),
+  });
+  if (!decision.eligible) {
+    console.error(`cannot retry ${id}: ${decision.reason}`);
+    process.exit(1);
+  }
+  if (decision.killExecutor) {
+    if (!killExecutor(id, ex.pid)) {
+      console.error(`could not terminate executor pid ${ex.pid}; retry aborted`);
+      process.exit(1);
+    }
+    log(runDir, `retry --force: terminated live executor pid ${ex.pid}`);
+  }
+  // Record the retry before acting: the tier history is what escalates the
+  // NEXT retry at this step to triage, so it must survive whatever happens.
+  if (!Array.isArray(run.retries)) run.retries = [];
+  const at = nowIso();
+  run.retries.push({ at, tier: decision.tier, step: stepId });
+  run.updatedAt = at;
+  run.history.push({ state: run.state, detail: `retry (${decision.tier} tier) at step '${stepId}': ${decision.reason}`, at });
+  saveRun(run);
+  if (decision.tier === "resume") {
+    log(runDir, `retry: plain resume at step '${stepId}' (${decision.reason})`);
+    // Requeue before detaching: the executor refuses to run a terminal-on-disk
+    // run (cancel's step-boundary check), and 'failed' is terminal.
+    if (TERMINAL_STATES.includes(run.state)) {
+      setState(run, "queued", `retry requeued from '${run.state}'`);
+    }
+    detachExec(id);
+    console.log(`retry (resume tier): ${id} resumed at step ${run.stepIndex || 0} (${stepId})`);
+    return;
+  }
+  const dispatched = dispatchTriage(run, stepId, decision.reason);
+  notify(
+    run,
+    `:ambulance: Run ${id} handed to OpenClaw triage (session \`factory-triage-${id}\`): ${decision.reason}.\n` +
+      `The triage agent gathers evidence, then either fixes and resumes, or posts the options here for you to decide.`
+  );
+  console.log(
+    dispatched
+      ? `retry (triage tier): dispatched OpenClaw session factory-triage-${id} — ${decision.reason}`
+      : `retry (triage tier): openclaw CLI not on PATH — dispatch logged to engine.log only (${decision.reason})`
+  );
 }
 
 /** Machine-readable step/gate facts for `status --json`, so consumers (the
@@ -2565,13 +2792,17 @@ function cmdCancel(id) {
   const priorState = run.state;
   // Kill first, write second: an executor blocked in a spawnSync'd step cannot
   // observe run.json, and its post-step writes would clobber the cancelled
-  // state — so nothing may be left alive to write.
-  const killed = terminateRunProcesses(run);
+  // state — so nothing may be left alive to write. executorStatus verifies the
+  // recorded pid is still this run's executor (pid-reuse guard) before the
+  // group kill; a queued or already-exited run stays a pure state flip.
+  const ex = executorStatus(id);
+  const killed = ex.alive ? killExecutor(id, ex.pid) : false;
+  if (ex.alive && !killed) {
+    console.error(`warning: executor pid ${ex.pid} survived the kill; state is cancelled and the executor exits at the next boundary check`);
+  }
   const runDir = runDirOf(id);
   // Reload after the kill so any write the executor got in before dying is kept.
   const fresh = loadRun(id);
-  delete fresh.executorPid;
-  delete fresh.executorStartedAt;
   const step = interruptedStepOf(priorState);
   setState(
     fresh,
@@ -2727,6 +2958,23 @@ function cmdSelftest() {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart check failed: ${name}`);
   }
+  // Harness-merge restart outcome core (pure) + the rebuild command contract:
+  // deps must sync (npm ci, npm install fallback) before the frontend build,
+  // and a failed build/restart must never read as a clean deploy.
+  const wro = (over) =>
+    classifyWebRestartOutcome({ buildOk: true, downOk: true, upOk: true, upOutput: "factory-web: up at http://127.0.0.1:4620 · tailnet: already serving", ...over });
+  const webOutcomeChecks = [
+    ["rebuild syncs deps before building", /npm ci .*\|\| npm install .*&& npm run build/.test(WEB_FRONTEND_BUILD_CMD)],
+    ["clean restart is ok", wro({}).ok === true],
+    ["failed build fails even when the console answers", wro({ buildOk: false }).ok === false && wro({ buildOk: false }).reason === "frontend build failed"],
+    ["down failure flagged", wro({ downOk: false }).ok === false],
+    ["up failure flagged", wro({ upOk: false }).ok === false],
+    ["console not answering flagged", wro({ upOutput: "factory-web: starting (see server.log) at http://127.0.0.1:4620" }).ok === false],
+  ];
+  for (const [name, ok] of webOutcomeChecks) {
+    console.log(`web-restart-outcome ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`web-restart-outcome check failed: ${name}`);
+  }
   // Deploy-recovery decision core (pure — no git access). The cap semantics:
   // `iterations` counts cycles already burned, so the 5th attempt (4 burned)
   // still runs and a 6th (5 burned) escalates instead of rebasing.
@@ -2758,6 +3006,45 @@ function cmdSelftest() {
   for (const [name, ok] of resumeChecks) {
     console.log(`resume-step ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`resume-step check failed: ${name}`);
+  }
+  // Retry classifier + executor pid guard (pure cores from web/lib/retry.mjs;
+  // deep coverage lives in retry.test.mjs — this proves the engine's
+  // require(esm) wiring resolves the same tiers/guards it acts on).
+  const rtT0 = "2026-01-01T00:00:00.000Z";
+  const rt = (runOver, ctxOver) =>
+    classifyRetry(
+      { id: "selftest-run", state: "failed", updatedAt: rtT0, stepIndex: 2, retries: [], history: [], ...runOver },
+      {
+        now: Date.parse(rtT0) + 11 * 60 * 1000,
+        stepId: "implement",
+        escalationPresent: false,
+        worktreeMissing: false,
+        executorAlive: false,
+        executorPid: null,
+        force: false,
+        lastFailure: "",
+        ...ctxOver,
+      }
+    );
+  const retryChecks = [
+    ["first retry of a failed run resumes", (() => { const d = rt({}); return d.eligible && d.tier === "resume"; })()],
+    ["repeat retry at the same step goes to triage", rt({ retries: [{ at: rtT0, tier: "resume", step: "implement" }] }).tier === "triage"],
+    ["preflight failure goes straight to triage", rt({}, { lastFailure: "preflight failed: probe broken" }).tier === "triage"],
+    ["recovery-cap escalation goes straight to triage", rt({}, { lastFailure: "deploy recovery escalation: recovery cap reached (5/5 cycles)" }).tier === "triage"],
+    ["escalation.md goes straight to triage", rt({}, { escalationPresent: true }).tier === "triage"],
+    ["missing worktree goes straight to triage", rt({}, { worktreeMissing: true }).tier === "triage"],
+    ["stalled non-terminal run is retryable", rt({ state: "running:implement" }).eligible === true],
+    ["recently-updated run is not stuck", rt({ state: "running:implement" }, { now: Date.parse(rtT0) + 5 * 60 * 1000 }).eligible === false],
+    ["done/awaiting-approval refused", rt({ state: "done" }).eligible === false && rt({ state: "awaiting-approval" }).eligible === false],
+    ["live executor requires --force", (() => { const d = rt({}, { executorAlive: true, executorPid: 4242 }); return !d.eligible && d.needsForce === true && /4242/.test(d.reason); })()],
+    ["--force kills then retries", (() => { const d = rt({}, { executorAlive: true, executorPid: 4242, force: true }); return d.eligible && d.killExecutor === true; })()],
+    ["open triage session blocks a second dispatch", (() => { const at = "2026-01-01T00:10:00.000Z"; const d = rt({ updatedAt: at, retries: [{ at, tier: "triage", step: "implement" }] }); return !d.eligible && /factory-triage-selftest-run/.test(d.reason); })()],
+    ["pid guard matches only this run's exec command", matchesExecutor("node /x/orchestration/bin/factory-run exec selftest-run", "selftest-run") && !matchesExecutor("node /x/orchestration/bin/factory-run exec selftest-run-2", "selftest-run") && !matchesExecutor("vim exec selftest-run", "selftest-run")],
+    ["last failure detail comes from the newest failed entry", lastFailureDetail([{ state: "failed", detail: "old", at: rtT0 }, { state: "failed", detail: "new", at: rtT0 }]) === "new"],
+  ];
+  for (const [name, ok] of retryChecks) {
+    console.log(`retry ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`retry check failed: ${name}`);
   }
   // Per-attempt step document naming/derivation (pure — no filesystem access).
   const docChecks = [
@@ -2878,6 +3165,50 @@ function cmdSelftest() {
     console.log(`status-json ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`status-json check failed: ${name}`);
   }
+  // Plan-profile lint core (pure — from web/lib/plan-md.mjs; the deep coverage
+  // lives in plan-md.test.mjs — this proves the engine's require(esm) wiring
+  // enforces the same profile evaluatePlanMd fails attempts on).
+  const goodPlan = [
+    "# Plan: Selftest fixture",
+    "",
+    "## What and why",
+    "",
+    "Words with `<pre>` as inline code.",
+    "",
+    "## Angles considered",
+    "",
+    "- **Angle**: choice.",
+    "",
+    "## Touch points",
+    "",
+    "- `file.ts` — change.",
+    "",
+    "## Acceptance criteria",
+    "",
+    "1. Testable.",
+    "",
+    "## Out of scope",
+    "",
+    "- Nothing else.",
+    "",
+    "## Open questions",
+    "",
+    "- (none)",
+    "",
+  ].join("\n");
+  const planLintChecks = [
+    ["conforming plan lints clean", lintPlan(goodPlan).length === 0],
+    ["inline-code html is sanctioned", lintPlan(goodPlan).every((p) => !/HTML/.test(p.message))],
+    ["missing section flagged", lintPlan(goodPlan.replace("## Out of scope", "## Scope out")).some((p) => p.message.includes("missing required section `## Out of scope`"))],
+    ["raw html flagged", lintPlan(goodPlan.replace("Words with `<pre>` as inline code.", "<script>alert(1)</script>")).some((p) => p.message.includes("raw HTML"))],
+    ["table flagged", lintPlan(goodPlan.replace("1. Testable.", "| a | b |")).some((p) => p.message.includes("table"))],
+    ["unclosed fence flagged", lintPlan(`${goodPlan}\n\`\`\`js\ndangling`).some((p) => p.message.includes("never closed"))],
+    ["empty plan flagged, never thrown", lintPlan("").length === 1 && lintPlan(null).length === 1],
+  ];
+  for (const [name, ok] of planLintChecks) {
+    console.log(`plan-lint ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`plan-lint check failed: ${name}`);
+  }
   // Per-rig notify routing core (pure — checked against the live rigs.json so
   // a rig losing its notifyChannelName shows up here, plus synthetic configs).
   const notifyChecks = [
@@ -2946,6 +3277,7 @@ try {
   if (cmd === "start") cmdStart(rest);
   else if (cmd === "exec") execRun(rest[0]);
   else if (cmd === "resume") cmdResume(rest);
+  else if (cmd === "retry") cmdRetry(rest);
   else if (cmd === "status" || cmd === "list") cmdStatus(rest);
   else if (cmd === "approve") cmdGate(resolveRunId(rest[0]), "approve");
   else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);
@@ -2958,7 +3290,7 @@ try {
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|status|list|approve|reject|reply|steer|cancel|cleanup|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|cancel|cleanup|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {

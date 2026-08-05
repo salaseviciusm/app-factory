@@ -37,7 +37,9 @@ function makeSandbox(t) {
   for (const d of ["bin", "web/lib", "workflows", "prompts"]) fs.mkdirSync(path.join(orch, d), { recursive: true });
   fs.copyFileSync(path.join(REAL_ORCH, "bin", "factory-run"), path.join(orch, "bin", "factory-run"));
   fs.chmodSync(path.join(orch, "bin", "factory-run"), 0o755);
-  fs.copyFileSync(path.join(REAL_ORCH, "web", "lib", "discussion.mjs"), path.join(orch, "web", "lib", "discussion.mjs"));
+  for (const lib of ["discussion.mjs", "plan-md.mjs", "retry.mjs"]) {
+    fs.copyFileSync(path.join(REAL_ORCH, "web", "lib", lib), path.join(orch, "web", "lib", lib));
+  }
 
   const rig = path.join(root, "rig");
   fs.mkdirSync(rig);
@@ -76,10 +78,15 @@ function makeSandbox(t) {
   );
 
   // Stub claude: long-running, with a background grandchild so the group kill
-  // (not just the direct-child kill) is what the assertions exercise.
+  // (not just the direct-child kill) is what the assertions exercise. While
+  // <root>/stub-fail exists it exits 1 immediately instead (the retry test's
+  // deterministic fail-then-succeed switch).
   const stubDir = path.join(root, "stubbin");
   fs.mkdirSync(stubDir);
-  fs.writeFileSync(path.join(stubDir, "claude"), `#!/bin/bash\nsleep ${STUB_SLEEP_S} &\nsleep ${STUB_SLEEP_S}\nwait\n`);
+  fs.writeFileSync(
+    path.join(stubDir, "claude"),
+    `#!/bin/bash\nif [ -f ${root}/stub-fail ]; then exit 1; fi\nsleep ${STUB_SLEEP_S} &\nsleep ${STUB_SLEEP_S}\nwait\n`
+  );
   fs.chmodSync(path.join(stubDir, "claude"), 0o755);
 
   const env = {
@@ -103,7 +110,27 @@ function readRun(sb, id) {
   return JSON.parse(fs.readFileSync(path.join(sb.orch, "runs", id, "run.json"), "utf8"));
 }
 
+// The executor pid lives in runs/<id>/executor.pid (written by detachExec;
+// never in run.json, which the executor itself rewrites concurrently).
+function execPid(sb, id) {
+  try {
+    return parseInt(fs.readFileSync(path.join(sb.orch, "runs", id, "executor.pid"), "utf8").trim(), 10) || null;
+  } catch {
+    return null;
+  }
+}
+
+// kill(-pid) with a null pid would coerce to kill(0) — the caller's OWN
+// process group, i.e. the test runner. Every cleanup kill goes through here.
+function killGroup(pid) {
+  if (!Number.isInteger(pid) || pid < 2) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {}
+}
+
 function groupAlive(pid) {
+  if (!Number.isInteger(pid) || pid < 2) return false;
   try {
     process.kill(-pid, 0);
     return true;
@@ -131,12 +158,7 @@ function startRun(sb, t, workflow, extraArgs = []) {
   const id = start.stdout.trim().split("\n").pop();
   assert.ok(id, "start printed a run id");
   // Whatever happens, never leak the detached executor group past the test.
-  t.after(() => {
-    try {
-      const pid = readRun(sb, id).executorPid;
-      if (pid) process.kill(-pid, "SIGKILL");
-    } catch {}
-  });
+  t.after(() => killGroup(execPid(sb, id)));
   return id;
 }
 
@@ -146,13 +168,9 @@ test("cancel mid agent step kills the whole process group and the state sticks",
 
   await waitFor(() => readRun(sb, id).state === "running:implement", "agent step to start");
   const stepStarted = Date.now();
-  const { executorPid } = readRun(sb, id);
-  assert.ok(Number.isInteger(executorPid), "executor pid recorded in run.json");
-  t.after(() => {
-    try {
-      process.kill(-executorPid, "SIGKILL");
-    } catch {}
-  });
+  const executorPid = execPid(sb, id);
+  assert.ok(Number.isInteger(executorPid), "executor pid recorded in executor.pid");
+  t.after(() => killGroup(executorPid));
 
   const cancel = engine(sb, ["cancel", id]);
   assert.equal(cancel.status, 0, `cancel failed: ${cancel.stderr}`);
@@ -163,7 +181,7 @@ test("cancel mid agent step kills the whole process group and the state sticks",
 
   let run = readRun(sb, id);
   assert.equal(run.state, "cancelled");
-  assert.equal(run.executorPid, undefined, "cancel clears the recorded pid");
+  assert.equal(run.executorPid, undefined, "the executor pid never lives in run.json (executor.pid only)");
   // Acceptance 3: history names the interrupted step…
   assert.match(run.history[run.history.length - 1].detail || "", /implement/);
   // …and telemetry holds a non-ok row for it.
@@ -189,7 +207,7 @@ test("a kept cancelled run resumes at the interrupted step and completes", async
   const id = startRun(sb, t, "cancel-test", ["--auto"]);
 
   await waitFor(() => readRun(sb, id).state === "running:implement", "agent step to start");
-  const { executorPid } = readRun(sb, id);
+  const executorPid = execPid(sb, id);
   assert.equal(engine(sb, ["cancel", id]).status, 0);
   await waitFor(() => !groupAlive(executorPid), "executor process group to die", 12_000);
   assert.equal(readRun(sb, id).state, "cancelled");
@@ -198,11 +216,7 @@ test("a kept cancelled run resumes at the interrupted step and completes", async
   const resume = engine(sb, ["resume", id]);
   assert.equal(resume.status, 0, `resume failed: ${resume.stderr}`);
   assert.match(resume.stdout, /implement/, "resume restarts at the interrupted step");
-  t.after(() => {
-    try {
-      process.kill(-readRun(sb, id).executorPid, "SIGKILL");
-    } catch {}
-  });
+  t.after(() => killGroup(execPid(sb, id)));
   // The stub agent now runs to completion; the workflow finishes normally.
   await waitFor(() => readRun(sb, id).state === "done", "resumed run to complete", 40_000);
   assert.ok(
@@ -211,12 +225,33 @@ test("a kept cancelled run resumes at the interrupted step and completes", async
   );
 });
 
+test("retry of a failed run requeues it and the fresh executor runs to done", async (t) => {
+  const sb = makeSandbox(t);
+  fs.writeFileSync(path.join(sb.root, "stub-fail"), "");
+  const id = startRun(sb, t, "cancel-test", ["--auto"]);
+
+  await waitFor(() => readRun(sb, id).state === "failed", "stubbed step to fail the run");
+  fs.rmSync(path.join(sb.root, "stub-fail"));
+
+  const retry = engine(sb, ["retry", id]);
+  assert.equal(retry.status, 0, `retry failed: ${retry.stderr}`);
+  assert.match(retry.stdout, /resume tier/, "first retry at a step is a plain resume");
+  // The requeue is what lets the fresh executor past the terminal-on-disk
+  // boundary check; without it the executor exits immediately and the run
+  // stays failed forever.
+  await waitFor(() => readRun(sb, id).state === "done", "retried run to complete", 40_000);
+  assert.ok(
+    readRun(sb, id).history.some((h) => h.state === "queued" && /retry requeued/.test(h.detail || "")),
+    "retry requeued the failed run before detaching the executor"
+  );
+});
+
 test("reject at a gate ends the run rejected with no surviving processes", async (t) => {
   const sb = makeSandbox(t);
   const id = startRun(sb, t, "gate-test");
 
   await waitFor(() => readRun(sb, id).state === "awaiting-approval", "plan gate");
-  const { executorPid } = readRun(sb, id);
+  const executorPid = execPid(sb, id);
   assert.ok(Number.isInteger(executorPid), "executor pid recorded while waiting at the gate");
 
   const rej = engine(sb, ["reject", id, "not today"]);
@@ -226,7 +261,6 @@ test("reject at a gate ends the run rejected with no surviving processes", async
   await waitFor(() => readRun(sb, id).state === "rejected", "rejected state");
   await waitFor(() => !groupAlive(executorPid), "executor to exit after reject");
   const run = readRun(sb, id);
-  assert.equal(run.executorPid, undefined, "executor clears its pid on the way out");
   assert.ok(!run.history.some((h) => h.state === "done"), "workflow must not continue past a reject");
 });
 
@@ -235,7 +269,7 @@ test("cancel while parked at a gate ends the run cancelled, not rejected", async
   const id = startRun(sb, t, "gate-test");
 
   await waitFor(() => readRun(sb, id).state === "awaiting-approval", "plan gate");
-  const { executorPid } = readRun(sb, id);
+  const executorPid = execPid(sb, id);
 
   const cancel = engine(sb, ["cancel", id]);
   assert.equal(cancel.status, 0, `cancel failed: ${cancel.stderr}`);

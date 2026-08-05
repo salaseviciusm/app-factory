@@ -6,6 +6,8 @@ Feature request from the founder:
 
 {{STEERING}}
 
+{{FINDINGS}}
+
 Your job (design only — do NOT write any implementation code in this step):
 
 1. Dissect the request from multiple angles: user value, UX surface, data model,
@@ -38,6 +40,25 @@ What this run deliberately does not do.
 
 ## Open questions
 Anything genuinely ambiguous the founder should settle (empty list if none).
+
+Plan markdown profile (STRICT — the web console renders plan.md from this
+contract and the engine machine-checks it after your step):
+
+- Exactly one H1, the first line of the file: `# Plan: <short title>`.
+- Exactly the six `##` sections above, in that order — no other headings, no
+  `###` subsections, no renamed or extra sections.
+- ATX headings only. Lists use `-` bullets or `1.` `2.` numbering. Inline
+  formatting: **bold**, *italic*, `inline code`, [links](https://example.com).
+  Fenced code blocks (```) are allowed and must be closed.
+- NO raw HTML (write tags as inline code, e.g. `<pre>`), NO tables, NO images,
+  NO blockquotes, NO horizontal rules.
+
+Before finishing, self-check the plan and fix every reported problem:
+
+    node {{ORCH_DIR}}/bin/plan-lint {{RUN_DIR}}/plan.md
+
+The engine runs the same lint after your step and fails the attempt on any
+problem, so a skipped self-check just costs you a retry.
 
 Keep the whole plan under 120 lines. Do not modify any repository files.
 When done, reply with only the single word: PLANNED

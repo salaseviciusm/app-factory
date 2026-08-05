@@ -1,9 +1,20 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
-import type { RunDetail as RunDetailData, StepDocAttempts, StepDocKind, StepRow, WorkflowStep } from "../types";
+import type {
+  RetryClassification,
+  RetryEntry,
+  RunDetail as RunDetailData,
+  StepDocAttempts,
+  StepDocKind,
+  StepRow,
+  WorkflowStep,
+} from "../types";
 import { usePolling } from "../hooks/usePolling";
 import { NodeGraph } from "../graph/NodeGraph";
 import { Badge } from "./Badge";
+import { PlanView } from "./PlanView";
+import { PlanEditor } from "./PlanEditor";
+import { parsePlan } from "../markdown";
 import {
   deriveNodes,
   fmtCost,
@@ -43,8 +54,8 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
           <Badge kind="muted">{run.workflow}</Badge>
           {run.auto && <Badge kind="muted">auto</Badge>}
           {run.stalled && (
-            <Badge kind="warn" title="No state update in over 10 minutes — the executor may be dead.">
-              stalled? try: factory-run resume {run.id}
+            <Badge kind="warn" title="No state update in over 10 minutes — the executor may be dead. Use the Retry button below.">
+              stalled?
             </Badge>
           )}
           {data.recovery && data.recovery.iterations > 0 && (
@@ -70,9 +81,19 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         {error && <div className="error-box">refresh failed: {error}</div>}
       </div>
 
-      {run.state === "awaiting-approval" && <GatePanel runId={run.id} planMd={data.planMd} refresh={refresh} />}
+      {run.state === "awaiting-approval" && (
+        <GatePanel
+          runId={run.id}
+          planMd={data.planMd}
+          isDiscussion={workflow?.steps[run.stepIndex ?? -1]?.type === "discussion"}
+          refresh={refresh}
+        />
+      )}
       {!isTerminal(run.state) && run.state !== "awaiting-approval" && (
         <ActionBar runId={run.id} refresh={refresh} />
+      )}
+      {(run.state === "failed" || run.stalled) && data.retry && (
+        <RetryPanel runId={run.id} retry={data.retry} retries={run.retries} refresh={refresh} />
       )}
       {run.state === "cancelled" && run.source !== "db" && <CancelledPanel runId={run.id} refresh={refresh} />}
 
@@ -108,20 +129,33 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
 
 // ---------- gate + steering controls ----------
 
-function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string | null; refresh: () => void }) {
-  const [mode, setMode] = useState<"idle" | "reject" | "steer">("idle");
+function GatePanel({
+  runId,
+  planMd,
+  isDiscussion,
+  refresh,
+}: {
+  runId: string;
+  planMd: string | null;
+  isDiscussion: boolean;
+  refresh: () => void;
+}) {
+  const [mode, setMode] = useState<"idle" | "reject" | "steer" | "edit">("idle");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
+  const planEditable = useMemo(() => isDiscussion && !!planMd && parsePlan(planMd).ok, [isDiscussion, planMd]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, note: string | null = null) => {
     setBusy(true);
     setError(null);
     try {
       await fn();
       setMode("idle");
       setText("");
+      setNotice(note);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -132,14 +166,24 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
 
   return (
     <section className="panel gate-panel">
-      <h3>⏳ Awaiting your approval</h3>
+      <h3>{isDiscussion ? "💬 Plan discussion — awaiting your reply" : "⏳ Awaiting your approval"}</h3>
       {planMd ? (
-        <>
-          <button className="btn btn-ghost" onClick={() => setPlanOpen(!planOpen)}>
-            {planOpen ? "Hide plan" : "Show plan"}
-          </button>
-          {planOpen && <pre className="doc-view">{planMd}</pre>}
-        </>
+        mode === "edit" ? (
+          <PlanEditor
+            planMd={planMd}
+            onSubmit={(reply) =>
+              act(() => api.reply(runId, reply), "Plan edits sent — the discussion agent answers in its next turn.")
+            }
+            onCancel={() => setMode("idle")}
+          />
+        ) : (
+          <>
+            <button className="btn btn-ghost" onClick={() => setPlanOpen(!planOpen)}>
+              {planOpen ? "Hide plan" : "Show plan"}
+            </button>
+            {planOpen && <PlanView markdown={planMd} />}
+          </>
+        )
       ) : (
         <div className="empty-state">No plan file found in the run directory.</div>
       )}
@@ -148,6 +192,19 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
           <button className="btn btn-approve" disabled={busy} onClick={() => act(() => api.approve(runId))}>
             ✓ Approve
           </button>
+          {isDiscussion && (
+            <button
+              className="btn btn-steer"
+              disabled={busy || !planEditable}
+              title={planEditable ? "Edit the plan block by block; edits are sent as your reply" : "Plan is not editable (parse failed)"}
+              onClick={() => {
+                setNotice(null);
+                setMode("edit");
+              }}
+            >
+              ✎ Edit plan…
+            </button>
+          )}
           <button className="btn btn-reject" disabled={busy} onClick={() => setMode("reject")}>
             ✗ Reject…
           </button>
@@ -156,7 +213,8 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
           </button>
         </div>
       )}
-      {mode !== "idle" && (
+      {notice && mode === "idle" && <div className="notice-box">{notice}</div>}
+      {(mode === "reject" || mode === "steer") && (
         <div className="gate-form">
           <textarea
             value={text}
@@ -261,10 +319,92 @@ function ActionBar({ runId, refresh }: { runId: string; refresh: () => void }) {
   );
 }
 
+/** One-tap recovery for failed/stalled runs. The server pre-classified which
+ *  tier a retry would run (plain resume vs OpenClaw triage handoff) — the
+ *  button states it up front; a still-live executor asks for confirmation
+ *  before sending force: true (kill, then resume). */
+function RetryPanel({
+  runId,
+  retry,
+  retries,
+  refresh,
+}: {
+  runId: string;
+  retry: RetryClassification;
+  retries: RetryEntry[];
+  refresh: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const act = async (force: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.retry(runId, force);
+      setNotice(
+        r.tier === "triage"
+          ? "Handed to OpenClaw triage — it investigates, then fixes and resumes or posts options in Slack."
+          : "Resumed — the executor restarts at the current step."
+      );
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRetry = () => {
+    if (retry.needsForce) {
+      if (window.confirm(`${retry.reason}\n\nForce retry kills the executor, then resumes. Continue?`)) {
+        void act(true);
+      }
+      return;
+    }
+    void act(false);
+  };
+
+  return (
+    <section className="panel action-bar">
+      <h3>Retry</h3>
+      {retry.eligible || retry.needsForce ? (
+        <>
+          <div className="gate-actions">
+            <button className="btn btn-approve" disabled={busy} onClick={onRetry}>
+              ↻ Retry{retry.needsForce ? " (force)…" : ""}
+            </button>
+          </div>
+          <p className="run-links">
+            {retry.needsForce
+              ? "The executor is still alive — retrying asks for confirmation, then kills it and resumes."
+              : retry.tier === "triage"
+                ? `Will hand the run to OpenClaw triage: ${retry.reason}.`
+                : `Will resume the run: ${retry.reason}.`}
+          </p>
+        </>
+      ) : (
+        <p className="run-links">Retry unavailable: {retry.reason}</p>
+      )}
+      {retries.length > 0 && (
+        <p className="run-links">
+          {retries.length} prior retr{retries.length === 1 ? "y" : "ies"}:{" "}
+          {retries.map((r) => `${r.tier} at ${r.step ?? "?"} (${fmtWhen(r.at)})`).join(", ")}
+        </p>
+      )}
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
 /** A cancelled run's fate is an explicit founder choice, never silent: resume
  *  it (the executor picks up from the interrupted step, via the same
- *  factory-run resume path as the CLI), discard its worktree and branch, or do
- *  nothing and keep it — it stays listed either way. */
+ *  factory-run resume path as the CLI and RetryPanel's resume tier), discard
+ *  its worktree and branch, or do nothing and keep it — it stays listed
+ *  either way. Distinct from RetryPanel: a cancel is a founder decision, not
+ *  a failure, so there is no triage classification to run. */
 function CancelledPanel({ runId, refresh }: { runId: string; refresh: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

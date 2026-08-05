@@ -5,14 +5,16 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { openTelemetry, telemetryRuns, stepsForRun, artifactsForRun, usageForRun, usageByRun } from "./db.mjs";
 import { repoUrlForRig } from "./github.mjs";
+import { TERMINAL_STATES, classifyRetry, isStalled, lastFailureDetail, matchesExecutor } from "./retry.mjs";
+
+// Terminal-state semantics (incl. "killed" = don't-build success) and the
+// stall predicate live in retry.mjs so server, engine, and tests agree.
+export { TERMINAL_STATES } from "./retry.mjs";
 
 export const RUN_ID_RE = /^[a-z0-9-]+$/;
-// "killed" is a discussion step's don't-build ending: terminal and a success
-// (early kill = money saved), never rendered with failure styling.
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
-const STALL_MS = 10 * 60 * 1000;
 
 function readJson(p, fallback) {
   try {
@@ -26,17 +28,31 @@ function runsDirOf(orchDir) {
   return path.join(orchDir, "runs");
 }
 
-function isStalled(state, updatedAt) {
-  if (!state || TERMINAL_STATES.includes(state) || state === "awaiting-approval") return false;
-  const t = Date.parse(updatedAt || "");
-  return Number.isFinite(t) && Date.now() - t > STALL_MS;
-}
-
 function worktreeMissing(run) {
   return Boolean(run.worktree) && !fs.existsSync(run.worktree);
 }
 
-function summaryFromRunJson(run, usage) {
+/** Liveness of the run's recorded executor pid (executor.pid, written by
+ *  detachExec): the pid must exist AND its command line must still be this
+ *  run's `factory-run exec` (pid-reuse guard). {alive, pid}. */
+function executorStatus(runDir, runId) {
+  let pid = null;
+  try {
+    pid = parseInt(fs.readFileSync(path.join(runDir, "executor.pid"), "utf8").trim(), 10) || null;
+  } catch {}
+  if (!pid || pid < 1) return { alive: false, pid: null };
+  const res = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return { alive: res.status === 0 && matchesExecutor(res.stdout, runId), pid };
+}
+
+function summaryFromRunJson(run, usage, runDir) {
+  const stalled = isStalled(run.state, run.updatedAt);
+  // The ps probe is only spent where a retry is even possible (failed or
+  // stalled runs); everywhere else executorAlive stays null (= not probed).
+  const probe = runDir && (run.state === "failed" || stalled) ? executorStatus(runDir, run.id) : null;
   return {
     id: run.id,
     workflow: run.workflow,
@@ -51,7 +67,9 @@ function summaryFromRunJson(run, usage) {
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     worktreeMissing: worktreeMissing(run),
-    stalled: isStalled(run.state, run.updatedAt),
+    stalled,
+    retries: Array.isArray(run.retries) ? run.retries : [],
+    executorAlive: probe ? probe.alive : null,
     source: "dir",
     usage: usage || null,
   };
@@ -73,6 +91,8 @@ function summaryFromDbRow(r, usage) {
     updatedAt: r.finished_at || r.created_at,
     worktreeMissing: false,
     stalled: isStalled(r.state, r.finished_at || r.created_at),
+    retries: [],
+    executorAlive: null,
     source: "db",
     usage: usage || null,
   };
@@ -88,7 +108,7 @@ export function listRuns(orchDir) {
     for (const d of fs.readdirSync(runsDir)) {
       if (!RUN_ID_RE.test(d)) continue;
       const run = readJson(path.join(runsDir, d, "run.json"), null);
-      if (run && run.id) byId.set(run.id, summaryFromRunJson(run, usage[run.id]));
+      if (run && run.id) byId.set(run.id, summaryFromRunJson(run, usage[run.id], path.join(runsDir, d)));
     }
   }
   for (const r of telemetryRuns(db)) {
@@ -222,6 +242,36 @@ export function readStepDoc(orchDir, id, stepId, kind, attempt) {
   return { text };
 }
 
+/** Observed facts classifyRetry needs, gathered from the run dir + workflow. */
+function retryCtx(orchDir, runDir, run, opts = {}) {
+  const stepIds = workflowStepIds(orchDir, run.workflow);
+  const idx = Math.min(run.stepIndex ?? 0, (stepIds ? stepIds.length : 1) - 1);
+  const probe = executorStatus(runDir, run.id);
+  return {
+    now: Date.now(),
+    stepId: stepIds ? stepIds[idx] ?? null : null,
+    escalationPresent: fs.existsSync(path.join(runDir, "escalation.md")),
+    worktreeMissing: worktreeMissing(run),
+    executorAlive: probe.alive,
+    executorPid: probe.pid,
+    force: opts.force === true,
+    lastFailure: lastFailureDetail(run.history || []),
+  };
+}
+
+/**
+ * Retry eligibility/tier for one run, for the POST /api/runs/<id>/retry
+ * pre-check (409 payloads carry the classifier's reason). Adds `missing: true`
+ * when there is no run dir to retry (telemetry-only runs included — the
+ * engine cannot resume what has no run.json).
+ */
+export function classifyRunRetry(orchDir, id, opts = {}) {
+  const runDir = path.join(runsDirOf(orchDir), id);
+  const run = readJson(path.join(runDir, "run.json"), null);
+  if (!run || !run.id) return { eligible: false, tier: null, reason: `no such run: ${id}`, missing: true };
+  return classifyRetry(run, retryCtx(orchDir, runDir, run, opts));
+}
+
 /**
  * Full detail for one run: run.json (or the DB row when the dir is gone),
  * telemetry step attempts + artifacts, the workflow definition, and the small
@@ -235,7 +285,7 @@ export function getRunDetail(orchDir, id) {
   const run = readJson(path.join(runDir, "run.json"), null);
   let summary = null;
   if (run && run.id) {
-    summary = summaryFromRunJson(run, usageForRun(db, id));
+    summary = summaryFromRunJson(run, usageForRun(db, id), runDir);
   } else {
     const row = telemetryRuns(db).find((r) => r.id === id);
     if (!row) return null;
@@ -252,6 +302,9 @@ export function getRunDetail(orchDir, id) {
     artifacts: artifactsForRun(db, id),
     workflow,
     recovery: (run && run.recovery) || null,
+    // Force-less classification for the console's Retry button: which tier a
+    // retry would run, or why it is refused (needsForce → confirm dialog).
+    retry: run && run.id ? classifyRetry(run, retryCtx(orchDir, runDir, run)) : null,
     planMd: readCapped(path.join(runDir, gatePlanFile(wfSteps, summary.stepIndex))),
     findingsMd: readCapped(path.join(runDir, "findings.md")),
     steeringMd: readCapped(path.join(runDir, "steering.md")),

@@ -717,6 +717,44 @@ deploys are unchanged (their merge is manual/absent).
   or unknown step id is rejected. `--back` rewinds one step. Plain `resume`
   still resumes at the failed step.
 
+## 12f. Retry for failed & stuck runs, with OpenClaw triage escalation (implemented 2026-08-05)
+
+Recovery used to mean SSH + `factory-run resume`. Now it is one founder action
+— `factory-run retry <run_id> [--force]` on the CLI, a Retry button on the web
+console's run detail page (`POST /api/runs/<id>/retry`, token-gated,
+rate-limited, audited like every mutation; 409 with the classifier's reason
+when ineligible) — with the policy in the engine so Slack/CLI/web all behave
+identically.
+
+- **Two tiers, one command**: the classifier
+  (`web/lib/retry.mjs::classifyRetry`, pure, shared by engine + server + tests
+  via the discussion.mjs require(esm) pattern) picks the tier; the UI states
+  which one will run. Tier **resume** — first retry at the current step —
+  plain-resumes the run. Tier **triage** — a retry was already tried at this
+  step, or the failure is one a resume cannot fix (preflight failure,
+  recovery-cap escalation, `escalation.md` present, missing worktree) —
+  dispatches a fire-and-forget OpenClaw session (`openclaw agent --agent main
+  --session-id factory-triage-<run_id> -m <evidence brief>`, stdin detached)
+  whose `factory-triage` skill gathers evidence and either applies a
+  clearly-indicated fix and resumes, or posts the options to the founder in
+  the rig channel and stops — never guesses, never touches gates. When the
+  `openclaw` CLI is absent the exact dispatch is logged instead. Each retry is
+  recorded in `run.json` (`retries: [{at, tier, step}]`) plus a history entry;
+  triage handoffs also Slack-notify. A second triage dispatch for the same
+  step is refused (pointer to the open session) until the run moves again.
+- **Stuck ≠ failed**: a non-terminal run (not `awaiting-approval`) with no
+  state update for >10 minutes counts as stuck and is retryable; terminal
+  successes (`done`/`cancelled`/`killed`), `rejected`, gate-parked, and
+  recently-updated runs are refused with the reason.
+- **Executor pid guard (closes the double-execute hazard)**: `detachExec`
+  records the executor pid in the run dir (`executor.pid`); liveness is
+  verified against the pid's live `ps` command line (`… factory-run exec
+  <run_id>`), so a recycled pid never counts — and is never killed. Retrying
+  a run whose executor is still alive fails naming the pid unless `--force`
+  (web: confirm dialog) is given, which SIGTERMs (SIGKILL fallback) the old
+  executor before resuming. `resume` gained the same guard: it refuses when a
+  live executor exists, pointing at `retry --force`.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.

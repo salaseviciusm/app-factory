@@ -8,8 +8,8 @@
  *         workflows/*.json, rigs.json (served verbatim — ${VAR} placeholders
  *         stay unresolved; openclaw/secrets.env is never read).
  * Writes: nothing directly — every mutation shells out to bin/factory-run
- *         (start/approve/reject/steer/cancel/resume/cleanup --discard) via
- *         execFile with an args array.
+ *         (start/approve/reject/steer/cancel/reply/retry/resume/cleanup
+ *         --discard) via execFile with an args array.
  *
  * Access model: binds 127.0.0.1 by default. For phone access keep the loopback
  * bind and put `tailscale serve` in front (TLS + tailnet-only). Binding any
@@ -23,7 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
-import { listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
+import { classifyRunRetry, listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
 import {
@@ -186,6 +186,17 @@ function currentRunState(id) {
   return run && run.id ? run.state : null;
 }
 
+/** Type of the workflow step the run is currently parked on, or null. Both
+ *  inputs are engine-written, but the workflow name is still charset-checked
+ *  before it becomes a path segment. */
+function currentStepType(id) {
+  const run = readJsonFile(path.join(ORCH_DIR, "runs", id, "run.json"), null);
+  if (!run || !run.id || typeof run.workflow !== "string" || !/^[a-z0-9-]+$/.test(run.workflow)) return null;
+  const wf = readJsonFile(path.join(ORCH_DIR, "workflows", `${run.workflow}.json`), null);
+  const step = wf && Array.isArray(wf.steps) ? wf.steps[run.stepIndex ?? 0] : null;
+  return (step && step.type) || null;
+}
+
 // ---------- API routes ----------
 
 async function handleApi(req, res, pathname, query) {
@@ -289,8 +300,8 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|resume|discard) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|resume|discard)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
@@ -300,6 +311,7 @@ async function handleApi(req, res, pathname, query) {
   // discard = the founder's explicit "clean this run up" choice: force-remove
   // the worktree and branch of one terminal run via cleanup --discard.
   const args = action === "discard" ? ["cleanup", id, "--discard"] : [action, id];
+  let retryTier = null;
   if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
@@ -325,17 +337,43 @@ async function handleApi(req, res, pathname, query) {
       return sendJson(res, 409, { error: `run is already ${state}` });
     }
   } else if (action === "resume") {
-    // Console resume covers kept cancelled runs (the executor picks up at the
-    // interrupted step). The failed/stuck retry flow
-    // (feature-failed-stuck-workflow-runs) should widen this allowed set when
-    // it lands — extend it here rather than adding a parallel control.
+    // Console resume is the cancelled-run fate choice (the executor picks up
+    // at the interrupted step). Failed/stuck runs go through `retry` below —
+    // its classifier owns those states, so resume stays cancelled-only.
     if (state !== "cancelled") {
-      return sendJson(res, 409, { error: `run is '${state}' — console resume currently covers cancelled runs only` });
+      return sendJson(res, 409, { error: `run is '${state}' — console resume covers cancelled runs only (use retry for failed/stuck runs)` });
     }
   } else if (action === "discard") {
     if (!TERMINAL_STATES.includes(state)) {
       return sendJson(res, 409, { error: `run is '${state}', not terminal — cancel it first` });
     }
+  } else if (action === "reply") {
+    // Founder turn in a discussion step (the web plan editor's compiled
+    // edits ride this). Only valid while the run is parked on a discussion
+    // turn — a reply outside that would sit unread in the jsonl.
+    if (state !== "awaiting-approval") {
+      return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
+    }
+    if (currentStepType(id) !== "discussion") {
+      return sendJson(res, 409, { error: "run is not on a discussion step" });
+    }
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text || text.length > PROMPT_CAP) {
+      return sendJson(res, 400, { error: `reply requires non-empty 'text' (max ${PROMPT_CAP} chars)` });
+    }
+    args.push(text);
+  } else if (action === "retry") {
+    // Pre-classify so ineligible states come back 409 with the classifier's
+    // reason (the CLI re-checks under the same rules before acting, so a
+    // state change in between degrades to a 502, never a double execute).
+    const force = body.force === true;
+    const decision = classifyRunRetry(ORCH_DIR, id, { force });
+    if (decision.missing) return sendJson(res, 404, { error: decision.reason });
+    if (!decision.eligible) {
+      return sendJson(res, 409, { error: decision.reason, needsForce: decision.needsForce === true });
+    }
+    retryTier = decision.tier;
+    if (force) args.push("--force");
   }
 
   const r = await factoryRun(args);
@@ -343,7 +381,11 @@ async function handleApi(req, res, pathname, query) {
   if (!r.ok) {
     return sendJson(res, 502, { error: `factory-run ${action} failed: ${(r.stderr || r.stdout).slice(0, 400)}` });
   }
-  return sendJson(res, 200, { ok: true, message: r.stdout.trim().slice(0, 400) });
+  return sendJson(res, 200, {
+    ok: true,
+    ...(retryTier ? { tier: retryTier } : {}),
+    message: r.stdout.trim().slice(0, 400),
+  });
 }
 
 // ---------- static frontend (dist/ only, traversal-proof) ----------
