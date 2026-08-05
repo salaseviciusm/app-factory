@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { RunDetail as RunDetailData, StepDocAttempts, StepDocKind, StepRow, WorkflowStep } from "../types";
 import { usePolling } from "../hooks/usePolling";
 import { NodeGraph } from "../graph/NodeGraph";
 import { Badge } from "./Badge";
+import { PlanView } from "./PlanView";
+import { PlanEditor } from "./PlanEditor";
+import { parsePlan } from "../markdown";
 import {
   deriveNodes,
   fmtCost,
@@ -70,7 +73,14 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         {error && <div className="error-box">refresh failed: {error}</div>}
       </div>
 
-      {run.state === "awaiting-approval" && <GatePanel runId={run.id} planMd={data.planMd} refresh={refresh} />}
+      {run.state === "awaiting-approval" && (
+        <GatePanel
+          runId={run.id}
+          planMd={data.planMd}
+          isDiscussion={workflow?.steps[run.stepIndex ?? -1]?.type === "discussion"}
+          refresh={refresh}
+        />
+      )}
       {!isTerminal(run.state) && run.state !== "awaiting-approval" && (
         <ActionBar runId={run.id} refresh={refresh} />
       )}
@@ -107,20 +117,33 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
 
 // ---------- gate + steering controls ----------
 
-function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string | null; refresh: () => void }) {
-  const [mode, setMode] = useState<"idle" | "reject" | "steer">("idle");
+function GatePanel({
+  runId,
+  planMd,
+  isDiscussion,
+  refresh,
+}: {
+  runId: string;
+  planMd: string | null;
+  isDiscussion: boolean;
+  refresh: () => void;
+}) {
+  const [mode, setMode] = useState<"idle" | "reject" | "steer" | "edit">("idle");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [planOpen, setPlanOpen] = useState(true);
+  const planEditable = useMemo(() => isDiscussion && !!planMd && parsePlan(planMd).ok, [isDiscussion, planMd]);
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, note: string | null = null) => {
     setBusy(true);
     setError(null);
     try {
       await fn();
       setMode("idle");
       setText("");
+      setNotice(note);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -131,14 +154,24 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
 
   return (
     <section className="panel gate-panel">
-      <h3>⏳ Awaiting your approval</h3>
+      <h3>{isDiscussion ? "💬 Plan discussion — awaiting your reply" : "⏳ Awaiting your approval"}</h3>
       {planMd ? (
-        <>
-          <button className="btn btn-ghost" onClick={() => setPlanOpen(!planOpen)}>
-            {planOpen ? "Hide plan" : "Show plan"}
-          </button>
-          {planOpen && <pre className="doc-view">{planMd}</pre>}
-        </>
+        mode === "edit" ? (
+          <PlanEditor
+            planMd={planMd}
+            onSubmit={(reply) =>
+              act(() => api.reply(runId, reply), "Plan edits sent — the discussion agent answers in its next turn.")
+            }
+            onCancel={() => setMode("idle")}
+          />
+        ) : (
+          <>
+            <button className="btn btn-ghost" onClick={() => setPlanOpen(!planOpen)}>
+              {planOpen ? "Hide plan" : "Show plan"}
+            </button>
+            {planOpen && <PlanView markdown={planMd} />}
+          </>
+        )
       ) : (
         <div className="empty-state">No plan file found in the run directory.</div>
       )}
@@ -147,6 +180,19 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
           <button className="btn btn-approve" disabled={busy} onClick={() => act(() => api.approve(runId))}>
             ✓ Approve
           </button>
+          {isDiscussion && (
+            <button
+              className="btn btn-steer"
+              disabled={busy || !planEditable}
+              title={planEditable ? "Edit the plan block by block; edits are sent as your reply" : "Plan is not editable (parse failed)"}
+              onClick={() => {
+                setNotice(null);
+                setMode("edit");
+              }}
+            >
+              ✎ Edit plan…
+            </button>
+          )}
           <button className="btn btn-reject" disabled={busy} onClick={() => setMode("reject")}>
             ✗ Reject…
           </button>
@@ -155,7 +201,8 @@ function GatePanel({ runId, planMd, refresh }: { runId: string; planMd: string |
           </button>
         </div>
       )}
-      {mode !== "idle" && (
+      {notice && mode === "idle" && <div className="notice-box">{notice}</div>}
+      {(mode === "reject" || mode === "steer") && (
         <div className="gate-form">
           <textarea
             value={text}

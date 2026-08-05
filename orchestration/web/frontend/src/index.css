@@ -463,6 +463,233 @@ textarea {
   margin-top: 10px;
 }
 
+/* ---------- rendered plan markdown ---------- */
+
+.plan-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.markdown {
+  font-size: 0.95rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.markdown h1 {
+  font-size: 1.25rem;
+  margin: 10px 0 8px;
+}
+
+.markdown h2 {
+  font-size: 1.05rem;
+  margin: 18px 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 0.95rem;
+  margin: 12px 0 4px;
+}
+
+.markdown p {
+  margin: 8px 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.markdown li {
+  margin: 4px 0;
+}
+
+.markdown code {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.markdown pre.md-code {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.markdown pre.md-code code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown blockquote {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+
+.plan-view .plan-doc {
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 10px 0;
+}
+
+/* Fullscreen: a CSS overlay (the native Fullscreen API is flaky in the
+   phone/Tailscale flow). Escape and the close button both drop out of it. */
+.plan-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  overflow-y: auto;
+  padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.plan-fullscreen .plan-controls {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 4px 0;
+  z-index: 1;
+}
+
+.plan-fullscreen .plan-doc {
+  max-width: 860px;
+  margin: 10px auto;
+}
+
+/* ---------- plan editor (discussion edit mode) ---------- */
+
+.pe-hint {
+  color: var(--text-dim);
+  font-size: 0.88rem;
+  margin: 8px 0;
+}
+
+.pe-blocks {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-inset);
+  padding: 4px 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 10px 0;
+}
+
+.pe-block {
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.pe-block:last-child {
+  border-bottom: none;
+}
+
+.pe-block .md-single-item {
+  margin: 2px 0;
+}
+
+.pe-deleted .pe-block-body {
+  text-decoration: line-through;
+  color: var(--fail);
+  opacity: 0.75;
+}
+
+.pe-replacement {
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
+.pe-comment-chip {
+  display: inline-block;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  padding: 1px 10px;
+  margin: 4px 0;
+}
+
+.pe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.pe-actions .btn,
+.pe-tray-list .btn {
+  min-height: 0;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+}
+
+.pe-draft textarea {
+  margin-top: 6px;
+}
+
+.pe-draft .pe-actions {
+  margin-top: 6px;
+}
+
+.pe-draft .pe-actions .btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.pe-tray {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.pe-tray h4 {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.pe-tray-count {
+  color: var(--accent);
+}
+
+.pe-tray-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.pe-tray-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.88rem;
+}
+
 /* ---------- node graph ---------- */
 
 .graph-container {
