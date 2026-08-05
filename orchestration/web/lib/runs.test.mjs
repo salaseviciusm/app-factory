@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunLog, readStepDoc, resolveGateArtifact } from "./runs.mjs";
+import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunArtifact, readRunLog, readStepDoc, resolveGateArtifact } from "./runs.mjs";
 
 const RUN_ID = "feature-test-run";
 
@@ -202,6 +202,50 @@ test("getRunDetail reports absent documents as null", (t) => {
   assert.equal(detail.escalationMd, null);
   assert.deepEqual(detail.stepDocs, {});
   assert.deepEqual(detail.logs, []);
+});
+
+test("awaiting-merge is a terminal success state, never stalled, with preview/deployHeld surfaced", (t) => {
+  // A merge-policy "review" run parks here when green: the founder merges
+  // factory/<id> by hand, so listings must close it out (terminal), never
+  // flag it stalled, and the console needs the branch-shaped state visible.
+  assert.ok(TERMINAL_STATES.includes("awaiting-merge"));
+  const preview = {
+    url: "https://expo.dev/accounts/a/projects/p/updates/g",
+    qrPath: "/tmp/preview-qr.png",
+    kind: "update",
+    at: "2026-01-01T00:50:00.000Z",
+    decision: { kind: "update", reasoning: "JS-only diff", evidence: ["src/App.tsx"], failSafe: false, at: "2026-01-01T00:40:00.000Z" },
+  };
+  const orchDir = makeOrchDir(t, {}, { state: "awaiting-merge", preview, deployHeld: true, updatedAt: "2026-01-01T01:00:00.000Z" });
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.equal(detail.run.state, "awaiting-merge");
+  assert.equal(detail.run.stalled, false);
+  assert.deepEqual(detail.run.preview, preview);
+  assert.equal(detail.run.deployHeld, true);
+});
+
+test("previewMode reflects preview-mode.json over the start flag, null when unset", (t) => {
+  // Mid-run toggle file wins over run.json's start flag; absent both = rig default.
+  const toggled = makeOrchDir(t, { "preview-mode.json": '{"mode":"off","at":"2026-01-01T00:30:00.000Z"}' }, { previewMode: true });
+  assert.equal(getRunDetail(toggled, RUN_ID).previewMode, "off");
+  const flagged = makeOrchDir(t, {}, { previewMode: true });
+  assert.equal(getRunDetail(flagged, RUN_ID).previewMode, "on");
+  const unset = makeOrchDir(t);
+  assert.equal(getRunDetail(unset, RUN_ID).previewMode, null);
+});
+
+test("readRunArtifact serves only the QR whitelist", (t) => {
+  const orchDir = makeOrchDir(t, {
+    "qr.png": "deploy-qr-bytes",
+    "preview-qr.png": "preview-qr-bytes",
+    "secrets.png": "nope",
+  });
+  assert.equal(readRunArtifact(orchDir, RUN_ID, "qr.png").toString(), "deploy-qr-bytes");
+  assert.equal(readRunArtifact(orchDir, RUN_ID, "preview-qr.png").toString(), "preview-qr-bytes");
+  assert.equal(readRunArtifact(orchDir, RUN_ID, "secrets.png"), null);
+  assert.equal(readRunArtifact(orchDir, RUN_ID, "../qr.png"), null);
+  assert.equal(readRunArtifact(orchDir, "..", "qr.png"), null);
+  assert.equal(readRunArtifact(orchDir, "feature-no-such-run", "qr.png"), null);
 });
 
 test("killed is a terminal state and a killed run never reads as stalled", (t) => {

@@ -64,6 +64,8 @@ function summaryFromRunJson(run, usage, runDir) {
     childRun: run.childRun || null,
     stepIndex: run.stepIndex ?? 0,
     artifactUrl: run.artifactUrl || null,
+    preview: run.preview || null,
+    deployHeld: !!run.deployHeld,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     worktreeMissing: worktreeMissing(run),
@@ -87,6 +89,8 @@ function summaryFromDbRow(r, usage) {
     childRun: null,
     stepIndex: null,
     artifactUrl: null,
+    preview: null,
+    deployHeld: false,
     createdAt: r.created_at,
     updatedAt: r.finished_at || r.created_at,
     worktreeMissing: false,
@@ -210,9 +214,10 @@ export function resolveGateArtifact(orchDir, id, name) {
 const STEP_DOC_KINDS = { prompt: "prompt.md", output: "output.json", transcript: "transcript.jsonl" };
 const KIND_BY_EXT = { "prompt.md": "prompt", "output.json": "output", "transcript.jsonl": "transcript" };
 // Engine-synthetic step ids: spawned by the executor when needed (deploy
-// conflict recovery), never declared in workflow JSON, but their per-attempt
-// documents are served exactly like a declared step's.
-const SYNTHETIC_STEP_IDS = ["resolve-conflicts"];
+// conflict recovery, on-demand `factory-run preview` decisions), possibly
+// outside any workflow declaration, but their per-attempt documents are
+// served exactly like a declared step's.
+const SYNTHETIC_STEP_IDS = ["resolve-conflicts", "release-decision"];
 const STEP_ID_RE = /^[a-z0-9-]+$/;
 const STEP_DOC_RE = /^([a-z0-9-]+)\.(?:(\d+)\.)?(prompt\.md|output\.json|transcript\.jsonl)$/;
 const MAX_ATTEMPT = 999;
@@ -375,13 +380,43 @@ export function getRunDetail(orchDir, id) {
       const cg = readJson(path.join(runDir, "check-gate.json"), null);
       return cg ? { ...cg, artifacts: listCheckGateArtifacts(runDir) } : null;
     })(),
+    releaseDecision: readJson(path.join(runDir, "release-decision.json"), null),
+    previewMode: effectivePreviewFlag(runDir, run),
     stepDocs: listStepDocs(runDir, [...stepIds, ...SYNTHETIC_STEP_IDS]),
     logs: RUN_LOGS.filter((n) => fs.existsSync(path.join(runDir, `${n}.log`))),
   };
+}
+
+/** The run's per-run preview flag as "on" | "off" | null (null = rig default).
+ *  Mirrors the engine's precedence: preview-mode.json (a mid-run toggle)
+ *  over run.json's start flag. */
+function effectivePreviewFlag(runDir, run) {
+  const f = readJson(path.join(runDir, "preview-mode.json"), null);
+  if (f && (f.mode === "on" || f.mode === "off")) return f.mode;
+  if (run && typeof run.previewMode === "boolean") return run.previewMode ? "on" : "off";
+  return null;
 }
 
 /** Tail of a run-dir log. Only whitelisted names — never arbitrary paths. */
 export function readRunLog(orchDir, id, name) {
   if (!RUN_LOGS.includes(name)) return null;
   return readCapped(path.join(runsDirOf(orchDir), id, `${name}.log`), 256 * 1024);
+}
+
+// Fixed set of run-dir image artifacts the console may serve (the deploy and
+// preview QR codes) — a closed list, never dynamic names.
+const ARTIFACT_FILES = ["qr.png", "preview-qr.png"];
+
+/** One whitelisted run-dir artifact as a Buffer (image bytes for the QR
+ *  route), or null for anything not on the closed list / not a file. */
+export function readRunArtifact(orchDir, id, name) {
+  if (typeof id !== "string" || !RUN_ID_RE.test(id)) return null;
+  if (!ARTIFACT_FILES.includes(name)) return null;
+  const p = path.join(runsDirOf(orchDir), id, name);
+  try {
+    if (!fs.statSync(p).isFile()) return null;
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
 }
