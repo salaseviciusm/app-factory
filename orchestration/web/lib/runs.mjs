@@ -147,6 +147,63 @@ function gatePlanFile(steps, stepIndex) {
 // dynamic names. Engine/executor always; the rest appear as their steps run.
 const RUN_LOGS = ["engine", "executor", "setup", "checks", "tests", "deploy"];
 
+// Check-gate artifacts: renderer-written files under runs/<id>/check-gate/
+// (timeline image, report JSON, debug video). Closed charset + extension
+// whitelist — the console lists and serves only these, token-gated like
+// everything else.
+const CHECK_GATE_DIR = "check-gate";
+const CHECK_GATE_NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
+const CHECK_GATE_TYPES = {
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".json": "application/json; charset=utf-8",
+  ".mov": "video/quicktime",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/** Whitelisted artifact filenames in a run's check-gate dir, sorted. */
+function listCheckGateArtifacts(runDir) {
+  let names = [];
+  try {
+    names = fs.readdirSync(path.join(runDir, CHECK_GATE_DIR));
+  } catch {
+    return [];
+  }
+  return names
+    .filter(
+      (n) =>
+        CHECK_GATE_NAME_RE.test(n) &&
+        !n.includes("..") &&
+        Object.prototype.hasOwnProperty.call(CHECK_GATE_TYPES, path.extname(n).toLowerCase())
+    )
+    .sort();
+}
+
+/**
+ * Resolve one check-gate artifact for streaming: validated name → absolute
+ * path, content type, size, and whether it should download as an attachment
+ * (the debug video). Returns { status: 400|404, error } for anything outside
+ * the whitelist — the name is never used as a free-form path segment.
+ */
+export function resolveGateArtifact(orchDir, id, name) {
+  if (typeof id !== "string" || !RUN_ID_RE.test(id)) return { status: 400, error: "invalid run id" };
+  if (typeof name !== "string" || !CHECK_GATE_NAME_RE.test(name) || name.includes("..")) {
+    return { status: 400, error: "invalid artifact name" };
+  }
+  const ext = path.extname(name).toLowerCase();
+  const type = CHECK_GATE_TYPES[ext];
+  if (!type) return { status: 400, error: "invalid artifact type" };
+  const p = path.join(runsDirOf(orchDir), id, CHECK_GATE_DIR, name);
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return { status: 404, error: "no such artifact" };
+  }
+  if (!st.isFile()) return { status: 404, error: "no such artifact" };
+  return { path: p, type, size: st.size, download: ext === ".mov" };
+}
+
 // Per-attempt step documents the engine writes: <step>.prompt.md /
 // <step>.output.json / <step>.transcript.jsonl for attempt 1, <step>.N.* for
 // retries. Kind whitelist maps to the file extension.
@@ -312,6 +369,12 @@ export function getRunDetail(orchDir, id) {
     conflictMd: readCapped(path.join(runDir, "conflict.md")),
     escalationMd: readCapped(path.join(runDir, "escalation.md")),
     review: readJson(path.join(runDir, "review.json"), null),
+    // Founder-gated check gate: the engine-written record (which check, its
+    // rendered summary, resolution) plus the renderer's whitelisted artifacts.
+    checkGate: (() => {
+      const cg = readJson(path.join(runDir, "check-gate.json"), null);
+      return cg ? { ...cg, artifacts: listCheckGateArtifacts(runDir) } : null;
+    })(),
     stepDocs: listStepDocs(runDir, [...stepIds, ...SYNTHETIC_STEP_IDS]),
     logs: RUN_LOGS.filter((n) => fs.existsSync(path.join(runDir, `${n}.log`))),
   };

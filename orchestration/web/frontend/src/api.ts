@@ -74,6 +74,21 @@ export const api = {
         (attempt != null ? `?attempt=${attempt}` : ""),
       { asText: true }
     ),
+  /** Check-gate artifact (timeline image, report JSON, debug video) as a
+   *  Blob — fetched with the auth header (an <img src>/<a href> can't carry
+   *  it), then object-URL'd by the caller. */
+  gateArtifact: async (id: string, name: string): Promise<Blob> => {
+    const token = getToken();
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}/gate/${encodeURIComponent(name)}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new Event(AUTH_EVENT));
+      throw new ApiError(401, "invalid token");
+    }
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return res.blob();
+  },
   settings: () => request<import("./types").SettingsResponse>("/api/settings"),
   usage: () => request<import("./types").UsageResponse>("/api/usage"),
   start: (body: { rig: string; workflow: string; prompt: string; auto: boolean }) =>

@@ -124,6 +124,23 @@ export interface StepDocAttempts {
 
 export type StepDocKind = keyof StepDocAttempts;
 
+/**
+ * Founder-gated check gate: the engine-written check-gate.json (which check
+ * tripped, the rendered comparison summary, the resolution) plus the
+ * renderer's whitelisted artifact filenames under runs/<id>/check-gate/.
+ */
+export interface CheckGate {
+  cmd: string;
+  renderer: string | null;
+  openedAt: string;
+  status: "pending" | "approved" | "rejected" | "steered" | "timeout" | "notify-failed" | "cancelled";
+  summaryText: string | null;
+  mediaPath: string | null;
+  resolvedAt?: string;
+  feedback?: string | null;
+  artifacts: string[];
+}
+
 export interface RunDetail {
   run: RunSummary;
   repoUrl: string | null;
@@ -140,6 +157,7 @@ export interface RunDetail {
   conflictMd: string | null;
   escalationMd: string | null;
   review: { verdict?: string; findings?: string[] } | null;
+  checkGate: CheckGate | null;
   stepDocs: Record<string, StepDocAttempts>;
   logs: string[];
 }

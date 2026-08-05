@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type {
+  CheckGate,
   RetryClassification,
   RetryEntry,
   RunDetail as RunDetailData,
@@ -81,13 +82,21 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         {error && <div className="error-box">refresh failed: {error}</div>}
       </div>
 
-      {run.state === "awaiting-approval" && (
-        <GatePanel
-          runId={run.id}
-          planMd={data.planMd}
-          isDiscussion={workflow?.steps[run.stepIndex ?? -1]?.type === "discussion"}
-          refresh={refresh}
-        />
+      {run.state === "awaiting-approval" &&
+        (workflow?.steps[run.stepIndex ?? -1]?.type === "commands" ? (
+          // A commands step only parks on awaiting-approval for a founder-gated
+          // check failure — the regression gate, not the plan gate.
+          <CheckGatePanel runId={run.id} gate={data.checkGate} active refresh={refresh} />
+        ) : (
+          <GatePanel
+            runId={run.id}
+            planMd={data.planMd}
+            isDiscussion={workflow?.steps[run.stepIndex ?? -1]?.type === "discussion"}
+            refresh={refresh}
+          />
+        ))}
+      {run.state !== "awaiting-approval" && data.checkGate && (
+        <CheckGatePanel runId={run.id} gate={data.checkGate} active={false} refresh={refresh} />
       )}
       {!isTerminal(run.state) && run.state !== "awaiting-approval" && (
         <ActionBar runId={run.id} refresh={refresh} />
@@ -241,6 +250,218 @@ function GatePanel({
       )}
       {error && <div className="error-box">{error}</div>}
     </section>
+  );
+}
+
+/** Founder-gated regression check gate: the rendered comparison (summary
+ *  numbers, timeline image, report JSON, debug-video download) plus the three
+ *  decisions — approve (harness re-baselines and re-runs checks), reject
+ *  (ends the run), or a reply that steers the implementer. When `active` is
+ *  false (gate already resolved) the same evidence renders read-only. */
+function CheckGatePanel({
+  runId,
+  gate,
+  active,
+  refresh,
+}: {
+  runId: string;
+  gate: CheckGate | null;
+  active: boolean;
+  refresh: () => void;
+}) {
+  const [mode, setMode] = useState<"idle" | "reject" | "reply">("idle");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [open, setOpen] = useState(active);
+
+  const image = gate?.artifacts.find((a) => a === gate.mediaPath) ?? gate?.artifacts.find((a) => a.endsWith(".png"));
+  const videos = gate?.artifacts.filter((a) => a.endsWith(".mov")) ?? [];
+  const reports = gate?.artifacts.filter((a) => a.endsWith(".json")) ?? [];
+
+  const act = async (fn: () => Promise<unknown>, note: string | null = null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      setMode("idle");
+      setText("");
+      setNotice(note);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadVideo = async (name: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const blob = await api.gateArtifact(runId, name);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel gate-panel">
+      <h3>{active ? "🚦 Regression gate — your judgment needed" : `🚦 Regression gate (${gate?.status ?? "unknown"})`}</h3>
+      {gate ? (
+        <>
+          <p>
+            Founder-gated check failed: <code>{gate.cmd}</code>.{" "}
+            {active
+              ? "Approve accepts the new behaviour (the harness re-baselines and re-runs the checks); reject ends the run; a reply steers the implementer."
+              : gate.resolvedAt
+                ? `Resolved ${new Date(gate.resolvedAt).toLocaleString()}${gate.feedback ? ` — ${gate.feedback}` : ""}.`
+                : ""}
+          </p>
+          {!active && (
+            <button className="btn btn-ghost" onClick={() => setOpen(!open)}>
+              {open ? "Hide comparison" : "Show comparison"}
+            </button>
+          )}
+          {open && (
+            <>
+              {gate.summaryText && <pre className="doc-view">{gate.summaryText}</pre>}
+              {image && <GateImage runId={runId} name={image} />}
+              {(videos.length > 0 || reports.length > 0) && (
+                <div className="gate-actions">
+                  {videos.map((v) => (
+                    <button key={v} className="btn btn-ghost" disabled={busy} onClick={() => void downloadVideo(v)}>
+                      ⬇ {v}
+                    </button>
+                  ))}
+                  {reports.map((r) => (
+                    <GateDocToggle key={r} runId={runId} name={r} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      ) : (
+        <div className="empty-state">No check-gate record found in the run directory.</div>
+      )}
+      {active && mode === "idle" && (
+        <div className="gate-actions">
+          <button
+            className="btn btn-approve"
+            disabled={busy}
+            onClick={() =>
+              act(() => api.approve(runId), "Approved — the harness re-baselines, commits, and re-runs the checks.")
+            }
+          >
+            ✓ Approve re-baseline
+          </button>
+          <button className="btn btn-reject" disabled={busy} onClick={() => setMode("reject")}>
+            ✗ Reject…
+          </button>
+          <button className="btn btn-steer" disabled={busy} onClick={() => setMode("reply")}>
+            ↝ Steer implementer…
+          </button>
+        </div>
+      )}
+      {notice && mode === "idle" && <div className="notice-box">{notice}</div>}
+      {active && (mode === "reject" || mode === "reply") && (
+        <div className="gate-form">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={4}
+            placeholder={
+              mode === "reject"
+                ? "Why is this behaviour change rejected? Ends the run. (required)"
+                : "Instruction for the implementer — the run loops back with it injected (required)"
+            }
+            autoFocus
+          />
+          <div className="gate-actions">
+            <button
+              className={`btn ${mode === "reject" ? "btn-reject" : "btn-steer"}`}
+              disabled={busy || !text.trim()}
+              onClick={() =>
+                act(() =>
+                  mode === "reject" ? api.reject(runId, text.trim()) : api.reply(runId, text.trim())
+                )
+              }
+            >
+              {mode === "reject" ? "Send rejection" : "Send steering"}
+            </button>
+            <button className="btn btn-ghost" disabled={busy} onClick={() => setMode("idle")}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
+/** Auth-fetched check-gate image (an <img src> can't carry the token). */
+function GateImage({ runId, name }: { runId: string; name: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let obj: string | null = null;
+    let cancelled = false;
+    api
+      .gateArtifact(runId, name)
+      .then((blob) => {
+        if (cancelled) return;
+        obj = URL.createObjectURL(blob);
+        setUrl(obj);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      cancelled = true;
+      if (obj) URL.revokeObjectURL(obj);
+    };
+  }, [runId, name]);
+  if (error) return <div className="error-box">timeline image failed to load: {error}</div>;
+  if (!url) return <div className="empty-state">Loading timeline…</div>;
+  return <img src={url} alt="golden-vs-run event timeline" style={{ maxWidth: "100%", border: "1px solid var(--border, #d0d7de)", borderRadius: 6 }} />;
+}
+
+/** Fetch-on-expand raw view of a check-gate JSON artifact (the full report). */
+function GateDocToggle({ runId, name }: { runId: string; name: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const show = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setBusy(true);
+    try {
+      setText(await (await api.gateArtifact(runId, name)).text());
+    } catch (e) {
+      setText(`failed to load: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setBusy(false);
+    }
+    setOpen(true);
+  };
+  return (
+    <>
+      <button className="btn btn-ghost" disabled={busy} onClick={() => void show()}>
+        {open ? `hide ${name}` : name}
+      </button>
+      {open && <pre className="doc-view log-view">{text || "(empty)"}</pre>}
+    </>
   );
 }
 

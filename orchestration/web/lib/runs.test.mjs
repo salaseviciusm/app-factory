@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunLog, readStepDoc } from "./runs.mjs";
+import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunLog, readStepDoc, resolveGateArtifact } from "./runs.mjs";
 
 const RUN_ID = "feature-test-run";
 
@@ -243,6 +243,84 @@ test("terminal-success runs are not retryable and are not probed for liveness", 
   assert.equal(detail.run.executorAlive, null);
   assert.equal(detail.retry.eligible, false);
   assert.match(detail.retry.reason, /done/);
+});
+
+/** Add a check-gate record + artifacts dir to a makeOrchDir run. */
+function addCheckGate(orchDir, files) {
+  const runDir = path.join(orchDir, "runs", RUN_ID);
+  fs.writeFileSync(
+    path.join(runDir, "check-gate.json"),
+    JSON.stringify({
+      cmd: "npm run golden:check",
+      renderer: "skip-hero-golden",
+      openedAt: "2026-01-01T00:30:00.000Z",
+      status: "pending",
+      summaryText: "Golden regression — 2 failing event(s)",
+      mediaPath: "timeline.png",
+    })
+  );
+  const gateDir = path.join(runDir, "check-gate");
+  fs.mkdirSync(gateDir, { recursive: true });
+  for (const [name, text] of Object.entries(files)) {
+    fs.writeFileSync(path.join(gateDir, name), text);
+  }
+}
+
+test("getRunDetail surfaces the check gate with whitelisted artifacts only", (t) => {
+  const orchDir = makeOrchDir(t, {}, { state: "awaiting-approval", stepIndex: 3 });
+  addCheckGate(orchDir, {
+    "timeline.png": "png-bytes",
+    "timeline.svg": "<svg/>",
+    "golden-report.json": "{}",
+    "IMG_0446.debug.mov": "mov-bytes",
+    "IMG_0446.debug-preview.png": "png-bytes",
+    // Outside the whitelist: wrong extension / bad leading char.
+    "evil.sh": "nope",
+    ".hidden.png": "nope",
+  });
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.equal(detail.checkGate.cmd, "npm run golden:check");
+  assert.equal(detail.checkGate.status, "pending");
+  assert.equal(detail.checkGate.mediaPath, "timeline.png");
+  assert.deepEqual(detail.checkGate.artifacts, [
+    "IMG_0446.debug-preview.png",
+    "IMG_0446.debug.mov",
+    "golden-report.json",
+    "timeline.png",
+    "timeline.svg",
+  ]);
+});
+
+test("getRunDetail reports no check gate as null", (t) => {
+  const orchDir = makeOrchDir(t);
+  assert.equal(getRunDetail(orchDir, RUN_ID).checkGate, null);
+});
+
+test("resolveGateArtifact serves whitelisted files and nothing else", (t) => {
+  const orchDir = makeOrchDir(t);
+  addCheckGate(orchDir, { "timeline.png": "png-bytes", "IMG_0446.debug.mov": "mov-bytes" });
+  const png = resolveGateArtifact(orchDir, RUN_ID, "timeline.png");
+  assert.equal(png.type, "image/png");
+  assert.equal(png.size, "png-bytes".length);
+  assert.equal(png.download, false);
+  assert.equal(fs.readFileSync(png.path, "utf8"), "png-bytes");
+  // The debug video downloads as an attachment.
+  const mov = resolveGateArtifact(orchDir, RUN_ID, "IMG_0446.debug.mov");
+  assert.equal(mov.type, "video/quicktime");
+  assert.equal(mov.download, true);
+  // Invalid names/extensions never reach the filesystem.
+  const invalid = (r) => {
+    assert.equal(r.status, 400);
+    assert.equal(r.path, undefined);
+  };
+  invalid(resolveGateArtifact(orchDir, RUN_ID, "../run.json"));
+  invalid(resolveGateArtifact(orchDir, RUN_ID, "a/b.png"));
+  invalid(resolveGateArtifact(orchDir, RUN_ID, "evil.sh"));
+  invalid(resolveGateArtifact(orchDir, RUN_ID, "x..png"));
+  invalid(resolveGateArtifact(orchDir, "..", "timeline.png"));
+  // Valid shape but absent → 404.
+  assert.equal(resolveGateArtifact(orchDir, RUN_ID, "missing.png").status, 404);
+  assert.equal(resolveGateArtifact(orchDir, "feature-no-such-run", "timeline.png").status, 404);
 });
 
 test("readRunLog serves the fixed whitelist and rejects everything else", (t) => {

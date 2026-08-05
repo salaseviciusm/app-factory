@@ -23,7 +23,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 
-import { classifyRunRetry, listRuns, getRunDetail, readRunLog, readStepDoc, RUN_ID_RE, TERMINAL_STATES } from "./lib/runs.mjs";
+import {
+  classifyRunRetry,
+  listRuns,
+  getRunDetail,
+  readRunLog,
+  readStepDoc,
+  resolveGateArtifact,
+  RUN_ID_RE,
+  TERMINAL_STATES,
+} from "./lib/runs.mjs";
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
 import {
@@ -223,6 +232,25 @@ async function handleApi(req, res, pathname, query) {
       if (text === null) return sendJson(res, 404, { error: "no such log" });
       return sendText(res, 200, text);
     }
+    if ((m = /^\/api\/runs\/([^/]+)\/gate\/([^/]+)$/.exec(pathname))) {
+      // Check-gate artifacts (timeline image, report JSON, debug video):
+      // resolveGateArtifact validates every segment against a closed
+      // charset/extension whitelist; content is streamed, never buffered —
+      // the debug video is hundreds of MB.
+      const art = resolveGateArtifact(ORCH_DIR, m[1], m[2]);
+      if (art.error) return sendJson(res, art.status, { error: art.error });
+      const headers = {
+        "Content-Type": art.type,
+        "Content-Length": art.size,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      };
+      if (art.download) headers["Content-Disposition"] = `attachment; filename="${m[2]}"`;
+      res.writeHead(200, headers);
+      if (req.method === "HEAD") return res.end();
+      fs.createReadStream(art.path).pipe(res);
+      return;
+    }
     if ((m = /^\/api\/runs\/([^/]+)\/step\/([^/]+)\/([^/]+)$/.exec(pathname))) {
       // readStepDoc validates every segment (run id, workflow-declared step id,
       // kind whitelist, bounded attempt) and maps bad input to 400, missing
@@ -349,13 +377,14 @@ async function handleApi(req, res, pathname, query) {
     }
   } else if (action === "reply") {
     // Founder turn in a discussion step (the web plan editor's compiled
-    // edits ride this). Only valid while the run is parked on a discussion
-    // turn — a reply outside that would sit unread in the jsonl.
+    // edits ride this) or at a check gate (a commands step parked on
+    // awaiting-approval), where the reply steers the implementer. Anywhere
+    // else it would sit unread in the jsonl.
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
     }
-    if (currentStepType(id) !== "discussion") {
-      return sendJson(res, 409, { error: "run is not on a discussion step" });
+    if (!["discussion", "commands"].includes(currentStepType(id))) {
+      return sendJson(res, 409, { error: "run is not on a discussion step or check gate" });
     }
     const text = typeof body.text === "string" ? body.text.trim() : "";
     if (!text || text.length > PROMPT_CAP) {
