@@ -16,6 +16,12 @@ Rules:
 - Stay inside the plan's scope. If something in the plan turns out to be impossible
   as written, implement the closest faithful version and record the deviation in
   `{{RUN_DIR}}/deviations.md`.
+- Founder-gated checks are not yours to fix: never edit, regenerate, or delete files
+  under a gated check's protected paths (golden baselines such as
+  `examples/*.golden.json`), and never run their re-baseline commands (e.g.
+  `golden:update`). If your change legitimately shifts recorded behaviour, leave the
+  gated check red and note why — the harness parks the run for founder judgment, and
+  it reverts any protected-path change you commit before the checks run.
 - Run the fast checks yourself before finishing (typecheck at minimum) and fix what
   you break.
 - Commit all changes with clear messages. After every commit, push it with plain
