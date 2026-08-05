@@ -1974,6 +1974,18 @@ function publishDeploy(run, rig) {
   return easPublish(run, rig);
 }
 
+/** Deploy merge-phase decision (pure, exercised by selftest). "merge" runs
+ *  mergeRunBranch; "already-merged" skips it — once a merge lands, the base
+ *  branch tip IS the merge commit, so re-running the drift check on a resumed
+ *  deploy (e.g. retrying a flaky eas publish) would misread that advance as
+ *  base drift and burn a recovery cycle per retry, eventually escalating a
+ *  publish problem as unresolvable drift; "review" leaves the branch for the
+ *  founder. */
+function classifyDeployMerge({ merge, mergedSha }) {
+  if (merge !== "auto") return { action: "review" };
+  return { action: mergedSha ? "already-merged" : "merge" };
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -1983,9 +1995,11 @@ function deployStep(run, rig) {
   // Merge phase, identical for every deploy type. Order matters for eas rigs:
   // merge first, publish second — the published bundle must equal what landed
   // on the default branch. merge "review" leaves the branch for the founder
-  // (the run ends awaiting-merge, set by the executor).
+  // (the run ends awaiting-merge, set by the executor); an already-landed
+  // merge (run.mergedSha) is never re-run — see classifyDeployMerge.
   let mergeNote;
-  if (policy.merge === "auto") {
+  const mergePhase = classifyDeployMerge({ merge: policy.merge, mergedSha: run.mergedSha });
+  if (mergePhase.action === "merge") {
     const m = mergeRunBranch(run, rig);
     if (!m.ok) return m;
     run.mergedSha = m.sha;
@@ -1994,6 +2008,8 @@ function deployStep(run, rig) {
       tArtifact(run.id, "deploy", deploy.type === "harness-merge" ? "harness_merge_commit" : "merge_commit", m.sha);
     } catch {}
     mergeNote = deploy.type === "harness-merge" ? null : `merged factory/${run.id} into ${rig.defaultBranch} (${m.sha}, local only)`;
+  } else if (mergePhase.action === "already-merged") {
+    mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}, local only); retrying publish`;
   } else {
     mergeNote = deploy.type === "none" ? null : `branch factory/${run.id} left for founder merge (policy.merge review)`;
   }
@@ -2034,6 +2050,19 @@ function effectivePreviewMode(run, rig) {
   const fileFlag = f && (f.mode === "on" || f.mode === "off") ? f.mode === "on" : null;
   const runFlag = fileFlag !== null ? fileFlag : typeof run.previewMode === "boolean" ? run.previewMode : null;
   return resolvePreviewMode(runFlag, (rig.policy || POLICY_DEFAULTS).preview);
+}
+
+/** Whether a skipWhen:"no-preview" step (release-decision / preview /
+ *  preview-gate) executes (pure, exercised by selftest). Mode off = today's
+ *  straight-to-deploy. Once the founder has approved this run's preview
+ *  (run.previewApproved), the trio never re-runs: deploy's onRecover target
+ *  ("checks") sits before these steps, so a base-drift recovery loop-back
+ *  would otherwise re-trigger a paid `eas build` and a second approval
+ *  request for a preview the founder already approved. */
+function classifyPreviewStep({ previewOn, previewApproved }) {
+  if (!previewOn) return { run: false, reason: "preview mode off" };
+  if (previewApproved) return { run: false, reason: "preview already approved this run — deploy recovery re-runs the gates, never the preview" };
+  return { run: true, reason: null };
 }
 
 // Synthetic twin of feature-dev's release-decision step, used by the on-demand
@@ -2666,10 +2695,16 @@ function execRun(id) {
       const stepStarted = nowIso();
       execCounts[step.id] = (execCounts[step.id] || 0) + 1;
 
-      if (step.skipWhen === "no-preview" && !effectivePreviewMode(run, rig)) {
+      const pvStep =
+        step.skipWhen === "no-preview"
+          ? classifyPreviewStep({ previewOn: effectivePreviewMode(run, rig), previewApproved: !!run.previewApproved })
+          : null;
+      if (pvStep && !pvStep.run) {
         // Preview-and-approve steps only exist when the mode is on (per-run
         // flag over per-rig policy.preview); off = today's straight-to-deploy.
-        result = { ok: true, summary: `${step.id} skipped (preview mode off)` };
+        // An approved preview is skipped too, so a deploy-recovery loop-back
+        // through "checks" cannot re-build or re-gate (classifyPreviewStep).
+        result = { ok: true, summary: `${step.id} skipped (${pvStep.reason})` };
       } else if (step.type === "agent" && step.id === "review" && run.recovery && run.recovery.pending === "reverify") {
         // Founder steering: a clean recovery rebase re-runs only the
         // deterministic gates — no code changed, the review verdict stands.
@@ -2718,7 +2753,13 @@ function execRun(id) {
         result = runCommandsStep(run, step, rig);
       } else if (step.type === "gate") {
         result = waitForGate(run, step);
-        if (result.ok) setState(run, "approved", result.summary);
+        if (result.ok) {
+          // A passed preview gate is durable (survives resume): a later
+          // deploy-recovery loop-back skips the preview trio instead of
+          // re-building and re-asking (classifyPreviewStep).
+          if (step.skipWhen === "no-preview") run.previewApproved = true;
+          setState(run, "approved", result.summary);
+        }
       } else if (step.type === "discussion") {
         // Conversational founder gate: manages its own states (running:<id>
         // per turn, awaiting-approval between turns) and per-turn telemetry.
@@ -4069,6 +4110,22 @@ function cmdSelftest() {
     console.log(`push ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`push check failed: ${name}`);
   }
+  // Deploy merge-phase decision (pure): a resumed deploy whose merge already
+  // landed (run.mergedSha set, e.g. retrying a flaky eas publish) must never
+  // re-run mergeRunBranch — the merge commit on the base reads as drift and
+  // burns a recovery cycle per retry until a publish problem "escalates" as
+  // unresolvable base drift.
+  const dm = (over) => classifyDeployMerge({ merge: "auto", mergedSha: null, ...over }).action;
+  const deployMergeChecks = [
+    ["auto policy merges", dm({}) === "merge"],
+    ["landed merge never re-runs on resume", dm({ mergedSha: "abc1234" }) === "already-merged"],
+    ["review policy leaves the branch", dm({ merge: "review" }) === "review"],
+    ["review outranks a stale mergedSha", dm({ merge: "review", mergedSha: "abc1234" }) === "review"],
+  ];
+  for (const [name, ok] of deployMergeChecks) {
+    console.log(`deploy-merge ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`deploy-merge check failed: ${name}`);
+  }
   // Resume step rewind (pure — no run dirs touched).
   const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
   const resumeChecks = [
@@ -4420,6 +4477,23 @@ function cmdSelftest() {
   for (const [name, ok] of previewModeChecks) {
     console.log(`preview-mode ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`preview-mode check failed: ${name}`);
+  }
+  // Preview-step gating across deploy recoveries (pure): deploy's onRecover
+  // target ("checks") sits before release-decision/preview/preview-gate, so a
+  // base-drift recovery on a preview run would re-run all three — a second
+  // paid `eas build` and a second approval request for a preview the founder
+  // already approved. An approved preview pins the trio skipped.
+  const ps = (over) => classifyPreviewStep({ previewOn: true, previewApproved: false, ...over });
+  const previewStepChecks = [
+    ["mode off skips the trio", ps({ previewOn: false }).run === false],
+    ["mode on runs the trio", ps({}).run === true],
+    ["approved preview never re-runs on recovery", ps({ previewApproved: true }).run === false],
+    ["approved skip reason names the approval", /already approved/.test(ps({ previewApproved: true }).reason)],
+    ["mode off outranks approval", ps({ previewOn: false, previewApproved: true }).reason === "preview mode off"],
+  ];
+  for (const [name, ok] of previewStepChecks) {
+    console.log(`preview-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`preview-step check failed: ${name}`);
   }
   // Release-decision verdict parsing + fail-safe (pure): agent error, timeout,
   // or ambiguity resolves to build — never a silent OTA of a native change.

@@ -420,6 +420,15 @@ There was also no way for the founder to try an app build before it shipped.
   Slack notification. The preview gate reuses the `gate` step type with
   `autoApprove: false`: `--auto` skips the plan discussion, never the
   try-it-first gate.
+- **Deploy retries and recoveries never repeat the merge or the preview.** A
+  landed merge is recorded (`run.mergedSha`) and skipped on any resumed deploy —
+  re-checking drift after the merge commit lands would misread the advanced base
+  as drift and burn recovery cycles on retries of an unrelated publish failure.
+  Likewise a passed preview gate is recorded (`run.previewApproved`), so a
+  genuine base-drift recovery looping back through `checks` re-runs the
+  deterministic gates but never release-decision/preview/preview-gate — no
+  second paid build, no second approval request. Both decisions are pure
+  functions (`classifyDeployMerge`, `classifyPreviewStep`) pinned by selftest.
 **Why:** merge behaviour must be a stated policy, not an artifact of the deploy
 mechanism — the safety asymmetry is that merging is irreversible and touches the
 default branch, while publishing a preview is additive. The preview mechanism is
