@@ -8,7 +8,8 @@
  *         workflows/*.json, rigs.json (served verbatim — ${VAR} placeholders
  *         stay unresolved; openclaw/secrets.env is never read).
  * Writes: nothing directly — every mutation shells out to bin/factory-run
- *         (start/approve/reject/steer/cancel/reply) via execFile with an args array.
+ *         (start/approve/reject/steer/cancel/reply/retry/resume/cleanup
+ *         --discard) via execFile with an args array.
  *
  * Access model: binds 127.0.0.1 by default. For phone access keep the loopback
  * bind and put `tailscale serve` in front (TLS + tailnet-only). Binding any
@@ -299,15 +300,17 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
   const state = currentRunState(id);
   if (state === null) return sendJson(res, 404, { error: `no such run: ${id}` });
 
-  const args = [action, id];
+  // discard = the founder's explicit "clean this run up" choice: force-remove
+  // the worktree and branch of one terminal run via cleanup --discard.
+  const args = action === "discard" ? ["cleanup", id, "--discard"] : [action, id];
   let retryTier = null;
   if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
@@ -332,6 +335,17 @@ async function handleApi(req, res, pathname, query) {
   } else if (action === "cancel") {
     if (TERMINAL_STATES.includes(state)) {
       return sendJson(res, 409, { error: `run is already ${state}` });
+    }
+  } else if (action === "resume") {
+    // Console resume is the cancelled-run fate choice (the executor picks up
+    // at the interrupted step). Failed/stuck runs go through `retry` below —
+    // its classifier owns those states, so resume stays cancelled-only.
+    if (state !== "cancelled") {
+      return sendJson(res, 409, { error: `run is '${state}' — console resume covers cancelled runs only (use retry for failed/stuck runs)` });
+    }
+  } else if (action === "discard") {
+    if (!TERMINAL_STATES.includes(state)) {
+      return sendJson(res, 409, { error: `run is '${state}', not terminal — cancel it first` });
     }
   } else if (action === "reply") {
     // Founder turn in a discussion step (the web plan editor's compiled

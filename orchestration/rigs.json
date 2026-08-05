@@ -42,7 +42,8 @@
         "node --check openclaw/lib/slack-channel.mjs"
       ],
       "tests": [
-        "node --test orchestration/web/lib/*.test.mjs"
+        "node --test orchestration/web/lib/*.test.mjs",
+        "node --test orchestration/test/*.test.mjs"
       ],
       "appDir": ".",
       "deploy": {

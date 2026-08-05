@@ -95,6 +95,7 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
       {(run.state === "failed" || run.stalled) && data.retry && (
         <RetryPanel runId={run.id} retry={data.retry} retries={run.retries} refresh={refresh} />
       )}
+      {run.state === "cancelled" && run.source !== "db" && <CancelledPanel runId={run.id} refresh={refresh} />}
 
       {workflow ? (
         <section className="panel">
@@ -277,7 +278,11 @@ function ActionBar({ runId, refresh }: { runId: string; refresh: () => void }) {
             className="btn btn-reject"
             disabled={busy}
             onClick={() => {
-              if (window.confirm(`Cancel run ${runId}? The executor stops at the next step boundary.`)) {
+              if (
+                window.confirm(
+                  `Cancel run ${runId}? The executor and its in-flight agent are terminated immediately; afterwards you choose to resume, discard, or keep the run.`
+                )
+              ) {
                 void act(() => api.cancel(runId), null);
               }
             }}
@@ -388,6 +393,69 @@ function RetryPanel({
           {retries.map((r) => `${r.tier} at ${r.step ?? "?"} (${fmtWhen(r.at)})`).join(", ")}
         </p>
       )}
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+    </section>
+  );
+}
+
+/** A cancelled run's fate is an explicit founder choice, never silent: resume
+ *  it (the executor picks up from the interrupted step, via the same
+ *  factory-run resume path as the CLI and RetryPanel's resume tier), discard
+ *  its worktree and branch, or do nothing and keep it — it stays listed
+ *  either way. Distinct from RetryPanel: a cancel is a founder decision, not
+ *  a failure, so there is no triage classification to run. */
+function CancelledPanel({ runId, refresh }: { runId: string; refresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const act = async (fn: () => Promise<{ message?: string }>, fallback: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fn();
+      setNotice(r.message || fallback);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="panel gate-panel">
+      <h3>■ Run cancelled — its fate is your call</h3>
+      <p>
+        Resume restarts the run at the step that was interrupted. Discard deletes its worktree and branch —
+        uncommitted and unmerged work is lost permanently (the run record stays here). Doing nothing keeps
+        everything as is.
+      </p>
+      <div className="gate-actions">
+        <button
+          className="btn btn-approve"
+          disabled={busy}
+          onClick={() => void act(() => api.resume(runId), "Resumed — the executor restarts at the interrupted step.")}
+        >
+          ▶ Resume run
+        </button>
+        <button
+          className="btn btn-reject"
+          disabled={busy}
+          onClick={() => {
+            if (
+              window.confirm(
+                `Discard ${runId}'s worktree and branch? Uncommitted and unmerged work is deleted permanently.`
+              )
+            ) {
+              void act(() => api.discard(runId), "Worktree and branch discarded.");
+            }
+          }}
+        >
+          🗑 Discard worktree &amp; branch
+        </button>
+      </div>
       {notice && <div className="notice-box">{notice}</div>}
       {error && <div className="error-box">{error}</div>}
     </section>

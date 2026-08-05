@@ -90,4 +90,6 @@ export const api = {
       `/api/runs/${encodeURIComponent(id)}/retry`,
       { force }
     ),
+  resume: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/resume`, {}),
+  discard: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/discard`, {}),
 };
