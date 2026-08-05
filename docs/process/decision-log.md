@@ -284,3 +284,70 @@ but full per-step context is now captured on disk as evidence.
 **Why:** the self-review loop can only fix what it can see; context/cost analysis
 must start from true numbers. Run dirs grow by MBs per step — acceptable, reclaimed
 by existing cleanup; rollback is a `git revert` of the merge commit.
+
+## D23 — New-app intake becomes a native orchestration workflow (2026-08-05)
+
+**Context:** `orchestration/workflows/new-app.json` was two `manual` steps: the
+orchestrator drove the `factory-new-app` skill via OpenClaw sub-agent sessions, so
+the phase with the highest cost of a wrong assumption (spec, audience, kill decision)
+was the only one with no run dir, no telemetry, and no reviewable diff. Feature and
+bug work on the resulting `factory:<name>` quickfire rig already ran on the engine —
+zero such runs exist to date, so the path is wired but unexercised.
+**Decision:**
+- New-app intake (refine → market-check → spec gate → brand → stamp template → spawn
+  first feature-dev run) becomes a real engine graph. It runs on the `app-factory`
+  rig: `apps/<name>/` lives inside that repo, so the existing worktree machinery
+  applies unchanged and the spec gate reviews a branch diff rather than a Slack paste.
+- Sequenced as two runs. Run 1 (`feature-per-step-agent-profile`) adds an optional
+  `agent` field to agent steps, composing the rendered prompt from `agents/<profile>.md`
+  verbatim plus the task prompt template, with preflight validation of a missing
+  profile. Run 2 ports new-app onto the engine and must not start until run 1 merges.
+- The market-check verdict is a **hard** gate, delivered immediately rather than
+  batched into the 08:00 standup, and it is *conversational*: founder↔agent turns
+  continue until no questions remain, resolving to go-ahead or don't-build. Today's
+  `gate` step cannot do this — it posts once and blocks on a single approve/reject
+  decision file with a 12h timeout, and reject loops the run back a step rather than
+  reopening the thread. A generic interactive `discussion` step type is therefore
+  folded into run 2 (founder-stated), proving itself on new-app before other
+  judgement-call gates adopt it.
+- Standup stops hand-maintaining pending gates: `factory-standup` currently greps an
+  "Awaiting founder" section of STATE.md, which is only as true as its last editor.
+  Once intake is a run, standup builds its agenda from engine state and STATE.md
+  becomes a rendered view. Intake gate timeouts should be shorter than the current 12h
+  so a missed standup does not silently burn a day.
+**Why:** the self-review loop can only tune what it can measure, and idea intake was
+invisible to it (founder-stated: "that gets us telemetry for free... we can tune the
+new app generation process better"). A hard conversational gate is what makes an early
+kill cheap — a don't-build verdict should stop burning agent time the moment it lands,
+and single-shot approve/reject cannot reach a decision on a question the founder has
+not finished asking. Sequencing prevents run 2 planning against an engine without
+`step.agent`.
+
+## D24 — feature-dev's plan gate becomes a `discussion` step (2026-08-05)
+
+**Context:** D23 built the generic `discussion` step type and proved it on new-app's
+spec discussion, explicitly deferring adoption by "other judgement-call gates" until
+it had run in anger. The founder asked for feature-dev next. The plan gate had the
+same defect the spec gate did: it posts the plan once and blocks on a single
+approve/reject decision file, so "yes, but drop the offline case" had nowhere to go
+except `reject`, which kills the run and throws the plan away.
+**Decision:**
+- `feature-dev.json` step `plan-gate` (type `gate`) is replaced by `plan-discussion`
+  (type `discussion`, prompt `plan-discussion`, 8 turns, 240-minute idle timeout).
+  The founder can now iterate on the plan; each turn rewrites `plan.md` on disk so
+  the implementer reads the agreed plan, not the original one.
+- `approve` starts implementation, `reject` drops the feature (run state `killed`),
+  `reply` continues the conversation. Turn cap and idle timeout fail loudly and
+  never auto-approve, as with new-app.
+- The discussion step now honors `skipWhen: "auto"` per step. feature-dev sets it,
+  so `--auto` runs (founder "just do it", and the spawned children of new-app and
+  self-review, whose plans are already approved) skip the conversation exactly as
+  they skipped the gate. new-app's spec discussion deliberately does not set it: it
+  is the don't-build kill switch and must never be skippable.
+- `self-review.json` keeps its one-shot `gate` — its output is a single improvement
+  plan the founder approves or doesn't, and the resulting child run has its own
+  plan discussion anyway.
+**Why:** the plan is the cheapest place to change a feature's mind, and the gate
+made that the one place a conversation could not happen. Reusing the step type
+rather than special-casing feature-dev keeps one implementation of the founder
+conversation — bounds, telemetry, resume, and web console all came free.

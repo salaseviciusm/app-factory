@@ -14,8 +14,10 @@ factory-run list                # all runs, newest first, with state + cost/toke
 factory-run status <run_id>     # one run: step history, cost, worktree, run dir
 ```
 
-States: `queued`, `running:<step>`, `awaiting-approval` (plan gate; founder
-decides in the #factory-builds Slack channel), `done`, `failed`, `cancelled`.
+States: `queued`, `running:<step>`, `awaiting-approval` (plan discussion awaiting
+the founder's next message or go-ahead in #factory-builds), `approved`, `done`,
+`killed` (founder said don't build — a success, not a failure), `failed`,
+`cancelled`.
 
 ## Telemetry digest
 

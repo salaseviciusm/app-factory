@@ -867,6 +867,15 @@ function readDiscussionTurns(runDir, stepId) {
 function runDiscussionStep(run, step) {
   const id = run.id;
   const runDir = runDirOf(id);
+  // `--auto` ("just do it") skips the founder conversation exactly as it
+  // skipped the gate it replaces — spawned child runs carry an already
+  // approved plan, so blocking them on a discussion would deadlock the chain.
+  // Opt-in per step (skipWhen: "auto"): new-app's spec discussion is the
+  // don't-build kill switch and must never be skippable.
+  if (run.auto && step.skipWhen === "auto") {
+    log(runDir, `discussion ${step.id} skipped (--auto)`);
+    return { ok: true, summary: "auto-approved (discussion skipped)" };
+  }
   const maxTurns = step.maxTurns ?? DISCUSSION_DEFAULTS.maxTurns;
   const idleTimeoutMinutes = step.idleTimeoutMinutes ?? DISCUSSION_DEFAULTS.idleTimeoutMinutes;
   const decisionPath = path.join(runDir, "gate-decision.json");
@@ -2465,7 +2474,7 @@ function cmdSelftest() {
     if (!ok) problems.push(`recovery check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
-  const wfSteps = ["plan", "plan-gate", "implement", "checks", "review", "tests", "deploy", "notify"];
+  const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
   const resumeChecks = [
     ["plain resume keeps the current step", resolveResumeStep(wfSteps, 6, {}) === 6],
     ["--step rewinds to an earlier step", resolveResumeStep(wfSteps, 6, { step: "checks" }) === 3],
