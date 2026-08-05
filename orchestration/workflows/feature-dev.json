@@ -1,9 +1,9 @@
 {
   "name": "feature-dev",
-  "description": "Feature development: dissect prompt, refine plan with founder, implement, validate (agentic + deterministic), test, deploy as downloadable update.",
+  "description": "Feature development: dissect prompt, refine the plan with the founder in a multi-turn Slack discussion (replaces the one-shot approve/reject gate), implement, validate (agentic + deterministic), test, deploy as downloadable update.",
   "steps": [
     { "id": "plan", "type": "agent", "prompt": "planner", "timeoutMinutes": 15 },
-    { "id": "plan-gate", "type": "gate", "skipWhen": "auto" },
+    { "id": "plan-discussion", "type": "discussion", "prompt": "plan-discussion", "skipWhen": "auto", "maxTurns": 8, "idleTimeoutMinutes": 240, "timeoutMinutes": 20 },
     { "id": "implement", "type": "agent", "prompt": "implementer", "timeoutMinutes": 90 },
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
     { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },

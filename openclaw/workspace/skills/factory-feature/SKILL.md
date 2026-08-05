@@ -7,7 +7,7 @@ user-invocable: true
 # Orchestrated Runs (feature-dev / bug-fix)
 
 You drive the run engine at `~/src/app-factory/orchestration/bin/factory-run`.
-It executes the workflow (plan → founder gate → implement → deterministic checks →
+It executes the workflow (plan → founder plan discussion → implement → deterministic checks →
 cross-model review → tests → EAS deploy → Slack notify with QR/link) in a detached
 process; you start it, relay the plan, record the founder's decision, and answer
 status questions. The engine posts step transitions to #factory-builds on its own.
@@ -44,18 +44,32 @@ ambiguous fragment the command exits non-zero listing the matching ids; pick the
 right one and rerun. Older runs keep their legacy `feature-msdn5cuj`-style ids
 and resolve the same way.
 
-Plan gate: the engine posts the plan to #factory-builds and waits. When the founder
-says "approve"/"go"/"looks good" (in any channel, referring to the run):
+Plan discussion (feature-dev): the engine posts the plan to #factory-builds as a
+conversation, not a one-shot gate. The founder can ask questions or request
+changes as many times as they like (up to 8 turns); each reply gets a real
+answer and the plan file is rewritten to match before implementation starts.
+Relay the founder's message verbatim-in-substance:
+
+```sh
+~/src/app-factory/orchestration/bin/factory-run reply <run_id> "<their message>"
+```
+
+Only the founder ends the discussion. Go-ahead ("approve"/"go"/"looks good", in
+any channel, referring to the run):
 
 ```sh
 ~/src/app-factory/orchestration/bin/factory-run approve <run_id>
 ```
 
-Rejection or changes requested:
+Drop the feature entirely:
 
 ```sh
 ~/src/app-factory/orchestration/bin/factory-run reject <run_id> "<their feedback>"
 ```
+
+Use `reject` only for "don't build this" — it ends the run. Anything of the form
+"yes but change X" is a `reply`, which keeps the discussion alive. Bug-fix runs
+have no discussion; they proceed straight to implementation.
 
 Mid-run steering ("also make it work offline", "use the green accent"):
 
@@ -84,7 +98,7 @@ Cancel: `factory-run cancel <run_id>`.
   For voice notes, use the transcript; if the transcript is garbled on a key point,
   ask one clarifying question before starting.
 - If the founder says "just do it"/"no need to check the plan", add `--auto` to skip
-  the plan gate. Otherwise never skip it.
+  the plan discussion. Otherwise never skip it.
 - When a run finishes, the engine posts the artifact link + QR code itself. Your job
   afterwards: offer to merge (`git -C <rig path> merge factory/<run_id>`) once the
   founder confirms the build works on their device. Never merge unprompted.

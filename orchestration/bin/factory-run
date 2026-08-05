@@ -867,6 +867,15 @@ function readDiscussionTurns(runDir, stepId) {
 function runDiscussionStep(run, step) {
   const id = run.id;
   const runDir = runDirOf(id);
+  // `--auto` ("just do it") skips the founder conversation exactly as it
+  // skipped the gate it replaces — spawned child runs carry an already
+  // approved plan, so blocking them on a discussion would deadlock the chain.
+  // Opt-in per step (skipWhen: "auto"): new-app's spec discussion is the
+  // don't-build kill switch and must never be skippable.
+  if (run.auto && step.skipWhen === "auto") {
+    log(runDir, `discussion ${step.id} skipped (--auto)`);
+    return { ok: true, summary: "auto-approved (discussion skipped)" };
+  }
   const maxTurns = step.maxTurns ?? DISCUSSION_DEFAULTS.maxTurns;
   const idleTimeoutMinutes = step.idleTimeoutMinutes ?? DISCUSSION_DEFAULTS.idleTimeoutMinutes;
   const decisionPath = path.join(runDir, "gate-decision.json");
@@ -2297,6 +2306,9 @@ function statusExtras(run) {
   if (run.state !== "awaiting-approval") return { currentStep, gate: null };
   if (step.type === "discussion") {
     const runDir = runDirOf(run.id);
+    // A run dir can be absent (pruned, or a synthetic run in selftest); report
+    // the gate kind rather than letting `status --json` die on one bad run.
+    if (!fs.existsSync(runDir)) return { currentStep, gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null } };
     const turns = readDiscussionTurns(runDir, step.id);
     const repliesPath = path.join(runDir, "discussion-replies.jsonl");
     const replies = fs.existsSync(repliesPath)
@@ -2503,7 +2515,7 @@ function cmdSelftest() {
     if (!ok) problems.push(`recovery check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
-  const wfSteps = ["plan", "plan-gate", "implement", "checks", "review", "tests", "deploy", "notify"];
+  const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
   const resumeChecks = [
     ["plain resume keeps the current step", resolveResumeStep(wfSteps, 6, {}) === 6],
     ["--step rewinds to an earlier step", resolveResumeStep(wfSteps, 6, { step: "checks" }) === 3],
@@ -2625,9 +2637,10 @@ function cmdSelftest() {
   const sx = (over) =>
     statusExtras({ id: "selftest-0000", workflow: "feature-dev", stepIndex: 1, state: "running:plan", updatedAt: "2026-01-01T00:00:00.000Z", ...over });
   const statusChecks = [
-    ["currentStep carries index/total/id/type", (() => { const c = sx({}).currentStep; return c.index === 1 && c.total === 8 && c.id === "plan-gate" && c.type === "gate"; })()],
+    ["currentStep carries index/total/id/type", (() => { const c = sx({ stepIndex: 2 }).currentStep; return c.index === 2 && c.total === 8 && c.id === "implement" && c.type === "agent"; })()],
     ["non-awaiting run has no gate", sx({}).gate === null],
-    ["awaiting-approval at a gate step is a plan gate", (() => { const g = sx({ state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z"; })()],
+    ["awaiting-approval at a gate step is a plan gate", (() => { const g = sx({ workflow: "self-review", stepIndex: 1, state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z"; })()],
+    ["awaiting-approval at a discussion step is a discussion gate", (() => { const g = sx({ state: "awaiting-approval" }).gate; return g !== null && g.kind === "discussion"; })()],
     ["completed run clamps to the last step", sx({ stepIndex: 8, state: "done" }).currentStep.id === "notify"],
     ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null })],
   ];

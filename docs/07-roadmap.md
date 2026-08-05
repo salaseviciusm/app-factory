@@ -51,7 +51,9 @@ green, install on the founder's phone, in under a day.
 - [ ] Dedicated Slack Bolt service (fin-news pattern, D10) replaces the OpenClaw plugin;
       approval-gate buttons live in `#factory-approvals`
 - [ ] Migrate OpenClaw + services from home machine to VPS (D12) — cron-driven
-      standups/marketing must not miss
+      standups/marketing must not miss. Runbook + threat model:
+      `docs/09-deployment-and-security.md` (Linux guest; no macOS needed — all rigs
+      build via EAS cloud). Open questions await founder at standup.
 - [ ] Marketing engine: content generation, weekly calendar review, cron posting,
       nightly analytics digest
 - [ ] App #2 runs with the founder ONLY at standup + gates; measure where it stalls
