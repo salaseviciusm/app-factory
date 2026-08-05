@@ -18,6 +18,9 @@ Rules:
   `{{RUN_DIR}}/deviations.md`.
 - Run the fast checks yourself before finishing (typecheck at minimum) and fix what
   you break.
-- Commit all changes with clear messages. Do not push. Do not switch branches.
+- Commit all changes with clear messages. After every commit, push it with plain
+  `git push` (the upstream is already configured) so progress is visible from the
+  web console as you go; if a push fails, keep working — never block on the
+  network. Do not switch branches.
 
 When the implementation is complete and committed, reply with only the single word: IMPLEMENTED

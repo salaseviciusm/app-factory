@@ -890,6 +890,30 @@ function recordCommits(run) {
   } catch {}
 }
 
+/** The exact publish invocation (pure, exercised by selftest):
+ *  --force-with-lease because deploy recovery rebases the branch (rewriting
+ *  every sha), -u so the first push creates the upstream the agents' plain
+ *  `git push` relies on. */
+function pushRunBranchCommand(runId) {
+  return `git push --force-with-lease -u origin factory/${runId}`;
+}
+
+/** Best-effort publish of factory/<id> to origin so the web console's commit
+ *  links resolve while the run is still going. Never fails the step or run:
+ *  a rig without a reachable remote logs a loud engine.log line and keeps
+ *  working offline. Skipped for read-only workflows (worktree:false) that
+ *  never create the run branch. */
+function pushRunBranch(run) {
+  const runDir = runDirOf(run.id);
+  if (git(run.worktree, ["rev-parse", "--verify", "--quiet", `refs/heads/factory/${run.id}`]).status !== 0) return;
+  const r = runCommand(pushRunBranchCommand(run.id), run.worktree, path.join(runDir, "push.log"), 2);
+  if (r.ok) {
+    log(runDir, `pushed factory/${run.id} to origin`);
+  } else {
+    log(runDir, `push FAILED for factory/${run.id}: ${r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (commits stay local; see push.log)`);
+  }
+}
+
 // ---------- gate ----------
 
 function waitForGate(run, step) {
@@ -1270,6 +1294,12 @@ function deployStep(run, rig) {
       // so the executor skips the review agent while `pending` is "reverify".
       run.recovery.pending = decision.action;
       saveRun(run);
+      if (!conflicted) {
+        // The clean rebase rewrote every sha: reconcile origin (force-with-
+        // lease) and the recorded commit artifacts with the new history.
+        pushRunBranch(run);
+        recordCommits(run);
+      }
       return {
         ok: false,
         recover: decision.action,
@@ -1799,6 +1829,10 @@ function handleRecovery(run, workflow, deployDef, result) {
     }
     if (last) last.outcome = "resolved";
     saveRun(run);
+    // The completed rebase rewrote every sha: reconcile origin (force-with-
+    // lease) and the recorded commit artifacts with the rewritten branch.
+    pushRunBranch(run);
+    recordCommits(run);
     try {
       tStep(id, RESOLVE_STEP.id, r.attempt, "ok", r.summary, started, r.usage);
     } catch {}
@@ -1867,6 +1901,10 @@ function execRun(id) {
       fs.mkdirSync(WORKTREES_DIR, { recursive: true });
       sh(`git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b factory/${id} ${rig.defaultBranch}`);
       log(runDir, `worktree created at ${run.worktree} (branch factory/${id})`);
+      // Publish the branch (and set its upstream) before the first agent step
+      // so the agents' per-commit plain `git push` works and the web console's
+      // commit links resolve as the run progresses.
+      pushRunBranch(run);
       const setupLog = path.join(runDir, "setup.log");
       for (const cmd of rig.setup || []) {
         log(runDir, `setup: ${cmd}`);
@@ -1905,6 +1943,11 @@ function execRun(id) {
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
         result = runAgentStep(run, step);
+        // Safety net behind the agents' own per-commit pushes: publish the
+        // branch after every agent step, success or failure — a timed-out
+        // implement attempt may still hold commits the founder wants to see.
+        pushRunBranch(run);
+        if (step.id === "implement") recordCommits(run);
         if (result.ok && step.id === "review") {
           result = { ...evaluateReview(run), attempt: result.attempt, usage: result.usage };
         }
@@ -1914,7 +1957,6 @@ function execRun(id) {
           // workflow's onFail loop re-runs the plan step with findings.
           result = { ...evaluatePlanMd(run, "after the plan step"), attempt: result.attempt, usage: result.usage };
         }
-        if (result.ok && step.id === "implement") recordCommits(run);
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
         result = runCommandsStep(run, step, rig);
@@ -2991,6 +3033,24 @@ function cmdSelftest() {
   for (const [name, ok] of recoveryChecks) {
     console.log(`recovery ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`recovery check failed: ${name}`);
+  }
+  // Run-branch publish contract: recovery rebases rewrite shas, so the push
+  // must be --force-with-lease with the upstream set on first push; the agent
+  // prompts must push per commit (never forbid it) but never switch branches.
+  const pushCmd = pushRunBranchCommand("bug-selftest");
+  const stepPrompt = (name) => fs.readFileSync(path.join(ORCH_DIR, "prompts", `${name}.md`), "utf8");
+  const pushChecks = [
+    ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
+    ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
+    ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")],
+    ["implement/fix prompts push per commit, stay on the branch", ["implementer", "bug-fixer"].every((n) => {
+      const p = stepPrompt(n);
+      return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches");
+    })],
+  ];
+  for (const [name, ok] of pushChecks) {
+    console.log(`push ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`push check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
   const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
