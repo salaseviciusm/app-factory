@@ -2136,8 +2136,17 @@ function publishPreview(run, rig) {
       ? easPublish(run, rig, { message: `factory-run ${run.id} preview: ${run.prompt.slice(0, 70)}`, qrName: "preview-qr.png" })
       : easBuild(run, rig, { qrName: "preview-qr.png" });
   if (!pub.ok) return pub;
-  run.preview = { ...(run.preview || {}), url: pub.url || null, qrPath: pub.qrPath || null, kind, at: nowIso() };
-  saveRun(run);
+  // The build/update above can run for tens of minutes, and the caller's
+  // snapshot may be stale by now: an on-demand preview runs detached from a
+  // possibly-live executor, and a cancel can land mid-build either way. A
+  // full-object save of the pre-build snapshot would silently rewind whatever
+  // was written in that window (stepIndex, state, mergedSha, ...), so re-read
+  // and apply only the preview fields, then mirror the fresh record onto the
+  // caller's copy so its own later saves don't resurrect the stale one.
+  const fresh = loadRun(run.id);
+  fresh.preview = { ...(fresh.preview || {}), url: pub.url || null, qrPath: pub.qrPath || null, kind, at: nowIso() };
+  saveRun(fresh);
+  Object.assign(run, fresh);
   try {
     if (pub.url) tArtifact(run.id, "preview", "preview_url", pub.url);
   } catch {}
@@ -3107,7 +3116,7 @@ function cmdReport(argv) {
   const artifacts = db
     .prepare(
       `SELECT a.run_id, a.type, a.value FROM artifacts a JOIN runs r ON r.id = a.run_id
-       WHERE a.type IN ('artifact_url', 'harness_merge_commit', 'commit') AND r.created_at >= ?
+       WHERE a.type IN ('artifact_url', 'harness_merge_commit', 'merge_commit', 'release_decision', 'preview_url', 'commit') AND r.created_at >= ?
        ORDER BY a.created_at DESC LIMIT 40`
     )
     .all(since);
@@ -3860,7 +3869,7 @@ function cmdDeployTrigger(argv) {
 
 /** Detached worker behind `factory-run deploy`: publish, record, notify. */
 function execDeployHeld(id) {
-  const run = loadRun(id);
+  let run = loadRun(id);
   const runDir = runDirOf(id);
   const rig = resolveRig(run.rig);
   const pub = publishDeploy(run, rig);
@@ -3869,6 +3878,11 @@ function execDeployHeld(id) {
     notify(run, `:x: Run ${id}: held deploy FAILED — ${pub.summary}\nStill held; retry with \`factory-run deploy ${id}\`.`);
     return;
   }
+  // The publish takes minutes; a `factory-run merge` (or anything else) may
+  // have written run.json in that window. Same discipline as publishPreview:
+  // never save the stale pre-publish snapshot — re-read and apply only the
+  // deploy fields.
+  run = loadRun(id);
   run.deployHeld = false;
   if (pub.url) run.artifactUrl = pub.url;
   if (pub.qrPath) run.qrPath = pub.qrPath;
