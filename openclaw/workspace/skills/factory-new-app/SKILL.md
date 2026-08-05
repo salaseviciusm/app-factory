@@ -1,35 +1,45 @@
 ---
 name: factory-new-app
-description: Start the product process for a new app idea — creates the app workspace and kicks off stage 1 (refinement) with the product-lead profile. Use when the founder shares an app idea.
+description: Start the product process for a new app idea via the factory-run engine — spec refinement, market check, conversational founder spec discussion, brand pack, and template stamp, ending in a spawned first feature-dev run. Use when the founder shares an app idea.
 user-invocable: true
 ---
 
-# New App Intake
+# New App Intake (engine-executed)
 
 Input: the founder's idea, however rough ("what about a tip-splitting app?").
 
 ## Steps
 
-1. **Clarify before creating.** If the idea is ambiguous about audience or intent, ask
-   1–3 decision-shaped questions first (with defaults). Do not create workspaces for
-   ideas you don't understand — a wrong assumption here invalidates everything after.
-2. Pick a working codename (lowercase-hyphenated; NOT the final brand name — that's
-   stage 3's job).
-3. Create the app workspace from the spec scaffold:
-   `~/src/app-factory/apps/<codename>/` containing `spec.md` (from
-   `~/src/app-factory/template/spec-scaffold/spec.md`), `STATUS.md`, `decisions.md`,
-   `brand-pack/` (empty scaffold).
-4. Record the spark verbatim in `spec.md` § Spark, with date and source.
-5. Spawn a **product-lead** session (profile: `~/src/app-factory/agents/product-lead.md`,
-   workspace: the new app folder) with the instruction: run stages 1–2 (refinement +
-   market check, including "reasons not to build this"), draft into spec.md, and return
-   open questions for the founder.
-6. Update `STATE.md`: add the app at stage 1; queue the product-lead's questions for
-   the next standup (or relay immediately if the founder is in-conversation).
+1. **Clarify before starting.** If the idea is ambiguous about audience or intent, ask
+   1–3 decision-shaped questions first (with defaults). Do not start runs for ideas
+   you don't understand — a wrong assumption here invalidates everything after.
+2. Start the engine-executed workflow (it owns codename, workspace, spec, market
+   check, brand, and stamp — with run dirs, diffs, and telemetry):
+
+   ```sh
+   ~/src/app-factory/orchestration/bin/factory-run start \
+     --rig app-factory --workflow new-app --prompt "<the founder's idea, faithfully restated>"
+   ```
+
+   Tell the founder the run id; the market-check verdict and spec summary arrive in
+   Slack as the discussion opens.
+3. **Relay the spec discussion.** The engine posts each product-lead turn to
+   #factory-builds and waits. Map the founder's words to verbs:
+   - a reply, question, or redirection → `factory-run reply <run_id> "<their words>"`
+     (triggers exactly one new agent turn);
+   - go-ahead ("build it", "approved") → `factory-run approve <run_id>`;
+   - don't build → `factory-run reject <run_id> "<why>"` — the run ends in state
+     `killed`, which is a success (money saved), and you report it that way;
+   - instructions outside the discussion → `factory-run steer <run_id> "<text>"`.
+   Bounds are loud: 8 turns / 4h idle by default; hitting either fails the run with
+   an explicit notification — it never auto-approves.
+4. After the go-ahead the engine finishes on its own: brand pack, template stamp,
+   checks, merge to main, then a spawned feature-dev run building the first feature
+   (from the discussion's `first-feature.md`) on the new rig `factory:<codename>`.
 
 ## Constraints
 
-- Stage order is not skippable. No brand work before stage 2 survives review; no code
-  before the founder's spec gate.
-- If the product-lead's stage-2 verdict is "don't build," present that verdict with
-  its reasons at standup — killing ideas early is a success, not a failure.
+- Stage order is engine-enforced and not skippable: no brand work before a recorded
+  market check; no stamp without the founder's go-ahead on disk.
+- If the market check's verdict is "don't build," the discussion says so in its
+  opening message — killing ideas early is a success, not a failure.

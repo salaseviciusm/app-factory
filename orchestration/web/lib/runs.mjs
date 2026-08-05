@@ -9,7 +9,9 @@ import { openTelemetry, telemetryRuns, stepsForRun, artifactsForRun, usageForRun
 import { repoUrlForRig } from "./github.mjs";
 
 export const RUN_ID_RE = /^[a-z0-9-]+$/;
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled"];
+// "killed" is a discussion step's don't-build ending: terminal and a success
+// (early kill = money saved), never rendered with failure styling.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
 const STALL_MS = 10 * 60 * 1000;
 
 function readJson(p, fallback) {

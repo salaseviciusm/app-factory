@@ -1,8 +1,14 @@
 {
   "name": "new-app",
-  "description": "Quick-fire new app idea inside the factory. Delegates to the existing factory-new-app skill flow (spec refinement, market sanity, brand pack, template stamp), then runs as a quickfire rig where the marketing loop judges viability. Not executed by the run engine step-by-step; the orchestrator drives the factory-new-app skill and registers the resulting apps/<name> as a quickfire rig.",
+  "description": "Quick-fire new app idea, engine-executed on the app-factory rig: spec refinement, market check (with mandatory reasons-not-to-build), conversational founder spec discussion (go-ahead or kill — an early kill ends the run in state 'killed', a success), brand pack, template stamp, harness checks, merge to main, then spawn of the first feature-dev run on the new factory:<codename> rig. Linear execution makes stage-skipping impossible.",
   "steps": [
-    { "id": "delegate", "type": "manual", "note": "Orchestrator runs the factory-new-app skill (spec -> founder spec gate -> stamp template). Resulting app dir becomes rig factory:<name>." },
-    { "id": "first-feature", "type": "manual", "note": "Subsequent feature work on the new app uses workflow feature-dev with rig factory:<name> (quickfire tier: template checks only, no agentic review loop by default)." }
+    { "id": "refine", "type": "agent", "prompt": "new-app-refine", "agent": "product-lead", "timeoutMinutes": 30 },
+    { "id": "market-check", "type": "agent", "prompt": "new-app-market-check", "agent": "product-lead", "timeoutMinutes": 30 },
+    { "id": "spec-discussion", "type": "discussion", "prompt": "new-app-spec-discussion", "agent": "product-lead", "maxTurns": 8, "idleTimeoutMinutes": 240, "timeoutMinutes": 20 },
+    { "id": "brand", "type": "agent", "prompt": "new-app-brand", "timeoutMinutes": 30 },
+    { "id": "stamp", "type": "agent", "prompt": "new-app-stamp", "timeoutMinutes": 45 },
+    { "id": "checks", "type": "commands", "source": "checks", "onFail": "stamp", "maxLoops": 2 },
+    { "id": "deploy", "type": "deploy", "onRecover": "checks" },
+    { "id": "spawn", "type": "spawn", "workflow": "feature-dev", "rigFrom": "app.json", "promptFrom": "first-feature.md" }
   ]
 }

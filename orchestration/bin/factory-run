@@ -19,6 +19,7 @@
  *   factory-run list [--json]
  *   factory-run approve <run_id>
  *   factory-run reject <run_id> "<feedback>"
+ *   factory-run reply <run_id> "<text>"     (founder turn in a discussion step)
  *   factory-run steer <run_id> "<instruction>"
  *   factory-run cancel <run_id>
  *   factory-run cleanup [--dry-run] [--json] [--remove-unmerged-worktrees]
@@ -46,6 +47,17 @@ const AGENTS_DIR = path.join(ORCH_DIR, "..", "agents");
 const RUNS_DIR = path.join(ORCH_DIR, "runs");
 const WORKTREES_DIR = path.join(ORCH_DIR, "worktrees");
 const RIGS = JSON.parse(fs.readFileSync(path.join(ORCH_DIR, "rigs.json"), "utf8"));
+// Discussion-step pure core (reply parsing, conversation assembly, outcome
+// resolution) lives in the web lib so `node --test web/lib/*.test.mjs` covers
+// it; CJS require(esm) is stable on the node this repo runs.
+const {
+  DISCUSSION_DEFAULTS,
+  parseReplyLines,
+  assembleConversation,
+  pendingReplies: countPendingReplies,
+  lastActivityAt: discussionLastActivity,
+  resolveOutcome,
+} = require(path.join(ORCH_DIR, "web", "lib", "discussion.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -94,7 +106,9 @@ function tRun(run) {
     .run(run.id, run.workflow, run.rig, run.prompt, run.state, run.auto ? 1 : 0, run.parentRun || null, run.createdAt);
 }
 
-const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled"];
+// "killed" is the discussion step's don't-build ending: terminal and a
+// SUCCESS (early kill = money saved), never rendered as a failure.
+const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
 
 function tRunState(run) {
   const terminal = TERMINAL_STATES.includes(run.state);
@@ -308,24 +322,42 @@ function loadWorkflow(name) {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
-/** Every agent step's file references, checked before any run record or
- *  worktree exists (createRun) and across all workflows by selftest: the
- *  prompt template must exist and, when the step names an `agent` profile,
- *  the name must be a plain slug (never usable as a path — no `../`) with a
- *  matching top-level agents/<agent>.md. Returns problem lines, [] when
- *  clean. */
+/** Every workflow step's file references, checked before any run record or
+ *  worktree exists (createRun) and across all workflows by selftest. Agent and
+ *  discussion steps: the prompt template must exist and, when the step names
+ *  an `agent` profile, the name must be a plain slug (never usable as a path —
+ *  no `../`) with a matching top-level agents/<agent>.md; discussion bounds
+ *  must be sane numbers. Spawn steps: the child workflow must exist and
+ *  rigFrom must stay a plain run-dir .json filename. Returns problem lines,
+ *  [] when clean. */
 function validateWorkflowAgentSteps(wfName, wf) {
   const problems = [];
   for (const s of wf.steps) {
-    if (s.type !== "agent") continue;
-    if (!fs.existsSync(path.join(ORCH_DIR, "prompts", `${s.prompt}.md`))) {
-      problems.push(`workflow ${wfName}: missing prompt ${s.prompt}`);
-    }
-    if (s.agent !== undefined) {
-      if (!/^[a-z0-9-]+$/.test(String(s.agent))) {
-        problems.push(`workflow ${wfName}: invalid agent name '${s.agent}' (must match /^[a-z0-9-]+$/)`);
-      } else if (!fs.existsSync(path.join(AGENTS_DIR, `${s.agent}.md`))) {
-        problems.push(`workflow ${wfName}: missing agent profile ${s.agent} (agents/${s.agent}.md)`);
+    if (s.type === "agent" || s.type === "discussion") {
+      if (!fs.existsSync(path.join(ORCH_DIR, "prompts", `${s.prompt}.md`))) {
+        problems.push(`workflow ${wfName}: missing prompt ${s.prompt}`);
+      }
+      if (s.agent !== undefined) {
+        if (!/^[a-z0-9-]+$/.test(String(s.agent))) {
+          problems.push(`workflow ${wfName}: invalid agent name '${s.agent}' (must match /^[a-z0-9-]+$/)`);
+        } else if (!fs.existsSync(path.join(AGENTS_DIR, `${s.agent}.md`))) {
+          problems.push(`workflow ${wfName}: missing agent profile ${s.agent} (agents/${s.agent}.md)`);
+        }
+      }
+      if (s.type === "discussion") {
+        for (const cap of ["maxTurns", "idleTimeoutMinutes"]) {
+          const v = s[cap];
+          if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 1)) {
+            problems.push(`workflow ${wfName}: discussion step '${s.id}' ${cap} '${v}' must be a number >= 1`);
+          }
+        }
+      }
+    } else if (s.type === "spawn") {
+      if (typeof s.workflow !== "string" || !fs.existsSync(path.join(ORCH_DIR, "workflows", `${s.workflow}.json`))) {
+        problems.push(`workflow ${wfName}: spawn step '${s.id}' references unknown workflow '${s.workflow}'`);
+      }
+      if (s.rigFrom !== undefined && !/^[a-z0-9][a-z0-9._-]*\.json$/.test(String(s.rigFrom))) {
+        problems.push(`workflow ${wfName}: spawn step '${s.id}' rigFrom '${s.rigFrom}' must be a plain .json filename in the run dir`);
       }
     }
   }
@@ -509,7 +541,7 @@ function composeStepPrompt(profileText, renderedTemplate) {
   return `${profileText}\n\n---\n\n${renderedTemplate}`;
 }
 
-function renderPrompt(step, run) {
+function renderPrompt(step, run, extra) {
   const runDir = runDirOf(run.id);
   let tpl = fs.readFileSync(path.join(ORCH_DIR, "prompts", `${step.prompt}.md`), "utf8");
   const steeringPath = path.join(runDir, "steering.md");
@@ -520,12 +552,17 @@ function renderPrompt(step, run) {
   const findings = fs.existsSync(findingsPath)
     ? `Previous validation FAILED. You must address every finding below, then re-complete your task:\n\n${fs.readFileSync(findingsPath, "utf8")}`
     : "";
-  const rendered = tpl
+  let rendered = tpl
     .replaceAll("{{PROMPT}}", run.prompt)
     .replaceAll("{{RUN_DIR}}", runDir)
     .replaceAll("{{BASE_BRANCH}}", run.baseBranch)
     .replaceAll("{{STEERING}}", steering)
     .replaceAll("{{FINDINGS}}", findings);
+  // Step-type-specific placeholders (discussion turns inject {{DISCUSSION}}
+  // and friends); still template-only — the profile stays verbatim.
+  for (const [key, value] of Object.entries(extra || {})) {
+    rendered = rendered.replaceAll(key, value);
+  }
   // {{…}} substitution applies to the task template only; the profile (when
   // the step names one) is prepended verbatim by composeStepPrompt.
   const profile = step.agent ? fs.readFileSync(path.join(AGENTS_DIR, `${step.agent}.md`), "utf8") : null;
@@ -564,12 +601,12 @@ function maxStepAttempt(names, stepId) {
   return max;
 }
 
-function runAgentStep(run, step) {
+function runAgentStep(run, step, extra) {
   const runDir = runDirOf(run.id);
   // Attempt derived from files on disk (not in-memory loop counters) so
   // numbering survives engine restarts and never overwrites earlier attempts.
   const attempt = maxStepAttempt(fs.readdirSync(runDir), step.id) + 1;
-  const prompt = renderPrompt(step, run);
+  const prompt = renderPrompt(step, run, extra);
   const promptFile = path.join(runDir, stepDocName(step.id, "prompt", attempt));
   fs.writeFileSync(promptFile, prompt);
   // Full working context goes to <step>[.N].transcript.jsonl: stdout streams
@@ -745,6 +782,153 @@ function waitForGate(run, step) {
     execSync("sleep 15");
   }
   return { ok: false, summary: "plan gate timed out after 12h", terminal: true };
+}
+
+// ---------- discussion (conversational founder gate) ----------
+//
+// A real multi-turn Slack exchange: each agent turn is one runAgentStep
+// invocation (attempt-numbered on disk like any retry, so telemetry, `context`
+// and the web console pick turns up unchanged); founder turns arrive via
+// `factory-run reply` as JSON lines in discussion-replies.jsonl; resolution
+// reuses the gate's decision file verbatim (`approve` = go-ahead, `reject` =
+// don't-build → run state "killed", a success). Bounds are loud: turn cap and
+// idle timeout fail the run explicitly, never auto-approve.
+
+/** Turns already on disk for a discussion step, oldest first: each attempt's
+ *  output-envelope text plus its completion time (file mtime). Derived from
+ *  disk, not memory, so the conversation survives engine restarts/resumes. */
+function readDiscussionTurns(runDir, stepId) {
+  const turns = [];
+  for (const name of fs.readdirSync(runDir)) {
+    const doc = parseStepDoc(name);
+    if (!doc || doc.step !== stepId || doc.kind !== "output") continue;
+    const p = path.join(runDir, name);
+    const envelope = readJson(p, null);
+    turns.push({
+      attempt: doc.attempt,
+      at: new Date(fs.statSync(p).mtimeMs).toISOString(),
+      text: envelope && typeof envelope.result === "string" ? envelope.result : "",
+    });
+  }
+  return turns.sort((a, b) => a.attempt - b.attempt);
+}
+
+function runDiscussionStep(run, step) {
+  const id = run.id;
+  const runDir = runDirOf(id);
+  const maxTurns = step.maxTurns ?? DISCUSSION_DEFAULTS.maxTurns;
+  const idleTimeoutMinutes = step.idleTimeoutMinutes ?? DISCUSSION_DEFAULTS.idleTimeoutMinutes;
+  const decisionPath = path.join(runDir, "gate-decision.json");
+  const repliesPath = path.join(runDir, "discussion-replies.jsonl");
+  const readReplies = () =>
+    fs.existsSync(repliesPath) ? parseReplyLines(fs.readFileSync(repliesPath, "utf8").split("\n")) : [];
+
+  let turns = readDiscussionTurns(runDir, step.id);
+  // Replies already answered by an on-disk turn (resume case): everything at
+  // or before the last turn's completion. The live loop then counts by index
+  // so a reply landing mid-turn still triggers the next one.
+  const initReplies = readReplies();
+  let consumed = initReplies.length - countPendingReplies(turns, initReplies);
+
+  // One agent turn: conversation context rebuilt from disk + replies and
+  // injected via {{DISCUSSION}} (fresh claude -p per turn, no session resume);
+  // the turn's final text IS the Slack message. The founder must see every
+  // turn — an unsent turn is the invisible-gate failure mode, so fail loud.
+  // Turn telemetry is recorded here (telemetryDone), one ok row per attempt.
+  const runTurn = () => {
+    const replies = readReplies();
+    const started = nowIso();
+    setState(run, `running:${step.id}`, `discussion turn ${turns.length + 1}/${maxTurns}`);
+    const r = runAgentStep(run, step, {
+      "{{DISCUSSION}}": assembleConversation(turns, replies),
+      "{{TURN}}": String(turns.length + 1),
+      "{{MAX_TURNS}}": String(maxTurns),
+    });
+    consumed = replies.length;
+    try {
+      tStep(id, step.id, r.attempt, r.ok ? "ok" : "fail", r.summary, started, r.usage);
+    } catch {}
+    if (!r.ok) return r;
+    turns = readDiscussionTurns(runDir, step.id);
+    const opening = turns.length === 1 ? ` (${run.workflow} on ${run.rig})` : "";
+    const sent = notify(
+      run,
+      `:speech_balloon: Run ${id}${opening} — *${step.id}* turn ${turns.length}/${maxTurns}:\n\n` +
+        (r.summary || "").slice(0, 2800) +
+        `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
+        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
+    );
+    if (!sent) {
+      return {
+        ok: false,
+        summary: `discussion turn ${turns.length} notification failed to send (see notify FAILED in engine.log); fix the notify channel and resume`,
+      };
+    }
+    setState(run, "awaiting-approval", `discussion ${step.id}: turn ${turns.length}/${maxTurns} posted`);
+    return { ok: true };
+  };
+
+  if (turns.length === 0) {
+    const t = runTurn();
+    if (!t.ok) return { ...t, telemetryDone: true };
+  } else {
+    setState(run, "awaiting-approval", `discussion ${step.id}: resumed at turn ${turns.length}/${maxTurns}`);
+  }
+
+  const finish = (outcome, extra) => {
+    writeJson(path.join(runDir, "discussion-outcome.json"), { outcome, turns: turns.length, at: nowIso(), ...extra });
+    // A consumed decision must not leak into a later gate/discussion (or a
+    // rewound re-discussion) of this run.
+    fs.rmSync(decisionPath, { force: true });
+  };
+
+  while (true) {
+    if (loadRun(id).state === "cancelled") {
+      return { ok: false, summary: "cancelled", terminal: true, telemetryDone: true };
+    }
+    const decision = fs.existsSync(decisionPath) ? readJson(decisionPath, {}) : null;
+    const replies = readReplies();
+    const res = resolveOutcome({
+      decision,
+      pendingReplies: Math.max(0, replies.length - consumed),
+      turnsUsed: turns.length,
+      maxTurns,
+      lastActivityAt: discussionLastActivity(turns, replies),
+      now: nowIso(),
+      idleTimeoutMinutes,
+    });
+    if (res && res.outcome === "go-ahead") {
+      finish("go-ahead", {});
+      return { ok: true, summary: `founder go-ahead after ${turns.length} turn(s)`, telemetryDone: true };
+    }
+    if (res && res.outcome === "dont-build") {
+      finish("dont-build", { feedback: res.feedback || null });
+      return {
+        ok: true,
+        halt: "killed",
+        summary: `founder called don't-build after ${turns.length} turn(s)${res.feedback ? ` — ${res.feedback}` : ""}`,
+        telemetryDone: true,
+      };
+    }
+    if (res) {
+      // turn-cap / idle-timeout: loud failure, never a go-ahead.
+      finish(res.outcome, {});
+      const summary =
+        res.outcome === "turn-cap"
+          ? `discussion turn cap hit (${maxTurns} turns) without a founder decision — failing loudly, never auto-approving`
+          : `discussion idle timeout hit (${idleTimeoutMinutes} minutes with no founder activity) — failing loudly, never auto-approving`;
+      try {
+        tStep(id, step.id, Math.max(turns.length, 1), "fail", summary, nowIso());
+      } catch {}
+      return { ok: false, summary, telemetryDone: true };
+    }
+    if (replies.length > consumed) {
+      const t = runTurn();
+      if (!t.ok) return { ...t, telemetryDone: true };
+      continue;
+    }
+    execSync("sleep 15");
+  }
 }
 
 // ---------- deploy ----------
@@ -1484,6 +1668,11 @@ function execRun(id) {
       } else if (step.type === "gate") {
         result = waitForGate(run, step);
         if (result.ok) setState(run, "approved", result.summary);
+      } else if (step.type === "discussion") {
+        // Conversational founder gate: manages its own states (running:<id>
+        // per turn, awaiting-approval between turns) and per-turn telemetry.
+        result = runDiscussionStep(run, step);
+        if (result.ok && !result.halt) setState(run, "approved", result.summary);
       } else if (step.type === "deploy") {
         setState(run, "deploying", null);
         result = deployStep(run, rig);
@@ -1511,25 +1700,45 @@ function execRun(id) {
         notify(run, lines.join("\n"), run.qrPath);
         result = { ok: true, summary: "founder notified" };
       } else if (step.type === "spawn") {
-        // Self-improvement chain: launch a full workflow run (its own graph
-        // execution) with the approved plan as the prompt.
+        // Chained run: launch a full workflow run (its own graph execution)
+        // with the founder-approved prompt file from this run's dir.
         setState(run, `running:${step.id}`, null);
         const planFile = path.join(runDir, step.promptFrom || "improvement-plan.md");
-        if (!fs.existsSync(planFile)) {
+        // rigFrom: the child rig is only known at run time (new-app: refine
+        // writes {codename} to app.json). resolveRig requires the app on the
+        // rig's default branch — deploy runs before spawn for exactly that.
+        let childRig = step.rig || run.rig;
+        let rigProblem = null;
+        if (step.rigFrom) {
+          const app = readJson(path.join(runDir, step.rigFrom), null);
+          const codename = app && typeof app.codename === "string" ? app.codename.trim() : "";
+          if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(codename)) {
+            rigProblem = `spawn: ${step.rigFrom} missing or lacks a valid codename slug`;
+          } else {
+            childRig = `factory:${codename}`;
+          }
+        }
+        if (rigProblem) {
+          result = { ok: false, summary: rigProblem };
+        } else if (!fs.existsSync(planFile)) {
           result = { ok: false, summary: `spawn: missing ${step.promptFrom}` };
         } else {
           const childPrompt = fs.readFileSync(planFile, "utf8");
-          const childId = createRun({
-            rig: step.rig || run.rig,
-            workflow: step.workflow,
-            prompt: childPrompt,
-            auto: step.auto !== false, // plan was already founder-approved at this run's gate
-            parentRun: run.id,
-          });
-          run.childRun = childId;
-          saveRun(run);
-          notify(run, `:rocket: Run ${id} spawned implementation run *${childId}* (${step.workflow} on ${step.rig || run.rig}) from the approved improvement plan. It will implement, validate, and deploy through the standard pipeline.`);
-          result = { ok: true, summary: `spawned ${childId}` };
+          try {
+            const childId = createRun({
+              rig: childRig,
+              workflow: step.workflow,
+              prompt: childPrompt,
+              auto: step.auto !== false, // prompt was already founder-approved at this run's gate/discussion
+              parentRun: run.id,
+            });
+            run.childRun = childId;
+            saveRun(run);
+            notify(run, `:rocket: Run ${id} spawned run *${childId}* (${step.workflow} on ${childRig}) from the approved ${step.promptFrom || "improvement-plan.md"}. It will implement, validate, and deploy through the standard pipeline.`);
+            result = { ok: true, summary: `spawned ${childId}` };
+          } catch (err) {
+            result = { ok: false, summary: `spawn failed: ${String(err.message || err).slice(0, 300)}` };
+          }
         }
       } else if (step.type === "manual") {
         result = { ok: true, summary: `manual step: ${step.note || ""}` };
@@ -1541,7 +1750,10 @@ function execRun(id) {
       try {
         // Recovery cycles get their own telemetry status so deploy failure
         // stats stay honest (a drift loop-back is not a broken deploy).
-        tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : result.recover ? "recover" : "fail", result.summary, stepStarted, result.usage);
+        // Discussion steps record per-turn rows themselves (telemetryDone).
+        if (!result.telemetryDone) {
+          tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : result.recover ? "recover" : "fail", result.summary, stepStarted, result.usage);
+        }
         if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
       } catch {}
 
@@ -1550,6 +1762,19 @@ function execRun(id) {
         if (!rec) return;
         i = rec.loopTo;
         continue;
+      }
+
+      if (result.ok && result.halt === "killed") {
+        // A don't-build ending is a halting SUCCESS, never the :x: failure
+        // path: early kill = money saved. Terminal state "killed".
+        setState(run, "killed", result.summary);
+        const usage = usageLine(id);
+        notify(
+          run,
+          `:money_with_wings: Run ${id} closed at *${step.id}*: ${result.summary}\n` +
+            `Killing a weak idea early is a win — no build cost sunk. Run dir kept: ${runDir}${usage ? `\n${usage}` : ""}`
+        );
+        return;
       }
 
       if (!result.ok) {
@@ -1982,7 +2207,7 @@ function cmdResume(argv) {
   // First positional that is neither a flag nor --step's value.
   const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--step"));
   const run = loadRun(id);
-  if (["done", "cancelled"].includes(run.state)) {
+  if (["done", "cancelled", "killed"].includes(run.state)) {
     console.error(`run ${id} is ${run.state}; nothing to resume`);
     process.exit(1);
   }
@@ -2037,6 +2262,19 @@ function cmdGate(id, decision, feedback) {
   loadRun(id); // validates
   writeJson(path.join(runDirOf(id), "gate-decision.json"), { decision, feedback: feedback || null, at: nowIso() });
   console.log(`${decision} recorded for ${id}`);
+}
+
+/** Founder turn in a discussion step: append one JSON line to the run's
+ *  discussion-replies.jsonl. The polling discussion step answers with exactly
+ *  one new agent turn per reply batch. */
+function cmdReply(id, text) {
+  loadRun(id);
+  if (!text || !text.trim()) {
+    console.error('usage: factory-run reply <run_id> "<text>"');
+    process.exit(1);
+  }
+  fs.appendFileSync(path.join(runDirOf(id), "discussion-replies.jsonl"), JSON.stringify({ at: nowIso(), text }) + "\n");
+  console.log(`reply recorded for ${id} (the discussion agent answers in its next turn)`);
 }
 
 function cmdSteer(id, instruction) {
@@ -2229,6 +2467,68 @@ function cmdSelftest() {
     console.log(`agent-step ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`agent-step check failed: ${name}`);
   }
+  // Discussion-step + spawn-step workflow validation (fs.existsSync against
+  // the repo's own prompts/, agents/, and workflows/).
+  const vDisc = (over) =>
+    validateWorkflowAgentSteps("synthetic", {
+      steps: [{ id: "d", type: "discussion", prompt: "new-app-spec-discussion", agent: "product-lead", ...over }],
+    });
+  const vSpawn = (over) =>
+    validateWorkflowAgentSteps("synthetic", { steps: [{ id: "s", type: "spawn", workflow: "feature-dev", ...over }] });
+  const discussionStepChecks = [
+    ["valid discussion step accepted", vDisc({}).length === 0],
+    ["numeric discussion bounds accepted", vDisc({ maxTurns: 8, idleTimeoutMinutes: 240 }).length === 0],
+    ["missing discussion prompt flagged", vDisc({ prompt: "no-such-prompt" }).some((p) => p === "workflow synthetic: missing prompt no-such-prompt")],
+    ["missing discussion agent profile flagged", vDisc({ agent: "no-such-agent" }).some((p) => p.includes("missing agent profile no-such-agent"))],
+    ["non-numeric maxTurns flagged", vDisc({ maxTurns: "8" }).some((p) => p.includes("maxTurns"))],
+    ["non-numeric idleTimeoutMinutes flagged", vDisc({ idleTimeoutMinutes: "4h" }).some((p) => p.includes("idleTimeoutMinutes"))],
+    ["zero maxTurns flagged", vDisc({ maxTurns: 0 }).some((p) => p.includes("maxTurns"))],
+    ["valid spawn step accepted", vSpawn({ rigFrom: "app.json", promptFrom: "first-feature.md" }).length === 0],
+    ["spawn unknown workflow flagged", vSpawn({ workflow: "no-such-workflow" }).some((p) => p.includes("references unknown workflow 'no-such-workflow'"))],
+    ["spawn missing workflow flagged", vSpawn({ workflow: undefined }).some((p) => p.includes("references unknown workflow"))],
+    ["spawn path-shaped rigFrom flagged", vSpawn({ rigFrom: "../secrets.json" }).some((p) => p.includes("rigFrom"))],
+    ["spawn non-json rigFrom flagged", vSpawn({ rigFrom: "app.md" }).some((p) => p.includes("rigFrom"))],
+  ];
+  for (const [name, ok] of discussionStepChecks) {
+    console.log(`discussion-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`discussion-step check failed: ${name}`);
+  }
+  // Discussion outcome plumbing (pure core from web/lib/discussion.mjs; the
+  // deep coverage lives in discussion.test.mjs — this proves the engine's
+  // require(esm) wiring resolves the same outcomes it acts on).
+  const ro = (over) =>
+    resolveOutcome({
+      decision: null,
+      pendingReplies: 0,
+      turnsUsed: 2,
+      maxTurns: 8,
+      lastActivityAt: "2026-01-01T00:00:00.000Z",
+      now: "2026-01-01T01:00:00.000Z",
+      idleTimeoutMinutes: 240,
+      ...over,
+    });
+  const discussionOutcomeChecks = [
+    ["approve resolves go-ahead", ro({ decision: { decision: "approve" } }).outcome === "go-ahead"],
+    ["reject resolves dont-build with feedback", (() => { const r = ro({ decision: { decision: "reject", feedback: "nope" } }); return r.outcome === "dont-build" && r.feedback === "nope"; })()],
+    ["pending reply past the cap is turn-cap", ro({ pendingReplies: 1, turnsUsed: 8 }).outcome === "turn-cap"],
+    ["cap without a pending reply keeps waiting", ro({ turnsUsed: 8 }) === null],
+    ["silence past the idle timeout is idle-timeout", ro({ now: "2026-01-01T04:01:00.000Z" }).outcome === "idle-timeout"],
+    ["active discussion keeps waiting", ro({}) === null],
+    ["decision outranks the bounds", ro({ decision: { decision: "approve" }, pendingReplies: 3, turnsUsed: 8, now: "2026-02-01T00:00:00.000Z" }).outcome === "go-ahead"],
+    ["garbage reply lines skipped", parseReplyLines(['{"at":"2026-01-01T00:00:00Z","text":"hi"}', "junk", "{}", '{"text":"  "}']).length === 1],
+    ["defaults are 8 turns / 240 idle minutes", DISCUSSION_DEFAULTS.maxTurns === 8 && DISCUSSION_DEFAULTS.idleTimeoutMinutes === 240],
+    ["conversation interleaves founder replies", (() => {
+      const c = assembleConversation(
+        [{ attempt: 1, at: "2026-01-01T00:00:00Z", text: "opening" }, { attempt: 2, at: "2026-01-01T02:00:00Z", text: "answer" }],
+        [{ at: "2026-01-01T01:00:00Z", text: "founder question" }]
+      );
+      return c.indexOf("opening") < c.indexOf("founder question") && c.indexOf("founder question") < c.indexOf("answer");
+    })()],
+  ];
+  for (const [name, ok] of discussionOutcomeChecks) {
+    console.log(`discussion ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`discussion check failed: ${name}`);
+  }
   // Transcript envelope extraction + context stats (pure — no filesystem access).
   const assistantEv = JSON.stringify({
     type: "assistant",
@@ -2285,6 +2585,7 @@ try {
   else if (cmd === "status" || cmd === "list") cmdStatus(rest);
   else if (cmd === "approve") cmdGate(resolveRunId(rest[0]), "approve");
   else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);
+  else if (cmd === "reply") cmdReply(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
   else if (cmd === "cleanup") cmdCleanup(rest);
@@ -2293,7 +2594,7 @@ try {
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|status|list|approve|reject|steer|cancel|cleanup|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|status|list|approve|reject|reply|steer|cancel|cleanup|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
