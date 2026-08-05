@@ -10,7 +10,7 @@
  * Design doc: docs/08-orchestration-layer.md. Zero npm dependencies.
  *
  * Commands:
- *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]
+ *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
  *   factory-run resume <run_id> [--step <step-id>|--back]
  *                                        (restart a stopped/failed/cancelled run's
@@ -3731,9 +3731,12 @@ function cmdPreviewTrigger(argv) {
 }
 
 /** Detached worker behind `factory-run preview`: decide (agent, unless forced),
- *  publish, record, notify. */
+ *  publish, record, notify. Never calls setState — an on-demand preview must
+ *  not disturb whatever state the run (possibly still executing) is in; run
+ *  mutations re-read run.json first so a concurrent executor save is not
+ *  clobbered with a stale copy. */
 function execPreview(id, argv) {
-  const run = loadRun(id);
+  let run = loadRun(id);
   const runDir = runDirOf(id);
   const rig = resolveRig(run.rig);
   const forced = argv.includes("--build") ? "build" : argv.includes("--update") ? "update" : null;
@@ -3746,8 +3749,9 @@ function execPreview(id, argv) {
   } else {
     fs.rmSync(path.join(runDir, RELEASE_DECISION_FILE), { force: true });
     const started = nowIso();
-    setState(run, run.state, `on-demand preview: ${RELEASE_DECISION_STEP.id} started`);
+    log(runDir, `on-demand preview: ${RELEASE_DECISION_STEP.id} started`);
     const r = runAgentStep(run, RELEASE_DECISION_STEP);
+    run = loadRun(id); // the run may have advanced while the agent worked
     const applied = applyReleaseDecision(run, r.ok);
     try {
       tStep(id, RELEASE_DECISION_STEP.id, r.attempt, "ok", applied.summary, started, r.usage);
