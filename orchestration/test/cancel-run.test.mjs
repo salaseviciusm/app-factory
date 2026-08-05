@@ -184,6 +184,33 @@ test("cancel mid agent step kills the whole process group and the state sticks",
   assert.ok(!run.history.some((h) => h.state === "done"), "workflow must not continue past a cancel");
 });
 
+test("a kept cancelled run resumes at the interrupted step and completes", async (t) => {
+  const sb = makeSandbox(t);
+  const id = startRun(sb, t, "cancel-test", ["--auto"]);
+
+  await waitFor(() => readRun(sb, id).state === "running:implement", "agent step to start");
+  const { executorPid } = readRun(sb, id);
+  assert.equal(engine(sb, ["cancel", id]).status, 0);
+  await waitFor(() => !groupAlive(executorPid), "executor process group to die", 12_000);
+  assert.equal(readRun(sb, id).state, "cancelled");
+  assert.equal(readRun(sb, id).stepIndex, 0, "cancel must not advance past the interrupted step");
+
+  const resume = engine(sb, ["resume", id]);
+  assert.equal(resume.status, 0, `resume failed: ${resume.stderr}`);
+  assert.match(resume.stdout, /implement/, "resume restarts at the interrupted step");
+  t.after(() => {
+    try {
+      process.kill(-readRun(sb, id).executorPid, "SIGKILL");
+    } catch {}
+  });
+  // The stub agent now runs to completion; the workflow finishes normally.
+  await waitFor(() => readRun(sb, id).state === "done", "resumed run to complete", 40_000);
+  assert.ok(
+    readRun(sb, id).history.some((h) => h.state === "running:implement"),
+    "the interrupted step re-ran after resume"
+  );
+});
+
 test("reject at a gate ends the run rejected with no surviving processes", async (t) => {
   const sb = makeSandbox(t);
   const id = startRun(sb, t, "gate-test");
