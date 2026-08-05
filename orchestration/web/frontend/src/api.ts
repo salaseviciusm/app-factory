@@ -85,4 +85,9 @@ export const api = {
     post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/steer`, { instruction }),
   reply: (id: string, text: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/reply`, { text }),
   cancel: (id: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/cancel`, {}),
+  retry: (id: string, force = false) =>
+    post<{ ok: boolean; tier: "resume" | "triage"; message: string }>(
+      `/api/runs/${encodeURIComponent(id)}/retry`,
+      { force }
+    ),
 };
