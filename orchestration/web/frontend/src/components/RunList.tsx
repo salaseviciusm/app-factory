@@ -34,7 +34,7 @@ export function RunList({ runs, selectedId, onSelect }: Props) {
                 {usage && <span>{usage.split(" · ")[0]}</span>}
               </div>
               <div className="run-card-flags">
-                {r.stalled && <Badge kind="warn" title={`No update in >10 min — executor may be dead. Resume: factory-run resume ${r.id}`}>stalled?</Badge>}
+                {r.stalled && <Badge kind="warn" title="No update in >10 min — executor may be dead. Open the run to retry.">stalled?</Badge>}
                 {r.worktreeMissing && <Badge kind="muted" title="The run's git worktree directory no longer exists">no worktree</Badge>}
                 {r.source === "db" && <Badge kind="muted" title="Run directory deleted; showing telemetry only">telemetry only</Badge>}
                 {r.auto && <Badge kind="muted" title="Plan gate skipped (--auto)">auto</Badge>}
