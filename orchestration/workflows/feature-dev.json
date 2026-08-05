@@ -1,6 +1,6 @@
 {
   "name": "feature-dev",
-  "description": "Feature development: dissect prompt, refine the plan with the founder in a multi-turn Slack discussion (replaces the one-shot approve/reject gate), implement, validate (agentic + deterministic), test, deploy as downloadable update.",
+  "description": "Feature development: dissect prompt, refine the plan with the founder in a multi-turn Slack discussion (replaces the one-shot approve/reject gate), implement, validate (agentic + deterministic), test, optionally publish an installable preview behind a founder approval gate (per-run preview mode; the release-decision agent picks eas build vs update from the diff), then merge/deploy per the rig's policy.",
   "steps": [
     { "id": "plan", "type": "agent", "prompt": "planner", "timeoutMinutes": 15, "onFail": "plan", "maxLoops": 2 },
     { "id": "plan-discussion", "type": "discussion", "prompt": "plan-discussion", "skipWhen": "auto", "maxTurns": 8, "idleTimeoutMinutes": 240, "timeoutMinutes": 20 },
@@ -8,6 +8,9 @@
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
     { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },
     { "id": "tests", "type": "commands", "source": "tests", "onFail": "implement", "maxLoops": 2 },
+    { "id": "release-decision", "type": "agent", "prompt": "release-decision", "agent": "release-engineer", "timeoutMinutes": 15, "skipWhen": "no-preview" },
+    { "id": "preview", "type": "preview", "skipWhen": "no-preview" },
+    { "id": "preview-gate", "type": "gate", "skipWhen": "no-preview", "autoApprove": false },
     { "id": "deploy", "type": "deploy", "onRecover": "checks" },
     { "id": "notify", "type": "notify" }
   ]
