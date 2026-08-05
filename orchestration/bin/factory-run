@@ -13,16 +13,20 @@
  *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
  *   factory-run resume <run_id> [--step <step-id>|--back]
- *                                        (restart a stopped/failed run's executor,
- *                                         optionally rewound to an earlier step)
+ *                                        (restart a stopped/failed/cancelled run's
+ *                                         executor, optionally rewound to an
+ *                                         earlier step)
  *   factory-run status [<run_id>] [--json]
  *   factory-run list [--json]
  *   factory-run approve <run_id>
  *   factory-run reject <run_id> "<feedback>"
  *   factory-run reply <run_id> "<text>"     (founder turn in a discussion step)
  *   factory-run steer <run_id> "<instruction>"
- *   factory-run cancel <run_id>
- *   factory-run cleanup [--dry-run] [--json] [--remove-unmerged-worktrees]
+ *   factory-run cancel <run_id>          (terminates the executor's process group,
+ *                                         then finalizes run.json; worktree kept)
+ *   factory-run cleanup [<run_id>] [--dry-run] [--json] [--remove-unmerged-worktrees]
+ *   factory-run cleanup <run_id> --discard  (force-remove one terminal run's
+ *                                         worktree AND branch, dirty/unmerged included)
  *   factory-run context <run_id> [--json]  (per-step context/cost analysis)
  *   factory-run context --sessions [--sessions-dir <dir>] [--days N]
  *   factory-run preflight [--rig <name>]   (live external-CLI contract checks)
@@ -456,6 +460,87 @@ function setState(run, state, detail) {
   }
 }
 
+/** On-disk terminal state for a run, or null. The executor's step-boundary
+ *  cancellation check: cancel writes run.json from outside the executor, and
+ *  the executor must never write over a terminal state with its stale
+ *  in-memory run object. */
+function terminalStateOnDisk(id) {
+  try {
+    const state = loadRun(id).state;
+    return TERMINAL_STATES.includes(state) ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Step id a cancel interrupts, derived from the state it replaces (pure,
+ *  exercised by selftest): "running:<step>" names the step, "deploying" is the
+ *  deploy step, everything else (queued/setup/awaiting/terminal) interrupts no
+ *  step. */
+function interruptedStepOf(state) {
+  const m = /^running:(.+)$/.exec(String(state || ""));
+  if (m) return m[1];
+  if (state === "deploying") return "deploy";
+  return null;
+}
+
+/** Drop the recorded executor pid on the way out — only our own pid, and only
+ *  by re-reading disk, so a terminal state written by cancel while we ran is
+ *  never clobbered. */
+function clearExecutorPid(id) {
+  try {
+    const run = loadRun(id);
+    if (run.executorPid === process.pid) {
+      delete run.executorPid;
+      delete run.executorStartedAt;
+      saveRun(run);
+    }
+  } catch {
+    /* run dir pruned mid-run: nothing to clear */
+  }
+}
+
+// Grace between cancel's SIGTERM and the SIGKILL escalation for survivors.
+const CANCEL_GRACE_MS = 8000;
+
+/** Terminate a run's recorded executor process group: the executor (a group
+ *  leader — detachExec spawns it detached) plus every spawnSync child and
+ *  grandchild, which inherit the group. Verifies the pid is still this run's
+ *  executor before signalling (pid reuse must never kill an unrelated
+ *  process): SIGTERM the group, wait a bounded grace, SIGKILL survivors.
+ *  Returns true when a live executor group was signalled; a missing, stale, or
+ *  dead pid returns false — cancel of a queued or already-finished run stays a
+ *  pure state flip. */
+function terminateRunProcesses(run) {
+  const pid = run.executorPid;
+  if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
+  let cmd;
+  try {
+    cmd = sh(`ps -o command= -p ${pid}`);
+  } catch {
+    return false; // pid not running: nothing to terminate
+  }
+  if (!new RegExp(`factory-run\\s+exec\\s+${run.id}(\\s|$)`).test(cmd)) return false;
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + CANCEL_GRACE_MS;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch {
+      return true; // whole group gone
+    }
+    execSync("sleep 0.5");
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {}
+  return true;
+}
+
 // ---------- notifications (OpenClaw -> Slack) ----------
 
 /** Resolve ${VAR} placeholders from the environment or openclaw/secrets.env (IDs stay out of git). */
@@ -652,6 +737,28 @@ function maxStepAttempt(names, stepId) {
   return max;
 }
 
+/** spawnSync's timeout kill signals only the direct child pid, so anything the
+ *  agent spawned survives as an orphan inside this executor's process group.
+ *  Reap the survivors — every group member except the executor itself. Only
+ *  safe when the executor leads its own group (the detachExec invariant);
+ *  skipped otherwise so a foreground `factory-run exec` can never kill its
+ *  caller's shell job. */
+function reapAgentSurvivors(runDir) {
+  if (process.getpgrp() !== process.pid) {
+    log(runDir, "timeout reap skipped: executor is not its own process-group leader");
+    return;
+  }
+  const out = spawnSync("pgrep", ["-g", String(process.pid)], { encoding: "utf8" }).stdout || "";
+  for (const line of out.split("\n")) {
+    const pid = parseInt(line, 10);
+    if (!pid || pid === process.pid) continue;
+    try {
+      process.kill(pid, "SIGKILL");
+      log(runDir, `timeout reap: killed surviving pid ${pid}`);
+    } catch {}
+  }
+}
+
 function runAgentStep(run, step, extra) {
   const runDir = runDirOf(run.id);
   // Attempt derived from files on disk (not in-memory loop counters) so
@@ -700,6 +807,7 @@ function runAgentStep(run, step, extra) {
     extracted.result ? JSON.stringify(extracted.result, null, 2) + "\n" : ""
   );
   if (res.error && res.error.code === "ETIMEDOUT") {
+    reapAgentSurvivors(runDir);
     return { ok: false, attempt, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m`, usage: extracted.usage };
   }
   if (res.status !== 0) {
@@ -829,7 +937,7 @@ function waitForGate(run, step) {
       return { ok: false, summary: `founder rejected: ${d.feedback || ""}`, terminal: true };
     }
     const cancelled = loadRun(run.id).state === "cancelled";
-    if (cancelled) return { ok: false, summary: "cancelled", terminal: true };
+    if (cancelled) return { ok: false, summary: "cancelled by founder", terminal: true, halt: "cancelled" };
     execSync("sleep 15");
   }
   return { ok: false, summary: "plan gate timed out after 12h", terminal: true };
@@ -944,7 +1052,7 @@ function runDiscussionStep(run, step) {
 
   while (true) {
     if (loadRun(id).state === "cancelled") {
-      return { ok: false, summary: "cancelled", terminal: true, telemetryDone: true };
+      return { ok: false, summary: "cancelled by founder", terminal: true, halt: "cancelled", telemetryDone: true };
     }
     const decision = fs.existsSync(decisionPath) ? readJson(decisionPath, {}) : null;
     const replies = readReplies();
@@ -1445,10 +1553,15 @@ function fmtBytes(n) {
  *  {action, reason}: "skip" (leave everything), "none" (nothing left),
  *  "clean" (remove worktree if present, delete merged branch if present),
  *  "remove-worktree" (opt-in: reclaim a clean worktree while keeping its
- *  unmerged branch). */
+ *  unmerged branch), "discard" (founder-explicit single-run force: worktree
+ *  and branch removed even when dirty/unmerged — how the console discards a
+ *  kept cancelled run). */
 function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged }, opts = {}) {
   if (!TERMINAL_STATES.includes(state)) return { action: "skip", reason: `state '${state}' is not terminal` };
   if (!worktreeExists && !branchExists) return { action: "none", reason: "nothing to clean" };
+  if (opts.discard) {
+    return { action: "discard", reason: "founder discard: worktree and branch force-removed (dirty/unmerged included)" };
+  }
   if (worktreeExists && dirty) return { action: "skip", reason: "worktree has uncommitted changes" };
   if (branchExists && !merged) {
     if (worktreeExists && opts.removeUnmergedWorktrees) {
@@ -1474,7 +1587,7 @@ function cleanupRun(run, opts = {}) {
   const worktreeExists = fs.existsSync(worktree);
   const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
   let dirty = false;
-  if (worktreeExists) {
+  if (worktreeExists && !opts.discard) {
     const st = git(worktree, ["status", "--porcelain"]);
     if (st.status !== 0) {
       // Not a functioning worktree; the orphan scan verifies its gitdir
@@ -1490,19 +1603,20 @@ function cleanupRun(run, opts = {}) {
   if (opts.dryRun) {
     return { ...result, action: `would-${decision.action}`, freedBytes: worktreeExists ? dirSizeBytes(worktree) : 0 };
   }
+  const forced = decision.action === "discard";
   if (worktreeExists) {
     const bytes = dirSizeBytes(worktree);
-    const rm = git(rig.path, ["worktree", "remove", worktree]);
+    const rm = git(rig.path, ["worktree", "remove", ...(forced ? ["--force"] : []), worktree]);
     if (rm.status !== 0) {
       return { ...result, action: "error", reason: `git worktree remove failed: ${(rm.stderr || rm.stdout || "").trim().slice(0, 200)}` };
     }
     result.freedBytes = bytes;
   }
   git(rig.path, ["worktree", "prune"]);
-  if (decision.action === "clean" && branchExists) {
-    const del = git(rig.path, ["branch", "-d", branch]);
+  if ((decision.action === "clean" || forced) && branchExists) {
+    const del = git(rig.path, ["branch", forced ? "-D" : "-d", branch]);
     if (del.status !== 0) {
-      return { ...result, action: "error", reason: `git branch -d failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
+      return { ...result, action: "error", reason: `git branch ${forced ? "-D" : "-d"} failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
     }
   }
   return result;
@@ -1544,10 +1658,18 @@ function cmdCleanup(argv) {
   const opts = {
     dryRun: argv.includes("--dry-run"),
     removeUnmergedWorktrees: argv.includes("--remove-unmerged-worktrees"),
+    discard: argv.includes("--discard"),
   };
   const asJson = argv.includes("--json");
-  const results = listRunIds().map((id) => cleanupRun(loadRun(id), opts));
-  results.push(...scanOrphans(opts));
+  // Optional positional: clean (or discard) a single run instead of sweeping.
+  const fragment = argv.find((a) => !a.startsWith("--"));
+  if (opts.discard && !fragment) {
+    console.error("cleanup --discard requires an explicit run id (it force-removes the worktree and branch)");
+    process.exit(1);
+  }
+  const ids = fragment ? [resolveRunId(fragment)] : listRunIds();
+  const results = ids.map((id) => cleanupRun(loadRun(id), opts));
+  if (!fragment) results.push(...scanOrphans(opts));
   const freedBytes = results.reduce((n, r) => n + (r.freedBytes || 0), 0);
   if (asJson) {
     console.log(JSON.stringify({ dryRun: opts.dryRun, freedBytes, results }, null, 2));
@@ -1659,6 +1781,19 @@ function execRun(id) {
   const execCounts = {};
 
   try {
+    // A cancel can land before this detached executor even starts (queued
+    // runs) — a terminal state on disk means there is nothing to execute.
+    if (TERMINAL_STATES.includes(run.state)) {
+      log(runDir, `run is already '${run.state}'; executor exiting`);
+      return;
+    }
+    // Record the executor's pid: detachExec spawns it detached, so it leads
+    // its own process group (pgid == pid) and every spawnSync child (claude,
+    // bash, eas) inherits that group — this pid is cancel's handle for
+    // terminating the whole tree. Cleared on every exit path (finally below).
+    run.executorPid = process.pid;
+    run.executorStartedAt = nowIso();
+    saveRun(run);
     tRun(run);
     // Preflight before any worktree or agent step: fail fast on broken external
     // CLI contracts (resumes re-verify too — a resume after a hot-patch was
@@ -1698,6 +1833,14 @@ function execRun(id) {
 
     let i = run.stepIndex || 0;
     while (i < workflow.steps.length) {
+      // Cancel's step-boundary contract: a terminal state written externally
+      // (cmdCancel) stops the executor before the next step starts, without
+      // any further run.json write from this stale in-memory run object.
+      const haltedBefore = terminalStateOnDisk(id);
+      if (haltedBefore) {
+        log(runDir, `run is '${haltedBefore}' on disk; executor exiting at the step boundary`);
+        return;
+      }
       const step = workflow.steps[i];
       run.stepIndex = i;
       let result;
@@ -1806,6 +1949,16 @@ function execRun(id) {
         result = { ok: false, summary: `unknown step type ${step.type}` };
       }
 
+      // Belt-and-braces for any race the cancel group-kill misses: if a
+      // terminal state landed on disk while the step ran (the executor cannot
+      // observe it mid-spawnSync), exit before any state write — this is what
+      // used to clobber `cancelled` back to a running workflow.
+      const haltedDuring = terminalStateOnDisk(id);
+      if (haltedDuring) {
+        log(runDir, `step '${step.id}' returned but run is '${haltedDuring}' on disk; executor exiting without writing`);
+        return;
+      }
+
       log(runDir, `step '${step.id}': ${result.ok ? "OK" : result.recover ? `RECOVER:${result.recover}` : "FAIL"} (${result.summary})`);
       try {
         // Recovery cycles get their own telemetry status so deploy failure
@@ -1839,6 +1992,13 @@ function execRun(id) {
 
       if (!result.ok) {
         if (result.terminal) {
+          if (result.halt === "cancelled") {
+            // cmdCancel already wrote the cancelled state (that is the only
+            // way the wait loops return this); writing anything here would
+            // misreport a founder cancel as a rejection.
+            log(runDir, `run cancelled during step '${step.id}'; executor exiting`);
+            return;
+          }
           setState(run, "rejected", result.summary);
           notify(run, `:no_entry: Run ${id} stopped: ${result.summary}`);
           return;
@@ -1876,9 +2036,14 @@ function execRun(id) {
       log(runDir, `cleanup error (run stays done): ${String(err.message || err)}`);
     }
   } catch (err) {
-    setState(run, "failed", String(err.message || err));
-    notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
+    // A crash racing an external cancel must not overwrite the terminal state.
+    if (!terminalStateOnDisk(id)) {
+      setState(run, "failed", String(err.message || err));
+      notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
+    }
     throw err;
+  } finally {
+    clearExecutorPid(id);
   }
 }
 
@@ -2267,7 +2432,10 @@ function cmdResume(argv) {
   // First positional that is neither a flag nor --step's value.
   const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--step"));
   const run = loadRun(id);
-  if (["done", "cancelled", "killed"].includes(run.state)) {
+  // done/killed are final by meaning. cancelled is explicitly resumable: a
+  // kept cancelled run picks up from the step it was interrupted at (cancel
+  // never advances stepIndex).
+  if (["done", "killed"].includes(run.state)) {
     console.error(`run ${id} is ${run.state}; nothing to resume`);
     process.exit(1);
   }
@@ -2277,14 +2445,18 @@ function cmdResume(argv) {
     run.stepIndex || 0,
     { step: argOf(argv, "--step"), back: argv.includes("--back") }
   );
-  if (idx !== (run.stepIndex || 0)) {
-    run.stepIndex = idx;
-    run.updatedAt = nowIso();
-    run.history.push({ state: run.state, detail: `resume rewound to step '${wf.steps[idx].id}' (index ${idx})`, at: run.updatedAt });
-    saveRun(run);
-  }
+  const rewound = idx !== (run.stepIndex || 0);
+  if (rewound) run.stepIndex = idx;
+  // Flip the state back to queued before detaching: the executor refuses to
+  // run a terminal-on-disk run (cancel's step-boundary check), and a resumed
+  // run really is queued again.
+  setState(
+    run,
+    "queued",
+    `resumed by founder from '${run.state}'${rewound ? ` — rewound to step '${wf.steps[idx].id}' (index ${idx})` : ""}`
+  );
   detachExec(id);
-  console.log(`resumed ${id} at step ${run.stepIndex} (${wf.steps[Math.min(run.stepIndex, wf.steps.length - 1)].id})`);
+  console.log(`resumed ${id} at step ${idx} (${wf.steps[Math.min(idx, wf.steps.length - 1)].id})`);
 }
 
 /** Machine-readable step/gate facts for `status --json`, so consumers (the
@@ -2386,8 +2558,49 @@ function cmdSteer(id, instruction) {
 
 function cmdCancel(id) {
   const run = loadRun(id);
-  setState(run, "cancelled", "cancelled by founder");
-  console.log(`cancelled ${id} (executor exits at the next step boundary; worktree kept)`);
+  if (TERMINAL_STATES.includes(run.state)) {
+    console.log(`${id} is already ${run.state}; nothing to cancel`);
+    return;
+  }
+  const priorState = run.state;
+  // Kill first, write second: an executor blocked in a spawnSync'd step cannot
+  // observe run.json, and its post-step writes would clobber the cancelled
+  // state — so nothing may be left alive to write.
+  const killed = terminateRunProcesses(run);
+  const runDir = runDirOf(id);
+  // Reload after the kill so any write the executor got in before dying is kept.
+  const fresh = loadRun(id);
+  delete fresh.executorPid;
+  delete fresh.executorStartedAt;
+  const step = interruptedStepOf(priorState);
+  setState(
+    fresh,
+    "cancelled",
+    step ? `cancelled by founder (step '${step}' interrupted mid-flight)` : "cancelled by founder"
+  );
+  if (step && killed) {
+    // The interrupted step never got its telemetry row (the executor died
+    // holding it): record an honest non-ok row so cost stats stay truthful,
+    // with usage recovered from the partial transcript when one exists.
+    try {
+      const startedAt = [...fresh.history].reverse().find((h) => h.state === priorState)?.at || nowIso();
+      const attempt = Math.max(1, maxStepAttempt(fs.readdirSync(runDir), step));
+      let usage = null;
+      try {
+        usage = resultFromTranscript(
+          fs.readFileSync(path.join(runDir, stepDocName(step, "transcript", attempt)), "utf8").split("\n")
+        ).usage;
+      } catch {}
+      tStep(id, step, attempt, "fail", `step '${step}' interrupted by cancel`, startedAt, usage);
+    } catch {
+      /* telemetry must never break a cancel */
+    }
+  }
+  console.log(
+    killed
+      ? `cancelled ${id} (executor and in-flight step terminated; worktree kept — resume with \`factory-run resume ${id}\`, discard with \`factory-run cleanup ${id} --discard\`)`
+      : `cancelled ${id} (no live executor found; worktree kept)`
+  );
 }
 
 function cmdPreflight(argv) {
@@ -2478,10 +2691,27 @@ function cmdSelftest() {
     ["nothing left is a no-op", cls({ worktreeExists: false, branchExists: false, merged: false }) === "none"],
     ["unmerged worktree removal is opt-in", cls({ merged: false }, { removeUnmergedWorktrees: true }) === "remove-worktree"],
     ["opt-in never deletes the unmerged branch", cls({ merged: false, worktreeExists: false }, { removeUnmergedWorktrees: true }) === "skip"],
+    ["discard removes even dirty/unmerged", cls({ state: "cancelled", dirty: true, merged: false }, { discard: true }) === "discard"],
+    ["discard still refuses in-flight runs", cls({ state: "running:implement" }, { discard: true }) === "skip"],
+    ["discard with nothing left is a no-op", cls({ worktreeExists: false, branchExists: false, merged: false }, { discard: true }) === "none"],
   ];
   for (const [name, ok] of cleanupChecks) {
     console.log(`cleanup ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`cleanup check failed: ${name}`);
+  }
+  // Cancel interruption bookkeeping (pure): which step a cancel interrupts,
+  // derived from the state it replaces.
+  const interruptChecks = [
+    ["running:<step> names the step", interruptedStepOf("running:implement") === "implement"],
+    ["synthetic steps resolve too", interruptedStepOf("running:resolve-conflicts") === "resolve-conflicts"],
+    ["deploying maps to the deploy step", interruptedStepOf("deploying") === "deploy"],
+    ["waiting states interrupt no step", interruptedStepOf("awaiting-approval") === null && interruptedStepOf("queued") === null],
+    ["setup interrupts no step", interruptedStepOf("setup") === null],
+    ["terminal states interrupt no step", interruptedStepOf("cancelled") === null && interruptedStepOf("done") === null],
+  ];
+  for (const [name, ok] of interruptChecks) {
+    console.log(`cancel-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`cancel-step check failed: ${name}`);
   }
   // Harness-merge web-restart decision core (pure).
   const webChecks = [
