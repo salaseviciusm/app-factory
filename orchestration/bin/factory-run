@@ -1089,6 +1089,29 @@ function classifyWebRestart(files) {
   };
 }
 
+// The exact dep-sync + build command for a harness-merge frontend rebuild
+// (single source of truth, exercised by selftest): `npm ci` for lockfile
+// reproducibility, `npm install` fallback when the lockfile is absent or out
+// of sync with package.json. Run synchronously into deploy.log — a detached
+// build inside factory-web races factory-web-up's short readiness wait and
+// hides the real error.
+const WEB_FRONTEND_DIR = "orchestration/web/frontend";
+const WEB_FRONTEND_BUILD_CMD =
+  "(npm ci --no-fund --no-audit || npm install --no-fund --no-audit) && npm run build";
+
+/** Pure decision core for judging the harness-merge web-console restart
+ *  (exercised by selftest). `buildOk` is true when no rebuild was needed. A
+ *  failed build must fail the outcome even if the console answers (it would be
+ *  serving the stale pre-merge frontend). */
+function classifyWebRestartOutcome({ buildOk, downOk, upOk, upOutput }) {
+  if (!buildOk) return { ok: false, reason: "frontend build failed" };
+  if (!downOk) return { ok: false, reason: "factory-web-down failed" };
+  if (!upOk || !upOutput.includes(": up at ")) {
+    return { ok: false, reason: "web console did not come back up" };
+  }
+  return { ok: true, reason: "restarted" };
+}
+
 // Deploy-time base-drift recovery (harness-merge only): concurrent runs land
 // on the base branch mid-run, so a stale-base merge is never attempted. On
 // drift the run branch is rebased onto the base inside the worktree and the
@@ -1233,17 +1256,37 @@ function deployStep(run, rig) {
     if (!web.restart) {
       return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
     }
-    if (web.rebuildFrontend) runCommand("rm -rf orchestration/web/frontend/dist", rig.path, logFile, 2);
+    // Rebuild synchronously BEFORE the restart: factory-web-up's readiness
+    // wait cannot cover a dep install + build, and a failed build must land in
+    // deploy.log with its exit code, not vanish into a detached server.log.
+    // On success vite refreshes dist/ itself; on failure the old dist stays so
+    // the console restarts on the stale-but-working frontend.
+    let build = { ok: true, output: "" };
+    if (web.rebuildFrontend) {
+      log(runDir, `deploy: rebuilding web frontend (${WEB_FRONTEND_BUILD_CMD})`);
+      build = runCommand(WEB_FRONTEND_BUILD_CMD, path.join(rig.path, WEB_FRONTEND_DIR), logFile, 15);
+    }
     const down = runCommand("orchestration/bin/factory-web-down", rig.path, logFile, 5);
     const up = runCommand("orchestration/bin/factory-web-up", rig.path, logFile, 10);
-    if (down.ok && up.ok && up.output.includes(": up at ")) {
+    const outcome = classifyWebRestartOutcome({ buildOk: build.ok, downOk: down.ok, upOk: up.ok, upOutput: up.output });
+    if (outcome.ok) {
+      if (run.deployWarning) {
+        delete run.deployWarning;
+        saveRun(run);
+      }
       return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway + web console`, url: null };
     }
     // The merge is durable and already on the default branch, so the deploy
-    // stays ok — but the summary must not read as a clean deploy.
+    // stays ok (no bogus recovery) — but the failure must reach the founder
+    // immediately and again in the final notify step, not just deploy.log.
+    const warning = `web console restart FAILED after harness merge (${sha}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
+    run.deployWarning = warning;
+    saveRun(run);
+    const tail = (build.ok ? up.output : build.output).split("\n").filter(Boolean).slice(-15).join("\n").slice(-1500);
+    notify(run, `:rotating_light: Run ${run.id} (${run.rig}): ${warning}${tail ? `\n\`\`\`\n${tail}\n\`\`\`` : ""}`);
     return {
       ok: true,
-      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED — restart manually with factory-web-up, see deploy.log`,
+      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED (${outcome.reason}) — restart manually with factory-web-up, see deploy.log`,
       url: null,
     };
   }
@@ -1826,6 +1869,7 @@ function execRun(id) {
           run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : "No deployable artifact for this rig.",
           `Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (or ask the chief of staff).`,
         ];
+        if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
         const usage = usageLine(id);
         if (usage) lines.push(usage);
         notify(run, lines.join("\n"), run.qrPath);
@@ -2723,6 +2767,23 @@ function cmdSelftest() {
   for (const [name, ok] of webChecks) {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart check failed: ${name}`);
+  }
+  // Harness-merge restart outcome core (pure) + the rebuild command contract:
+  // deps must sync (npm ci, npm install fallback) before the frontend build,
+  // and a failed build/restart must never read as a clean deploy.
+  const wro = (over) =>
+    classifyWebRestartOutcome({ buildOk: true, downOk: true, upOk: true, upOutput: "factory-web: up at http://127.0.0.1:4620 · tailnet: already serving", ...over });
+  const webOutcomeChecks = [
+    ["rebuild syncs deps before building", /npm ci .*\|\| npm install .*&& npm run build/.test(WEB_FRONTEND_BUILD_CMD)],
+    ["clean restart is ok", wro({}).ok === true],
+    ["failed build fails even when the console answers", wro({ buildOk: false }).ok === false && wro({ buildOk: false }).reason === "frontend build failed"],
+    ["down failure flagged", wro({ downOk: false }).ok === false],
+    ["up failure flagged", wro({ upOk: false }).ok === false],
+    ["console not answering flagged", wro({ upOutput: "factory-web: starting (see server.log) at http://127.0.0.1:4620" }).ok === false],
+  ];
+  for (const [name, ok] of webOutcomeChecks) {
+    console.log(`web-restart-outcome ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`web-restart-outcome check failed: ${name}`);
   }
   // Deploy-recovery decision core (pure — no git access). The cap semantics:
   // `iterations` counts cycles already burned, so the 5th attempt (4 burned)
