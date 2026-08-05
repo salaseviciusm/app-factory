@@ -478,6 +478,45 @@ function resolvePlaceholders(str) {
   });
 }
 
+/** Per-rig Slack channel NAME for run notifications (pure core, exercised by
+ *  selftest). Rig entries declare `notifyChannelName`; factory:<app> rigs
+ *  render the factoryApps `${app}` template with the app name. The result is
+ *  normalized to Slack's channel-name charset (lowercase, [a-z0-9_-], ≤80).
+ *  Null when unconfigured → caller uses the global RIGS.notify fallback. */
+function rigNotifyChannelName(rigName, rigs) {
+  let name = null;
+  if (rigs.rigs[rigName] && rigs.rigs[rigName].notifyChannelName) {
+    name = rigs.rigs[rigName].notifyChannelName;
+  } else {
+    const m = String(rigName || "").match(/^factory:(.+)$/);
+    if (m && rigs.factoryApps && rigs.factoryApps.notifyChannelName) {
+      name = rigs.factoryApps.notifyChannelName.replace(/\$\{app\}/g, m[1]);
+    }
+  }
+  if (!name) return null;
+  name = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return name || null;
+}
+
+/** Channel name → C... ID via openclaw/lib/slack-channel.mjs (creates the
+ *  channel on demand; on-disk cache keeps repeat calls off conversations.list).
+ *  Null on any failure — never throws; successes are memoized per process,
+ *  failures are not, so a transient Slack outage can heal mid-run. */
+const _channelIdCache = new Map();
+function slackChannelId(name) {
+  if (_channelIdCache.has(name)) return _channelIdCache.get(name);
+  const helper = path.join(ORCH_DIR, "..", "openclaw", "lib", "slack-channel.mjs");
+  const res = spawnSync("node", [helper, name], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60000,
+  });
+  const id = (res.stdout || "").trim();
+  if (res.status !== 0 || !/^[CG][A-Z0-9]+$/.test(id)) return null;
+  _channelIdCache.set(name, id);
+  return id;
+}
+
 /**
  * The exact `openclaw message send` argv. Single source of truth: consumed by
  * the real notify() send AND the preflight contract probe, so the probe can
@@ -498,15 +537,27 @@ function notifyArgs(to, message, mediaPath) {
 /** Send a Slack notification. Returns true on success — and when notifications
  *  are deliberately disabled (no RIGS.notify / FACTORY_RUN_NO_NOTIFY=1): a
  *  disabled channel must not fail gates. Returns false on unresolved
- *  placeholder or non-zero exit. */
+ *  placeholder or non-zero exit.
+ *
+ *  Destination: the run's rig channel (rigNotifyChannelName, created on
+ *  demand) when configured and resolvable; otherwise the global RIGS.notify.to
+ *  — a routing problem degrades to the old single-channel behavior, never to a
+ *  dropped notification. */
 function notify(run, message, mediaPath) {
   const target = RIGS.notify;
   if (!target || process.env.FACTORY_RUN_NO_NOTIFY === "1") return true;
   const runDir = runDirOf(run.id);
+  let to = null;
+  const channelName = rigNotifyChannelName(run.rig, RIGS);
+  if (channelName) {
+    const id = slackChannelId(channelName);
+    if (id) to = `channel:${id}`;
+    else log(runDir, `notify: per-rig channel #${channelName} did not resolve; falling back to global notify target`);
+  }
   let args;
   try {
     args = notifyArgs(
-      resolvePlaceholders(target.to),
+      to || resolvePlaceholders(target.to),
       message,
       mediaPath && fs.existsSync(mediaPath) ? mediaPath : null
     );
@@ -2528,6 +2579,21 @@ function cmdSelftest() {
   for (const [name, ok] of discussionOutcomeChecks) {
     console.log(`discussion ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`discussion check failed: ${name}`);
+  }
+  // Per-rig notify routing core (pure — checked against the live rigs.json so
+  // a rig losing its notifyChannelName shows up here, plus synthetic configs).
+  const notifyChecks = [
+    ["running-with-pace routes to factory-pace", rigNotifyChannelName("running-with-pace", RIGS) === "factory-pace"],
+    ["skip-hero routes to factory-skiphero", rigNotifyChannelName("skip-hero", RIGS) === "factory-skiphero"],
+    ["app-factory routes to factory-app-factory", rigNotifyChannelName("app-factory", RIGS) === "factory-app-factory"],
+    ["factory:<app> renders the app template", rigNotifyChannelName("factory:pullup", RIGS) === "factory-app-pullup"],
+    ["app names normalized to Slack charset", rigNotifyChannelName("factory:My App!", RIGS) === "factory-app-my-app"],
+    ["unknown rig has no per-rig channel", rigNotifyChannelName("no-such-rig", { rigs: {}, factoryApps: {} }) === null],
+    ["unconfigured rig falls back to global", rigNotifyChannelName("running-with-pace", { rigs: { "running-with-pace": {} }, factoryApps: {} }) === null],
+  ];
+  for (const [name, ok] of notifyChecks) {
+    console.log(`notify-routing ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`notify-routing check failed: ${name}`);
   }
   // Transcript envelope extraction + context stats (pure — no filesystem access).
   const assistantEv = JSON.stringify({
