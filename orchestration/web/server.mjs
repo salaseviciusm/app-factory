@@ -8,7 +8,7 @@
  *         workflows/*.json, rigs.json (served verbatim — ${VAR} placeholders
  *         stay unresolved; openclaw/secrets.env is never read).
  * Writes: nothing directly — every mutation shells out to bin/factory-run
- *         (start/approve/reject/steer/cancel) via execFile with an args array.
+ *         (start/approve/reject/steer/cancel/reply) via execFile with an args array.
  *
  * Access model: binds 127.0.0.1 by default. For phone access keep the loopback
  * bind and put `tailscale serve` in front (TLS + tailnet-only). Binding any
@@ -185,6 +185,17 @@ function currentRunState(id) {
   return run && run.id ? run.state : null;
 }
 
+/** Type of the workflow step the run is currently parked on, or null. Both
+ *  inputs are engine-written, but the workflow name is still charset-checked
+ *  before it becomes a path segment. */
+function currentStepType(id) {
+  const run = readJsonFile(path.join(ORCH_DIR, "runs", id, "run.json"), null);
+  if (!run || !run.id || typeof run.workflow !== "string" || !/^[a-z0-9-]+$/.test(run.workflow)) return null;
+  const wf = readJsonFile(path.join(ORCH_DIR, "workflows", `${run.workflow}.json`), null);
+  const step = wf && Array.isArray(wf.steps) ? wf.steps[run.stepIndex ?? 0] : null;
+  return (step && step.type) || null;
+}
+
 // ---------- API routes ----------
 
 async function handleApi(req, res, pathname, query) {
@@ -288,8 +299,8 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
@@ -321,6 +332,21 @@ async function handleApi(req, res, pathname, query) {
     if (TERMINAL_STATES.includes(state)) {
       return sendJson(res, 409, { error: `run is already ${state}` });
     }
+  } else if (action === "reply") {
+    // Founder turn in a discussion step (the web plan editor's compiled
+    // edits ride this). Only valid while the run is parked on a discussion
+    // turn — a reply outside that would sit unread in the jsonl.
+    if (state !== "awaiting-approval") {
+      return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
+    }
+    if (currentStepType(id) !== "discussion") {
+      return sendJson(res, 409, { error: "run is not on a discussion step" });
+    }
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (!text || text.length > PROMPT_CAP) {
+      return sendJson(res, 400, { error: `reply requires non-empty 'text' (max ${PROMPT_CAP} chars)` });
+    }
+    args.push(text);
   }
 
   const r = await factoryRun(args);
