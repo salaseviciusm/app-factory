@@ -63,10 +63,11 @@ export function stateKind(state: string): string {
 }
 
 /** CSS modifier for a telemetry step-status badge ("recover" = deploy hit base
- *  drift and looped the gates back — not a failure). */
+ *  drift and looped the gates back; "gate" = a founder-gated check parked the
+ *  run on the check gate — neither is a step failure). */
 export function stepStatusKind(status: string): string {
   if (status === "ok") return "ok";
-  if (status === "recover") return "warn";
+  if (status === "recover" || status === "gate") return "warn";
   return "fail";
 }
 
@@ -100,7 +101,12 @@ export function deriveNodes(detail: RunDetail): Record<string, NodeInfo> {
     let status: NodeStatus = "pending";
     if (run.state === `running:${step.id}` || (run.state === "deploying" && step.type === "deploy")) {
       status = "active";
-    } else if (run.state === "awaiting-approval" && (step.type === "gate" || step.type === "discussion") && i === stepIdx) {
+    } else if (
+      run.state === "awaiting-approval" &&
+      // "commands": a founder-gated check parked the run on its check gate.
+      (step.type === "gate" || step.type === "discussion" || step.type === "commands") &&
+      i === stepIdx
+    ) {
       status = "gate";
     } else if (last && last.status === "recover") {
       // Deploy hit base drift and looped the gates back — it will run again.
