@@ -276,7 +276,14 @@ function CheckGatePanel({
   const [notice, setNotice] = useState<string | null>(null);
   const [open, setOpen] = useState(active);
 
-  const image = gate?.artifacts.find((a) => a === gate.mediaPath) ?? gate?.artifacts.find((a) => a.endsWith(".png"));
+  // Prefer the Slack-attached PNG; fall back to the raw SVG (browsers render
+  // it natively — rasterization is only needed for the Slack attachment).
+  const image =
+    gate?.artifacts.find((a) => a === gate.mediaPath) ??
+    gate?.artifacts.find((a) => a === "timeline.png") ??
+    gate?.artifacts.find((a) => a === "timeline.svg");
+  // Annotated preview frame from the debug-video render, when it exists.
+  const preview = gate?.artifacts.find((a) => a.endsWith(".debug-preview.png"));
   const videos = gate?.artifacts.filter((a) => a.endsWith(".mov")) ?? [];
   const reports = gate?.artifacts.filter((a) => a.endsWith(".json")) ?? [];
 
@@ -336,6 +343,7 @@ function CheckGatePanel({
             <>
               {gate.summaryText && <pre className="doc-view">{gate.summaryText}</pre>}
               {image && <GateImage runId={runId} name={image} />}
+              {preview && <GateImage runId={runId} name={preview} />}
               {(videos.length > 0 || reports.length > 0) && (
                 <div className="gate-actions">
                   {videos.map((v) => (

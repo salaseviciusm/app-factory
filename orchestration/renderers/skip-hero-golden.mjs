@@ -264,20 +264,47 @@ export function buildTimelineSvg(fixture, comparison, toleranceMs) {
 
 // ---------- rasterize + debug video ----------
 
-/** SVG → PNG: npx sharp-cli first, qlmanage (macOS Quick Look) fallback.
- *  Returns true when the PNG exists afterwards. */
-function rasterize(svgPath, pngPath, cwd, log) {
+/** Width/height from a PNG's IHDR chunk, or null. */
+function pngDimensions(p) {
+  try {
+    const buf = fs.readFileSync(p);
+    if (buf.length < 24 || buf.toString("ascii", 12, 16) !== "IHDR") return null;
+    return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  } catch {
+    return null;
+  }
+}
+
+/** True when the PNG's aspect ratio is within 10% of the SVG's — Quick Look
+ *  is known to stretch SVGs into a square canvas, and a distorted timeline
+ *  would mislead the founder's judgment (worse than no image). */
+function aspectOk(pngPath, expected, log) {
+  const dims = pngDimensions(pngPath);
+  if (!dims || !dims.width || !dims.height) return false;
+  const want = expected.width / expected.height;
+  const got = dims.width / dims.height;
+  if (Math.abs(got - want) / want > 0.1) {
+    log(`rasterized PNG aspect ${dims.width}x${dims.height} distorts the ${expected.width}x${expected.height} timeline; discarding it`);
+    fs.rmSync(pngPath, { force: true });
+    return false;
+  }
+  return true;
+}
+
+/** SVG → PNG: npx sharp-cli first, qlmanage (macOS Quick Look) fallback,
+ *  both aspect-validated. Returns true when a faithful PNG exists after. */
+function rasterize(svgPath, pngPath, expected, cwd, log) {
   const a = run(`npx --yes sharp-cli -i ${q(svgPath)} -o ${q(pngPath)}`, cwd, 5);
-  if (a.ok && fs.existsSync(pngPath)) return true;
-  log(`sharp-cli rasterize failed (exit ${a.status}); trying qlmanage`);
+  if (a.ok && fs.existsSync(pngPath) && aspectOk(pngPath, expected, log)) return true;
+  log(`sharp-cli rasterize failed or was discarded (exit ${a.status}); trying qlmanage`);
   const outDir = path.dirname(pngPath);
-  const b = run(`qlmanage -t -s 1420 -o ${q(outDir)} ${q(svgPath)}`, cwd, 5);
+  const b = run(`qlmanage -t -s ${expected.width} -o ${q(outDir)} ${q(svgPath)}`, cwd, 5);
   const qlOut = path.join(outDir, `${path.basename(svgPath)}.png`);
   if (b.ok && fs.existsSync(qlOut)) {
     fs.renameSync(qlOut, pngPath);
-    return true;
+    if (aspectOk(pngPath, expected, log)) return true;
   }
-  log(`qlmanage rasterize failed (exit ${b.status}); gate goes out without an image`);
+  log(`qlmanage rasterize failed (exit ${b.status}); gate goes out without a PNG (the run page still shows the SVG)`);
   return false;
 }
 
@@ -330,7 +357,9 @@ export function render(ctx) {
       const svgPath = path.join(ctx.artifactsDir, SVG_FILE);
       const pngPath = path.join(ctx.artifactsDir, PNG_FILE);
       fs.writeFileSync(svgPath, svg);
-      if (rasterize(svgPath, pngPath, ctx.artifactsDir, log)) mediaPath = pngPath;
+      const dims = /width="(\d+)" height="(\d+)"/.exec(svg);
+      const expected = dims ? { width: +dims[1], height: +dims[2] } : { width: 1420, height: 400 };
+      if (rasterize(svgPath, pngPath, expected, ctx.artifactsDir, log)) mediaPath = pngPath;
     } catch (err) {
       log(`timeline build failed (gate continues without an image): ${String(err.message || err).slice(0, 200)}`);
     }
