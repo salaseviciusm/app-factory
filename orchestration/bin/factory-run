@@ -40,6 +40,10 @@
  *   factory-run cleanup [<run_id>] [--dry-run] [--json] [--remove-unmerged-worktrees]
  *   factory-run cleanup <run_id> --discard  (force-remove one terminal run's
  *                                         worktree AND branch, dirty/unmerged included)
+ *   factory-run watchdog [--hours N] [--cooldown-hours N] [--dry-run] [--json]
+ *                                        (cron-safe stale-run scan: one Slack
+ *                                         alert per run quiet past its threshold,
+ *                                         deduped via runs/<id>/watchdog.json)
  *   factory-run context <run_id> [--json]  (per-step context/cost analysis)
  *   factory-run context --sessions [--sessions-dir <dir>] [--days N]
  *   factory-run preflight [--rig <name>]   (live external-CLI contract checks)
@@ -89,6 +93,15 @@ const {
   matchesExecutor,
   lastFailureDetail,
 } = require(path.join(ORCH_DIR, "web", "lib", "retry.mjs"));
+// Watchdog pure core (stale-run alertable predicate, two-tier thresholds,
+// re-alert/cooldown rule, Slack message composer) — same web-lib pattern;
+// deep coverage lives in watchdog.test.mjs.
+const {
+  classifyWatchdog,
+  composeWatchdogMessage,
+  formatQuiet,
+  suggestedAction: watchdogSuggestedAction,
+} = require(path.join(ORCH_DIR, "web", "lib", "watchdog.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -3639,6 +3652,103 @@ function cmdRetry(argv) {
   );
 }
 
+// ---------- watchdog (stale-run scan; cron-safe, alert-only) ----------
+//
+// Finds runs sitting quiet past their threshold (web/lib/watchdog.mjs holds
+// the policy: engine-active states 6h, founder-wait/resumable states 24h) and
+// posts one outcome-first Slack message per stale run via the standard
+// notify() routing (per-rig channel, global fallback). The last alert's
+// snapshot lives in runs/<id>/watchdog.json; re-alerts happen when the run
+// moves (state, step, or updatedAt) or after the cooldown. The scan exits 0
+// even when stale runs are found — cron treats a completed scan as success; a
+// failed notify send is logged (engine.log) and leaves the snapshot unwritten
+// so the next scan retries.
+
+/** Positive-number hours flag, or undefined when absent. Anything else is a
+ *  usage error — a cron typo must fail loudly, not scan with NaN thresholds. */
+function watchdogHoursFlag(argv, flag) {
+  const raw = argOf(argv, flag);
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    console.error(`invalid ${flag} value '${raw}': expected a positive number of hours`);
+    process.exit(1);
+  }
+  return n;
+}
+
+function cmdWatchdog(argv) {
+  const dryRun = argv.includes("--dry-run");
+  const asJson = argv.includes("--json");
+  const opts = { hours: watchdogHoursFlag(argv, "--hours"), cooldownHours: watchdogHoursFlag(argv, "--cooldown-hours") };
+  const now = Date.now();
+  const stale = [];
+  for (const id of listRunIds()) {
+    let run;
+    try {
+      run = loadRun(id);
+    } catch {
+      continue; // an unreadable run.json must not kill the whole scan
+    }
+    const decision = classifyWatchdog(run, readJson(path.join(runDirOf(id), "watchdog.json"), null), now, opts);
+    if (!decision.alert) continue;
+    let stepId = null;
+    try {
+      const wf = loadWorkflow(run.workflow);
+      stepId = wf.steps[Math.min(run.stepIndex || 0, wf.steps.length - 1)].id;
+    } catch {}
+    const action = watchdogSuggestedAction(run);
+    const usage = runUsage(id);
+    const entry = {
+      id,
+      rig: run.rig,
+      state: run.state,
+      step: stepId,
+      quietFor: formatQuiet(decision.quietMs),
+      quietMs: decision.quietMs,
+      thresholdHours: decision.thresholdHours,
+      costUsd: usage ? usage.costUsd : null,
+      action,
+      reason: decision.reason,
+      alerted: false,
+    };
+    if (!dryRun) {
+      const sent = notify(
+        run,
+        composeWatchdogMessage(run, {
+          stepId,
+          quietMs: decision.quietMs,
+          thresholdHours: decision.thresholdHours,
+          usage: usageLine(id),
+          action,
+        })
+      );
+      entry.alerted = sent;
+      // Snapshot only on a successful send: a failed send must be retried by
+      // the next scan, not remembered as delivered.
+      if (sent) {
+        writeJson(path.join(runDirOf(id), "watchdog.json"), {
+          state: run.state,
+          stepIndex: run.stepIndex || 0,
+          updatedAt: run.updatedAt || null,
+          alertedAt: nowIso(),
+        });
+      }
+    }
+    stale.push(entry);
+  }
+  if (asJson) {
+    console.log(JSON.stringify({ scannedAt: nowIso(), dryRun, stale }, null, 2));
+    return;
+  }
+  for (const e of stale) {
+    const outcome = dryRun ? "dry-run" : e.alerted ? "alerted" : "SEND FAILED (see engine.log)";
+    console.log(`${e.id}  ${e.state.padEnd(20)} ${e.rig.padEnd(20)} quiet ${e.quietFor} (threshold ${e.thresholdHours}h)  [${outcome}]`);
+    console.log(`  next: ${e.action}`);
+  }
+  if (stale.length === 0) console.log("no stale runs");
+}
+
 /** Machine-readable step/gate facts for `status --json`, so consumers (the
  *  standup skill, the web console) never parse human-formatted `history`
  *  detail strings. `currentStep` mirrors what the human output prints (raw
@@ -4271,6 +4381,36 @@ function cmdSelftest() {
     console.log(`retry ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`retry check failed: ${name}`);
   }
+  // Watchdog stale-run classifier (pure core from web/lib/watchdog.mjs; deep
+  // coverage lives in watchdog.test.mjs — this proves the engine's
+  // require(esm) wiring resolves the same alert/skip decisions it acts on).
+  const wdT0 = "2026-01-01T00:00:00.000Z";
+  const wdAt = (hours) => Date.parse(wdT0) + hours * 3600000;
+  const wd = (runOver, prior, nowMs, opts) =>
+    classifyWatchdog({ id: "selftest-run", state: "failed", stepIndex: 2, updatedAt: wdT0, ...runOver }, prior || null, nowMs, opts || {});
+  const wdSnapshot = { state: "failed", stepIndex: 2, updatedAt: wdT0, alertedAt: "2026-01-02T01:00:00.000Z" };
+  const watchdogChecks = [
+    ["settled terminal states never alert", ["done", "killed", "cancelled", "rejected"].every((state) => wd({ state }, null, wdAt(24 * 365)).alert === false)],
+    ["failed run quiet past 24h alerts", wd({}, null, wdAt(25)).alert === true],
+    ["failed run quiet 1h stays silent", wd({}, null, wdAt(1)).alert === false],
+    ["running run quiet past 6h alerts", wd({ state: "running:implement" }, null, wdAt(7)).alert === true],
+    ["held-deploy done alerts past 24h", wd({ state: "done", deployHeld: true }, null, wdAt(25)).alert === true],
+    ["--hours overrides both tiers", wd({}, null, wdAt(3), { hours: 2 }).alert === true && wd({ state: "running:implement" }, null, wdAt(3), { hours: 2 }).alert === true],
+    ["matching alert snapshot suppresses", wd({}, wdSnapshot, wdAt(26)).alert === false],
+    ["moved snapshot re-alerts", wd({ stepIndex: 3 }, wdSnapshot, wdAt(26)).alert === true],
+    ["cooldown elapsed re-alerts", wd({}, wdSnapshot, wdAt(25 + 73)).alert === true],
+    ["stale message names run, step, cost, and action", (() => {
+      const m = composeWatchdogMessage(
+        { id: "selftest-run", rig: "skip-hero", state: "failed" },
+        { stepId: "implement", quietMs: 26 * 3600000, thresholdHours: 24, usage: ":moneybag: Cost $31.70", action: watchdogSuggestedAction({ id: "selftest-run", state: "failed" }) }
+      );
+      return ["selftest-run", "skip-hero", "`failed`", "*implement*", "26h", "$31.70", "factory-run retry selftest-run"].every((bit) => m.includes(bit));
+    })()],
+  ];
+  for (const [name, ok] of watchdogChecks) {
+    console.log(`watchdog ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`watchdog check failed: ${name}`);
+  }
   // Per-attempt step document naming/derivation (pure — no filesystem access).
   const docChecks = [
     ["first attempt unsuffixed", stepDocName("implement", "prompt", 1) === "implement.prompt.md"],
@@ -4684,12 +4824,13 @@ try {
   else if (cmd === "deploy") cmdDeployTrigger(rest);
   else if (cmd === "deploy-exec") execDeployHeld(rest[0]);
   else if (cmd === "cleanup") cmdCleanup(rest);
+  else if (cmd === "watchdog") cmdWatchdog(rest);
   else if (cmd === "preflight") cmdPreflight(rest);
   else if (cmd === "selftest") cmdSelftest();
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|preview|preview-mode|deploy|cancel|cleanup|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
