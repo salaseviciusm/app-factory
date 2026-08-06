@@ -89,6 +89,23 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, await res.text());
     return res.blob();
   },
+  files: () => request<import("./types").FilesResponse>("/api/files"),
+  /** One allowlisted debug-artifact file as a Blob — fetched with the auth
+   *  header (a <video src>/<a href> can't carry it), then object-URL'd by the
+   *  caller. Path segments are encoded individually so nested paths survive. */
+  fileBlob: async (rootKey: string, relPath: string): Promise<Blob> => {
+    const token = getToken();
+    const encodedPath = relPath.split("/").map(encodeURIComponent).join("/");
+    const res = await fetch(`/api/files/${encodeURIComponent(rootKey)}/${encodedPath}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new Event(AUTH_EVENT));
+      throw new ApiError(401, "invalid token");
+    }
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return res.blob();
+  },
   settings: () => request<import("./types").SettingsResponse>("/api/settings"),
   usage: () => request<import("./types").UsageResponse>("/api/usage"),
   start: (body: { rig: string; workflow: string; prompt: string; auto: boolean; preview?: boolean }) =>

@@ -7,13 +7,20 @@ import { RunDetail } from "./components/RunDetail";
 import { NewRun } from "./components/NewRun";
 import { Settings } from "./components/Settings";
 import { Usage } from "./components/Usage";
+import { FilesPage } from "./components/FilesPage";
 
-type Route = { page: "runs"; runId: string | null } | { page: "new" } | { page: "usage" } | { page: "settings" };
+type Route =
+  | { page: "runs"; runId: string | null }
+  | { page: "new" }
+  | { page: "files" }
+  | { page: "usage" }
+  | { page: "settings" };
 
 function parseHash(hash: string): Route {
   const m = /^#\/run\/([a-z0-9-]+)$/.exec(hash);
   if (m) return { page: "runs", runId: m[1] };
   if (hash === "#/new") return { page: "new" };
+  if (hash === "#/files") return { page: "files" };
   if (hash === "#/usage") return { page: "usage" };
   if (hash === "#/settings") return { page: "settings" };
   return { page: "runs", runId: null };
@@ -57,6 +64,9 @@ export default function App() {
           <a className={route.page === "new" ? "nav-active" : ""} href="#/new">
             New run
           </a>
+          <a className={route.page === "files" ? "nav-active" : ""} href="#/files">
+            Files
+          </a>
           <a className={route.page === "usage" ? "nav-active" : ""} href="#/usage">
             Usage
           </a>
@@ -78,6 +88,7 @@ export default function App() {
       <main className="content">
         {route.page === "runs" && <RunsPage selectedId={route.runId} />}
         {route.page === "new" && <NewRun onStarted={(id) => (window.location.hash = `#/run/${id}`)} />}
+        {route.page === "files" && <FilesPage />}
         {route.page === "usage" && <Usage />}
         {route.page === "settings" && <Settings />}
       </main>
