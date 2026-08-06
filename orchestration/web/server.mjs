@@ -36,6 +36,7 @@ import {
 } from "./lib/runs.mjs";
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
+import { listFileRoots, resolveFileDownload } from "./lib/files.mjs";
 import {
   loadToken,
   createToken,
@@ -279,6 +280,32 @@ async function handleApi(req, res, pathname, query) {
         cost: usageTotals(openTelemetry(ORCH_DIR)),
         storage: contextStorage(ORCH_DIR),
       });
+    }
+    if (pathname === "/api/files") {
+      // Fixed FILE_ROOTS allowlist only — the listing never reads a
+      // client-supplied path, and a missing root is an empty entry, not a 4xx.
+      return sendJson(res, 200, { roots: listFileRoots() });
+    }
+    if ((m = /^\/api\/files\/([^/]+)\/(.+)$/.exec(pathname))) {
+      // Debug-artifact download: resolveFileDownload owns all containment
+      // (declared root keys, segment checks, realpath-inside-root); content is
+      // streamed, never buffered — the renders are hundreds of MB.
+      const file = resolveFileDownload(m[1], m[2]);
+      if (file.error) return sendJson(res, file.status, { error: file.error });
+      const attachment = !file.inline || query.get("download") === "1";
+      res.writeHead(200, {
+        "Content-Type": file.type,
+        "Content-Length": file.size,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition":
+          `${attachment ? "attachment" : "inline"}; ` +
+          `filename="${file.filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_")}"; ` +
+          `filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+      });
+      if (req.method === "HEAD") return res.end();
+      fs.createReadStream(file.path).pipe(res);
+      return;
     }
     if (pathname === "/api/workflows") return sendJson(res, 200, { workflows: listWorkflows() });
     if (pathname === "/api/settings") {

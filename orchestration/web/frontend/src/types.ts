@@ -228,6 +228,29 @@ export interface StorageCategory {
   files: number;
 }
 
+/** One browsable file inside an allowlisted root (path is root-relative). */
+export interface FileEntry {
+  path: string;
+  bytes: number;
+  mtime: string;
+}
+
+/** Listing of one allowlisted directory root, files newest-first. */
+export interface FileRootListing {
+  key: string;
+  label: string;
+  path: string;
+  exists: boolean;
+  files: FileEntry[];
+  count: number;
+  totalBytes: number;
+  truncated: boolean;
+}
+
+export interface FilesResponse {
+  roots: FileRootListing[];
+}
+
 export interface UsageResponse {
   cost: Record<UsageWindowKey, UsageWindow>;
   storage: {
