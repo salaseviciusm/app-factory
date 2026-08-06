@@ -17,6 +17,7 @@ import path from "node:path";
 export const FILE_ROOTS = [
   { key: "skip-hero-examples", label: "skip-hero examples", path: "~/src/skip-hero/examples" },
   { key: "skip-hero-debug", label: "skip-hero debug", path: "~/src/skip-hero/debug" },
+  { key: "skip-hero-documents", label: "skip-hero documents", path: "~/src/skip-hero/documents" },
 ];
 
 const MAX_DEPTH = 8;
@@ -34,6 +35,7 @@ const INLINE_TYPES = {
 };
 const ATTACHMENT_TYPES = {
   ".json": "application/json",
+  ".md": "text/markdown; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
 };
 
