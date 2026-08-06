@@ -1633,10 +1633,14 @@ function runDiscussionStep(run, step) {
  */
 function easPublishArgs(deploy, msg) {
   const environment = deploy.environment || deploy.branch;
+  // eas-cli defaults --platform to "all", which exports a web bundle for any
+  // app config that declares web — and native-only deps (react-native-maps)
+  // can't compile for web. Rigs opt into web via deploy.updatePlatform.
   return [
     "update",
     "--branch", deploy.branch,
     "--environment", environment,
+    "--platform", deploy.updatePlatform || "ios,android",
     "--message", msg,
     "--non-interactive",
     "--json",
@@ -1841,7 +1845,7 @@ function easPublish(run, rig, { message, qrName = "qr.png" } = {}) {
   const appDir = path.join(run.worktree, rig.appDir || ".");
   const logFile = path.join(runDir, "deploy.log");
   const msg = message || `factory-run ${run.id}: ${run.prompt.slice(0, 80)}`;
-  log(runDir, `publishing: eas update --branch ${deploy.branch} (${appDir})`);
+  log(runDir, `publishing: eas update --branch ${deploy.branch} --platform ${deploy.updatePlatform || "ios,android"} (${appDir})`);
   const r = runCommand(
     `npx eas ${easPublishArgs(deploy, msg).map((a) => JSON.stringify(a)).join(" ")}`,
     appDir,
@@ -4558,6 +4562,21 @@ function cmdSelftest() {
   for (const [name, ok] of releaseChecks) {
     console.log(`release-decision ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`release-decision check failed: ${name}`);
+  }
+  // Publish argv (pure): --platform must be pinned so eas-cli's platform=all
+  // default can never trigger a web export on rigs with native-only deps.
+  const platformOf = (argv) => argv[argv.indexOf("--platform") + 1];
+  const defaultPublish = easPublishArgs({ branch: "preview" }, "m");
+  const publishChecks = [
+    ["default argv pins --platform ios,android", platformOf(defaultPublish) === "ios,android"],
+    ["deploy.updatePlatform overrides the default", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "all" }, "m")) === "all"],
+    ["single-platform override honored", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "ios" }, "m")) === "ios"],
+    ["existing flags unchanged", ["--branch", "--environment", "--message", "--non-interactive", "--json"].every((f) => defaultPublish.includes(f))],
+    ["environment still defaults to branch", defaultPublish[defaultPublish.indexOf("--environment") + 1] === "preview"],
+  ];
+  for (const [name, ok] of publishChecks) {
+    console.log(`publish-args ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`publish-args check failed: ${name}`);
   }
   // Embedded-JSON extraction (pure). The fixture mirrors real `eas update:list
   // --json --non-interactive` output: the payload followed by the eas-cli
