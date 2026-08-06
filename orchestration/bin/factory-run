@@ -1633,14 +1633,20 @@ function runDiscussionStep(run, step) {
  */
 function easPublishArgs(deploy, msg) {
   const environment = deploy.environment || deploy.branch;
-  // eas-cli defaults --platform to "all", which exports a web bundle for any
-  // app config that declares web — and native-only deps (react-native-maps)
-  // can't compile for web. Rigs opt into web via deploy.updatePlatform.
+  // eas-cli's `update --platform` takes ONE of android|ios|all — a comma list
+  // is rejected outright ("Expected --platform=ios,android to be one of:
+  // android, ios, all"). Keeping web out of the export is therefore an
+  // app-config job (expo.platforms), not a flag job: with platforms pinned to
+  // native, "all" exports ios+android only. deploy.updatePlatform narrows to a
+  // single platform when a rig wants that; anything else falls back to "all".
+  const platform = ["android", "ios", "all"].includes(deploy.updatePlatform)
+    ? deploy.updatePlatform
+    : "all";
   return [
     "update",
     "--branch", deploy.branch,
     "--environment", environment,
-    "--platform", deploy.updatePlatform || "ios,android",
+    "--platform", platform,
     "--message", msg,
     "--non-interactive",
     "--json",
@@ -1845,9 +1851,10 @@ function easPublish(run, rig, { message, qrName = "qr.png" } = {}) {
   const appDir = path.join(run.worktree, rig.appDir || ".");
   const logFile = path.join(runDir, "deploy.log");
   const msg = message || `factory-run ${run.id}: ${run.prompt.slice(0, 80)}`;
-  log(runDir, `publishing: eas update --branch ${deploy.branch} --platform ${deploy.updatePlatform || "ios,android"} (${appDir})`);
+  const publishArgs = easPublishArgs(deploy, msg);
+  log(runDir, `publishing: eas update --branch ${deploy.branch} --platform ${publishArgs[publishArgs.indexOf("--platform") + 1]} (${appDir})`);
   const r = runCommand(
-    `npx eas ${easPublishArgs(deploy, msg).map((a) => JSON.stringify(a)).join(" ")}`,
+    `npx eas ${publishArgs.map((a) => JSON.stringify(a)).join(" ")}`,
     appDir,
     logFile,
     30
@@ -4563,14 +4570,16 @@ function cmdSelftest() {
     console.log(`release-decision ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`release-decision check failed: ${name}`);
   }
-  // Publish argv (pure): --platform must be pinned so eas-cli's platform=all
-  // default can never trigger a web export on rigs with native-only deps.
+  // Publish argv (pure): --platform must always be a value eas-cli accepts
+  // (android|ios|all). Web is kept out of the export via expo.platforms in the
+  // app config, not via this flag — a comma list here is a hard eas error.
   const platformOf = (argv) => argv[argv.indexOf("--platform") + 1];
   const defaultPublish = easPublishArgs({ branch: "preview" }, "m");
   const publishChecks = [
-    ["default argv pins --platform ios,android", platformOf(defaultPublish) === "ios,android"],
-    ["deploy.updatePlatform overrides the default", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "all" }, "m")) === "all"],
+    ["default argv uses --platform all", platformOf(defaultPublish) === "all"],
+    ["invalid updatePlatform falls back to all", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "ios,android" }, "m")) === "all"],
     ["single-platform override honored", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "ios" }, "m")) === "ios"],
+    ["android override honored", platformOf(easPublishArgs({ branch: "preview", updatePlatform: "android" }, "m")) === "android"],
     ["existing flags unchanged", ["--branch", "--environment", "--message", "--non-interactive", "--json"].every((f) => defaultPublish.includes(f))],
     ["environment still defaults to branch", defaultPublish[defaultPublish.indexOf("--environment") + 1] === "preview"],
   ];
