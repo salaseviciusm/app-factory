@@ -18,6 +18,7 @@ export const FILE_ROOTS = [
   { key: "skip-hero-examples", label: "skip-hero examples", path: "~/src/skip-hero/examples" },
   { key: "skip-hero-debug", label: "skip-hero debug", path: "~/src/skip-hero/debug" },
   { key: "skip-hero-documents", label: "skip-hero documents", path: "~/src/skip-hero/documents" },
+  { key: "app-factory-docs", label: "app-factory docs & research", path: "~/src/app-factory/docs" },
 ];
 
 const MAX_DEPTH = 8;
