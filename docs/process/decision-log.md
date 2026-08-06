@@ -397,8 +397,12 @@ There was also no way for the founder to try an app build before it shipped.
   extracted from harness-merge, including the base-drift `classifyRecovery`
   rebase/reverify/resolve loop). Order: merge first, publish second — the
   published bundle equals what landed on the default branch.
-- **No pushes, ever:** auto-merge is local-only for every rig; the engine contains
-  no `git push` (selftest pins this). A future `policy.push` can opt in.
+- **The engine never pushes the rig's default branch:** auto-merge is local-only
+  for every rig. The engine's only push is the run's own `factory/<id>` branch
+  (`git push --force-with-lease -u origin factory/<id>`, so console commit links
+  resolve and agents' plain `git push` has an upstream); a selftest pins that
+  every push command in the engine targets `factory/<id>` and never the base
+  branch. A future `policy.push` can opt in to pushing the merged default branch.
 - Merge-policy "review" runs end in the new terminal state **`awaiting-merge`**
   (not `done`): a completed success holding a founder action. Slack, the console,
   the standup, and `status --json` (machine-readable `pendingMerge: {branch}`)

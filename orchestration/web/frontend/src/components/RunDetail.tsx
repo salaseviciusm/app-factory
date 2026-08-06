@@ -180,8 +180,8 @@ function MergeBanner({ run }: { run: { id: string } }) {
       </p>
       <pre className="doc-view">git merge factory/{run.id}</pre>
       <p>
-        Local merge only — the engine never pushes to origin. After you merge, the next cleanup reclaims the
-        worktree and branch.
+        The merge is local — the engine never pushes the base branch. After you merge, the next cleanup
+        reclaims the worktree and branch.
       </p>
     </section>
   );

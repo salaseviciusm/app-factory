@@ -404,6 +404,20 @@ function resolveRigPolicy(rigName, raw) {
   return { policy, problems };
 }
 
+/** Terminal state for a green run (pure, exercised by selftest). A run parks
+ *  in awaiting-merge only when there was actually a merge to review: the
+ *  workflow owns a branch (worktree !== false) AND contains a deploy step
+ *  (the only merge-capable step) AND merge policy is "review" AND nothing
+ *  merged. Workflows without a deploy step were never going to merge —
+ *  keying off policy alone would strand them awaiting a merge nobody was
+ *  told to expect (awaiting-merge is terminal and refuses resume). */
+function greenTerminalState(workflow, policy, mergedSha) {
+  const hasDeployStep = (workflow.steps || []).some((s) => s.type === "deploy");
+  return workflow.worktree !== false && hasDeployStep && policy.merge === "review" && !mergedSha
+    ? "awaiting-merge"
+    : "done";
+}
+
 function resolveRig(name) {
   let rig;
   if (RIGS.rigs[name]) {
@@ -2801,7 +2815,7 @@ function execRun(id) {
           lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
         }
         if (!run.mergedSha) {
-          lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge only — the engine never pushes; or ask the chief of staff).`);
+          lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
         }
         if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
         const usage = usageLine(id);
@@ -2948,12 +2962,14 @@ function execRun(id) {
       run.stepIndex = i;
       saveRun(run);
     }
-    // Terminal state: a merge-policy "review" run that still owns an unmerged
-    // branch parks in awaiting-merge (terminal, a success — the founder merges
-    // factory/<id> by hand); everything else is done. Read-only workflows
-    // (worktree: false) have no branch to merge.
-    if (workflow.worktree !== false && rig.policy.merge === "review" && !run.mergedSha) {
-      setState(run, "awaiting-merge", `branch factory/${id} awaits founder merge into ${run.baseBranch} (local merge only — the engine never pushes)`);
+    // Terminal state: a merge-policy "review" run whose workflow had a deploy
+    // (merge-capable) step and still owns an unmerged branch parks in
+    // awaiting-merge (terminal, a success — the founder merges factory/<id>
+    // by hand); everything else is done. Read-only workflows (worktree:
+    // false) have no branch to merge, and workflows without a deploy step
+    // were never going to merge (greenTerminalState).
+    if (greenTerminalState(workflow, rig.policy, run.mergedSha) === "awaiting-merge") {
+      setState(run, "awaiting-merge", `branch factory/${id} awaits founder merge into ${run.baseBranch} (local merge — the engine never pushes ${run.baseBranch})`);
     } else {
       setState(run, "done", null);
     }
@@ -3663,7 +3679,7 @@ function cmdStatus(argv) {
         console.log(`  recovery: ${r.recovery.iterations}/${RECOVERY_CAP} cycle(s)${detail ? ` — ${detail}` : ""}`);
       }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
-      if (r.state === "awaiting-merge") console.log(`  pending merge: factory/${r.id} into ${r.baseBranch} (local merge only — the engine never pushes)`);
+      if (r.state === "awaiting-merge") console.log(`  pending merge: factory/${r.id} into ${r.baseBranch} (local merge — the engine never pushes ${r.baseBranch})`);
       if (r.deployHeld) console.log(`  deploy held: release with \`factory-run deploy ${r.id}\``);
       if (r.preview && r.preview.url) console.log(`  preview (${r.preview.kind}): ${r.preview.url}`);
       if (r.preview && r.preview.decision) {
@@ -3999,13 +4015,32 @@ function cmdSelftest() {
         return false;
       }
     })()],
-    // The engine never pushes: auto-merge is local-only for every rig (D26).
-    // Scans every command-invoking source line for a push; the scan's own
-    // lines carry the no-push-scan marker and are excluded.
-    ["engine contains no git push invocation", (() => {
+    // The engine never pushes the rig's default branch (D26): auto-merge is
+    // local-only for every rig. The engine DOES push the run's own
+    // factory/<id> branch (pushRunBranchCommand — console commit links,
+    // agents' upstream), so the scan targets command literals, not call
+    // sites (a call site split across lines must not dodge it): every
+    // non-comment `git push` string in the source must name factory/.
+    // The scan's own lines, and selftest lines that quote the literal for
+    // other checks, carry the no-push-scan marker and are excluded.
+    ["every git push in the engine targets factory/<id>, never the base branch", (() => {
       const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
-      return lines.filter((l) => !l.includes("no-push-scan") && /git[^)]*push/.test(l) && /(runCommand\(|execSync\(|spawnSync\(|\bsh\(|\bgit\()/.test(l)).length === 0; // no-push-scan
+      const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
+      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l)); // no-push-scan
     })()],
+    ["engine's only push command is the run branch push", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
+    // greenTerminalState: awaiting-merge only when a merge was actually in
+    // play (worktree + deploy step + review policy + nothing merged).
+    ["review-policy worktree run with a deploy step and no merge parks awaiting-merge",
+      greenTerminalState({ steps: [{ type: "agent" }, { type: "deploy" }] }, { merge: "review" }, null) === "awaiting-merge"],
+    ["worktree workflow with no deploy step ends done, not awaiting-merge",
+      greenTerminalState({ steps: [{ type: "agent" }, { type: "manual" }] }, { merge: "review" }, null) === "done"],
+    ["read-only workflow (worktree:false) ends done",
+      greenTerminalState({ worktree: false, steps: [{ type: "deploy" }] }, { merge: "review" }, null) === "done"],
+    ["merged review-policy run ends done",
+      greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "review" }, "abc123") === "done"],
+    ["auto-merge-policy run ends done",
+      greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "auto" }, "abc123") === "done"],
   ];
   for (const [name, ok] of policyChecks) {
     console.log(`policy ${name}: ${ok ? "ok" : "FAIL"}`);
@@ -4112,10 +4147,10 @@ function cmdSelftest() {
   const pushChecks = [
     ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
     ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
-    ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")],
+    ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")], // no-push-scan
     ["implement/fix prompts push per commit, stay on the branch", ["implementer", "bug-fixer"].every((n) => {
       const p = stepPrompt(n);
-      return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches");
+      return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches"); // no-push-scan
     })],
     ["resolver failure paths push the branch before terminating", resolveFailSrc.includes("pushRunBranch(run)")],
     ["resolver failure paths re-record commits", resolveFailSrc.includes("recordCommits(run)")],
