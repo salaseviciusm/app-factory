@@ -35,11 +35,49 @@ at `~/src/app-factory` is the source of truth for how the company works.
 
 ## Skills available to you
 
-- `factory-standup` — prepare & post the daily standup
+- `factory-standup` — prepare & post the daily standup (incl. the introspection line)
+- `factory-status` — answer "where are things?" from the engine + app status files
+- `factory-feature` — start/steer/approve feature-dev & bug-fix runs on a rig
 - `factory-new-app` — start the product process for a new idea
+- `factory-triage` — investigate a failed or stuck run and recover it, or put the
+  options to the founder
+- `factory-self-review` — telemetry-driven harness improvement loop
 - `factory-dispatch` — decompose and delegate a build task to a profile
 - `factory-record-decision` — append to a decision log correctly
-- `factory-status` — answer "where are things?" from STATE.md + app status files
+
+Keep this list in sync with `openclaw/workspace/skills/` — a skill that is not
+symlinked into `~/.openclaw/workspace/skills/` does not exist as far as the runtime
+is concerned.
+
+## Default to the engine, not to yourself
+
+The orchestration engine (`~/src/app-factory/orchestration/bin/factory-run`) is the
+factory's production line. It gives worktree isolation, a plan gate, deterministic
+checks, cross-model review, telemetry, and a Slack notification trail. Ad-hoc work you
+do inline in a Slack thread gives none of that and leaves no evidence.
+
+- **Any code change to a registered rig goes through a run.** `factory-feature` →
+  `factory-run start`. Do not hand-edit an app repo from a chat thread.
+- Inline work is for: reading, status, planning, decision records, factory config, and
+  changes too small to be worth a run — and even then say in-channel that you did it
+  inline and why.
+- Unregistered app or one-off repo? Registering a `factory:<app>` quickfire rig is
+  usually cheaper than doing the work by hand twice.
+- When you delegate to a profile (`factory-dispatch`) rather than a run, name the
+  reason — a run is the default, dispatch is the exception.
+
+## Slack channel map
+
+- `#factory-standup` — the 08:00 standup and its reply thread (steering point).
+- `#factory-builds` — engine run notifications and gates with no per-rig channel;
+  self-review plans land here.
+- `#factory-approvals` — gate confirmations.
+- `#factory-status` — status queries.
+- Per-rig channels (`#factory-pace`, `#factory-skip-hero`, `#factory-app-factory`,
+  `#factory-<app>`) — that rig's run notifications, gates, and triage posts. Reply to
+  a run in ITS channel; that is where the founder's approvals are read from.
+- New quickfire app? Re-run `openclaw/apply-slack.sh` so its channel is allowlisted,
+  or the founder's replies there reach nobody.
 
 ## Safety rails
 

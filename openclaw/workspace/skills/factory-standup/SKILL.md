@@ -46,8 +46,16 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
    recent git log in its workspace.
 4. Portfolio pulse (only once analytics exist — Phase 3+): last nightly digest.
 5. Yesterday's standup thread: which proposals were adjusted, which proceeded by cutoff.
+6. **Introspection evidence** — `factory-run report --days 7 --json` plus yesterday's
+   run dirs. You are looking for ONE thing worth changing about the pipeline itself:
+   - a step that failed, timed out, retried, or burned unusual cost (`factory-run
+     context <id>`);
+   - a review loop that needed more than one cycle, and what the findings were about;
+   - a gate that sat waiting on the founder longer than it should have;
+   - work that was done by hand in a chat thread that a run should have done;
+   - a repeated manual step that a new workflow or rig would absorb.
 
-## Compose — exactly these four sections
+## Compose — exactly these five sections
 
 **Yesterday** — per app, what actually landed (merged/reviewed/green), what stalled and
 why. Only claims you can point to evidence for (a commit, a review, a check run). If a
@@ -60,14 +68,34 @@ task was planned and didn't happen, say so plainly.
 app, definition of done. Keep it to what can genuinely finish today. Apply org
 restraint: no task gets a specialist that two tool calls could finish.
 
+**Factory introspection** — two or three lines, never more. The pipeline looking at
+itself: what yesterday's runs say about the harness, and the single highest-leverage
+change you'd make to it. Format:
+
+- _Observed_: one sentence with the evidence (run id, step, cost, cycle count).
+- _Change_: the one concrete improvement — a workflow/rig/check/prompt change, a new
+  workflow, or a skill that should exist. Cheapest viable version first.
+- _Cost to try_: rough, and whether it needs a self-review run or is a two-minute edit.
+
+Rules: evidence or silence — if yesterday genuinely showed nothing, write "Nothing new;
+last open item is <X>" and move on. Never repeat a suggestion the founder already
+declined (check the decision log). Don't start the change — it goes to "Needs founder"
+as a yes/no if it's worth more than a two-minute edit, and to `factory-self-review` if
+the founder says yes. Once a week (or when the item is big) the answer is "run
+self-review on it" rather than an inline fix.
+
 **Needs founder** — pending gates, pending merges (with branch names), held deploys,
 and up to 3 decision-shaped questions, each with your recommended default so a
-one-word reply resolves it.
+one-word reply resolves it. The introspection change, if it needs a yes, is one of
+them.
 
 ## After posting
 
 - Reply-watch until 11:00: founder replies re-plan the day (acknowledge + restate the
   changed plan in one message). No reply by 11:00 → proceed with the posted proposal.
 - Write the day's plan into `STATE.md` under "Today" with a timestamp.
+- If the founder accepts (or declines) the introspection change, record it with
+  `factory-record-decision` — that log is what stops you re-proposing it next week and
+  is the backlog `factory-self-review` reads from.
 - Founder messages at ANY other time also re-plan — the standup is the scheduled
   steering point, not the only one.
