@@ -19,12 +19,24 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
    - **Pending gates** = every run in state `awaiting-approval`. A run in a
      discussion step awaiting a founder reply IS a pending gate — surface it in
      "Needs founder" exactly like a plan gate, with how long it has been waiting
-     (`gate.lastActivityAt`).
+     (`gate.lastActivityAt`). The `gate.kind` distinguishes a `plan-gate`, a
+     `preview-gate` (a published preview waiting for the founder to try it —
+     include the preview URL from the run's `preview` object), and a `discussion`.
+   - **Pending merges** = every run in state `awaiting-merge`. These runs finished
+     GREEN — the rig's merge policy is "review", so the founder merges by hand.
+     List each in "Needs founder" with the branch from the run's machine-readable
+     `pendingMerge` object (`{branch, baseBranch}`), e.g. "merge `factory/<id>`
+     into main when happy (local merge — the engine never pushes the base
+     branch)". Never report awaiting-merge as stalled or failed.
+   - **Held deploys** = every run with `deployHeld: true` (the rig's deploy policy
+     is "hold"). List in "Needs founder": release with `factory-run deploy <id>`
+     or the console's Release-deploy button.
    - **Yesterday's completions** = runs that reached a terminal state since the last
      standup. `done` landed. `killed` is ALSO a completed success — the founder ended
      a spec discussion with "don't build"; an early kill is money saved. Never report
-     `killed` as a failure. `failed` / `rejected` / `cancelled` are the didn't-land
-     bucket; give each its one-line cause.
+     `killed` as a failure. `awaiting-merge` is a completed success still holding a
+     founder action (the merge). `failed` / `rejected` / `cancelled` are the
+     didn't-land bucket; give each its one-line cause.
    - **Costs**: per-run `usage` from `status --json`; for aggregates (yesterday's or
      the week's spend) use `factory-run report --days N --json` (telemetry-db digest).
 2. `~/src/app-factory/STATE.md` — narrative only: current phase, active apps and their
@@ -48,8 +60,9 @@ task was planned and didn't happen, say so plainly.
 app, definition of done. Keep it to what can genuinely finish today. Apply org
 restraint: no task gets a specialist that two tool calls could finish.
 
-**Needs founder** — pending gates and up to 3 decision-shaped questions, each with your
-recommended default so a one-word reply resolves it.
+**Needs founder** — pending gates, pending merges (with branch names), held deploys,
+and up to 3 decision-shaped questions, each with your recommended default so a
+one-word reply resolves it.
 
 ## After posting
 

@@ -91,7 +91,7 @@ export const api = {
   },
   settings: () => request<import("./types").SettingsResponse>("/api/settings"),
   usage: () => request<import("./types").UsageResponse>("/api/usage"),
-  start: (body: { rig: string; workflow: string; prompt: string; auto: boolean }) =>
+  start: (body: { rig: string; workflow: string; prompt: string; auto: boolean; preview?: boolean }) =>
     post<{ ok: boolean; runId: string }>("/api/runs", body),
   approve: (id: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/approve`, {}),
   reject: (id: string, feedback: string) =>
@@ -107,4 +107,23 @@ export const api = {
     ),
   resume: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/resume`, {}),
   discard: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/discard`, {}),
+  preview: (id: string, kind?: "build" | "update") =>
+    post<{ ok: boolean; message: string }>(`/api/runs/${encodeURIComponent(id)}/preview`, kind ? { kind } : {}),
+  previewMode: (id: string, mode: "on" | "off") =>
+    post<{ ok: boolean; message: string }>(`/api/runs/${encodeURIComponent(id)}/preview-mode`, { mode }),
+  deploy: (id: string) => post<{ ok: boolean; message: string }>(`/api/runs/${encodeURIComponent(id)}/deploy`, {}),
+  /** Whitelisted run-dir image (the QR codes) as an object URL — <img src>
+   *  cannot carry the bearer token, so fetch the bytes and hand back a blob. */
+  artifactUrl: async (id: string, name: "qr.png" | "preview-qr.png"): Promise<string> => {
+    const token = getToken();
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}/artifact/${name}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new Event(AUTH_EVENT));
+      throw new ApiError(401, "invalid token");
+    }
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
 };

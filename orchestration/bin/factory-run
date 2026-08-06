@@ -10,7 +10,7 @@
  * Design doc: docs/08-orchestration-layer.md. Zero npm dependencies.
  *
  * Commands:
- *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]
+ *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
  *   factory-run resume <run_id> [--step <step-id>|--back]
  *                                        (restart a stopped/failed/cancelled run's
@@ -27,6 +27,14 @@
  *   factory-run reject <run_id> "<feedback>"
  *   factory-run reply <run_id> "<text>"     (founder turn in a discussion step)
  *   factory-run steer <run_id> "<instruction>"
+ *   factory-run preview <run_id> [--build|--update]
+ *                                        (publish an installable preview from the
+ *                                         run's worktree; the release-decision
+ *                                         agent picks build vs update unless forced)
+ *   factory-run preview-mode <run_id> on|off
+ *                                        (toggle the feature-dev preview gate on a
+ *                                         live run, until the preview step runs)
+ *   factory-run deploy <run_id>          (release a held deploy: policy.deploy "hold")
  *   factory-run cancel <run_id>          (terminates the executor's process group,
  *                                         then finalizes run.json; worktree kept)
  *   factory-run cleanup [<run_id>] [--dry-run] [--json] [--remove-unmerged-worktrees]
@@ -302,6 +310,45 @@ function writeJson(p, obj) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2) + "\n");
 }
 
+/** First complete JSON object embedded in noisy CLI output (pure, exercised by
+ *  selftest). eas-cli wraps its --json payload in spinners and "★ eas-cli@… is
+ *  now available" upgrade banners, so "stdout is pure JSON" and
+ *  slice(indexOf("{")) both mis-parse. Brace-balanced, string-aware scan: each
+ *  candidate "{" is walked to its matching "}" (quotes and escapes respected)
+ *  and JSON.parsed; non-JSON brace runs are skipped, not fatal. Null when no
+ *  parseable object exists. */
+function parseFirstJsonObject(text) {
+  const s = String(text || "");
+  let from = 0;
+  let start;
+  while ((start = s.indexOf("{", from)) !== -1) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < s.length; i++) {
+      const c = s[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') inString = false;
+      } else if (c === '"') inString = true;
+      else if (c === "{") depth += 1;
+      else if (c === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(s.slice(start, i + 1));
+          } catch {
+            break; // balanced but not JSON — try the next candidate
+          }
+        }
+      }
+    }
+    from = start + 1;
+  }
+  return null;
+}
+
 function sh(cmd, opts = {}) {
   return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
 }
@@ -320,19 +367,73 @@ function runCommand(cmd, cwd, logFile, timeoutMinutes = 30) {
   return { ok: res.status === 0, output, status: res.status };
 }
 
-function resolveRig(name) {
-  if (RIGS.rigs[name]) {
-    const rig = { name, ...RIGS.rigs[name] };
-    rig.path = expandHome(rig.path);
-    return rig;
+// Per-rig policy: whether a green run's branch merges into the default branch
+// automatically and whether the deploy publishes automatically. Policy is the
+// whether/when; rig.deploy stays the mechanism (how). Safe defaults: absent
+// merge → "review" (never auto-merge by surprise; the run parks in state
+// awaiting-merge), absent deploy → "auto" (publishing a preview update is
+// additive and today's behaviour for every rig), absent preview → "off".
+const POLICY_DEFAULTS = { merge: "review", deploy: "auto", preview: "off" };
+const POLICY_VALUES = { merge: ["auto", "review"], deploy: ["auto", "hold"], preview: ["on", "off"] };
+
+/** Resolve and validate a rig's policy block (pure, exercised by selftest).
+ *  Returns { policy, problems }: `policy` is always fully resolved (invalid or
+ *  unknown entries fall back to the safe defaults), `problems` names the rig
+ *  and offending key for every violation — the preflight policy probe fails on
+ *  any problem, so a broken rigs.json ends the run failed before any worktree
+ *  or agent step rather than silently merging or deploying. */
+function resolveRigPolicy(rigName, raw) {
+  const policy = { ...POLICY_DEFAULTS };
+  const problems = [];
+  if (raw === undefined || raw === null) return { policy, problems };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    problems.push(`rig ${rigName}: policy must be an object`);
+    return { policy, problems };
   }
-  const m = name.match(/^factory:(.+)$/);
-  if (m) {
+  for (const [key, value] of Object.entries(raw)) {
+    if (!POLICY_VALUES[key]) {
+      problems.push(`rig ${rigName}: unknown policy key '${key}' (allowed: ${Object.keys(POLICY_VALUES).join(", ")})`);
+      continue;
+    }
+    if (!POLICY_VALUES[key].includes(value)) {
+      problems.push(`rig ${rigName}: policy.${key} '${value}' invalid (allowed: ${POLICY_VALUES[key].join("|")})`);
+      continue;
+    }
+    policy[key] = value;
+  }
+  return { policy, problems };
+}
+
+/** Terminal state for a green run (pure, exercised by selftest). A run parks
+ *  in awaiting-merge only when there was actually a merge to review: the
+ *  workflow owns a branch (worktree !== false) AND contains a deploy step
+ *  (the only merge-capable step) AND merge policy is "review" AND nothing
+ *  merged. Workflows without a deploy step were never going to merge —
+ *  keying off policy alone would strand them awaiting a merge nobody was
+ *  told to expect (awaiting-merge is terminal and refuses resume). */
+function greenTerminalState(workflow, policy, mergedSha) {
+  const hasDeployStep = (workflow.steps || []).some((s) => s.type === "deploy");
+  return workflow.worktree !== false && hasDeployStep && policy.merge === "review" && !mergedSha
+    ? "awaiting-merge"
+    : "done";
+}
+
+function resolveRig(name) {
+  let rig;
+  if (RIGS.rigs[name]) {
+    rig = { name, ...RIGS.rigs[name] };
+    rig.path = expandHome(rig.path);
+  } else {
+    const m = name.match(/^factory:(.+)$/);
+    if (!m) throw new Error(`unknown rig: ${name}. Known: ${Object.keys(RIGS.rigs).join(", ")}, factory:<app>`);
     const appPath = path.join(expandHome(RIGS.factoryApps.basePath), m[1]);
     if (!fs.existsSync(appPath)) throw new Error(`factory app not found: ${appPath}`);
-    return { name, path: appPath, ...RIGS.factoryApps, basePath: undefined };
+    rig = { name, path: appPath, ...RIGS.factoryApps, basePath: undefined };
   }
-  throw new Error(`unknown rig: ${name}. Known: ${Object.keys(RIGS.rigs).join(", ")}, factory:<app>`);
+  const resolved = resolveRigPolicy(name, rig.policy);
+  rig.policy = resolved.policy;
+  rig.policyProblems = resolved.problems;
+  return rig;
 }
 
 function loadWorkflow(name) {
@@ -1096,25 +1197,44 @@ function pushRunBranch(run) {
 
 function waitForGate(run, step) {
   const runDir = runDirOf(run.id);
-  if (run.auto) {
+  // The preview gate sets autoApprove: false — `--auto` skips the plan
+  // discussion only, never the try-it-first gate.
+  if (run.auto && step.autoApprove !== false) {
     log(runDir, "plan gate skipped (--auto)");
     return { ok: true, summary: "auto-approved" };
   }
-  setState(run, "awaiting-approval", "plan gate");
-  const planPath = path.join(runDir, step.planFile || "plan.md");
-  const plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, "utf8") : "(no plan file)";
-  const sent = notify(
-    run,
-    `:clipboard: Run ${run.id} (${run.workflow} on ${run.rig}) has a plan awaiting approval.\n\n` +
-      plan.slice(0, 2800) +
-      `\n\nApprove: \`factory-run approve ${run.id}\` / reject with feedback: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`
-  );
+  const isPreviewGate = step.skipWhen === "no-preview";
+  setState(run, "awaiting-approval", isPreviewGate ? "preview gate" : "plan gate");
+  let sent, qrPath;
+  if (isPreviewGate) {
+    const p = run.preview || {};
+    const d = p.decision || {};
+    qrPath = p.qrPath || null;
+    sent = notify(
+      run,
+      `:iphone: Run ${run.id} (${run.workflow} on ${run.rig}) published a preview — try it before it merges/ships.\n` +
+        (p.url ? `Preview: ${p.url}\n` : "(no preview URL captured — see deploy.log)\n") +
+        `Release decision: *${d.kind || "unknown"}*${d.failSafe ? " — FAIL-SAFE: the decision agent errored or was ambiguous, so it defaulted to a full build" : ""}` +
+        (d.reasoning ? `\n> ${d.reasoning.slice(0, 700)}` : "") +
+        `\n\nApprove to merge+deploy: \`factory-run approve ${run.id}\` / reject: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`,
+      qrPath
+    );
+  } else {
+    const planPath = path.join(runDir, step.planFile || "plan.md");
+    const plan = fs.existsSync(planPath) ? fs.readFileSync(planPath, "utf8") : "(no plan file)";
+    sent = notify(
+      run,
+      `:clipboard: Run ${run.id} (${run.workflow} on ${run.rig}) has a plan awaiting approval.\n\n` +
+        plan.slice(0, 2800) +
+        `\n\nApprove: \`factory-run approve ${run.id}\` / reject with feedback: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`
+    );
+  }
   if (!sent) {
-    // Founder never saw the plan; waiting 12h on an invisible gate is the
+    // Founder never saw the gate; waiting 12h on an invisible gate is the
     // smoke-run failure mode. Fail loud instead.
     return {
       ok: false,
-      summary: "plan gate notification failed to send (see notify FAILED in engine.log); fix the notify channel and resume",
+      summary: `${isPreviewGate ? "preview" : "plan"} gate notification failed to send (see notify FAILED in engine.log); fix the notify channel and resume`,
       terminal: true,
     };
   }
@@ -1124,6 +1244,8 @@ function waitForGate(run, step) {
   while (Date.now() - started < timeoutMs) {
     if (fs.existsSync(decisionPath)) {
       const d = readJson(decisionPath, {});
+      // Consume the decision so it can never leak into a later gate of this run.
+      fs.rmSync(decisionPath, { force: true });
       if (d.decision === "approve") return { ok: true, summary: "founder approved" };
       return { ok: false, summary: `founder rejected: ${d.feedback || ""}`, terminal: true };
     }
@@ -1131,7 +1253,7 @@ function waitForGate(run, step) {
     if (cancelled) return { ok: false, summary: "cancelled by founder", terminal: true, halt: "cancelled" };
     execSync("sleep 15");
   }
-  return { ok: false, summary: "plan gate timed out after 12h", terminal: true };
+  return { ok: false, summary: `${isPreviewGate ? "preview" : "plan"} gate timed out after 12h`, terminal: true };
 }
 
 // ---------- check gate (founder-gated regression checks) ----------
@@ -1622,85 +1744,203 @@ function rebaseInProgress(worktree) {
   });
 }
 
-function deployStep(run, rig) {
+/** Merge the validated run branch into the rig's default branch — local only,
+ *  for every rig: the engine never pushes the default branch (see D26; the
+ *  run branch factory/<id> is pushed throughout the run). Extracted from
+ *  the harness-merge deploy so every deploy type merges identically when
+ *  policy.merge is "auto". Base drift is handled exactly as before:
+ *  classifyRecovery decides merge/reverify/resolve/escalate, rebases are
+ *  recorded in run.recovery, and non-merge outcomes return {recover} for the
+ *  executor's handleRecovery loop. Returns {ok:true, sha} once the merge
+ *  commit lands. */
+function mergeRunBranch(run, rig) {
+  const runDir = runDirOf(run.id);
+  const logFile = path.join(runDir, "deploy.log");
+  let baseSha, mergeBase;
+  try {
+    baseSha = sh(`git -C ${JSON.stringify(run.worktree)} rev-parse ${run.baseBranch}`).trim();
+    mergeBase = sh(`git -C ${JSON.stringify(run.worktree)} merge-base ${run.baseBranch} HEAD`).trim();
+  } catch (err) {
+    return { ok: false, summary: `base drift check failed: ${String(err.message || err).slice(0, 300)}` };
+  }
+  const iterations = run.recovery ? run.recovery.iterations : 0;
+  const pre = classifyRecovery({ drifted: baseSha !== mergeBase, conflicted: false, iterations });
+  if (pre.action === "escalate") {
+    return { ok: false, recover: "escalate", summary: pre.reason };
+  }
+  if (pre.action !== "merge") {
+    log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing factory/${run.id} in the worktree`);
+    const rb = runCommand(`git rebase ${JSON.stringify(run.baseBranch)}`, run.worktree, logFile, 10);
+    let conflicted = false;
+    if (!rb.ok) {
+      const unmerged = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2);
+      conflicted = unmerged.ok && unmerged.output.trim() !== "";
+      if (!conflicted) {
+        runCommand("git rebase --abort", run.worktree, logFile, 2);
+        return { ok: false, summary: `rebase onto ${run.baseBranch} failed without conflicts (aborted, see deploy.log): ${rb.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
+      }
+      writeConflictContext(run, mergeBase, baseSha, logFile);
+    }
+    const decision = classifyRecovery({ drifted: true, conflicted, iterations });
+    if (!run.recovery) run.recovery = { iterations: 0, attempts: [] };
+    run.recovery.iterations += 1;
+    run.recovery.attempts.push({ at: nowIso(), fromSha: mergeBase, toSha: baseSha, conflicted, outcome: decision.action });
+    // Founder steering: a clean rebase re-runs only the deterministic gates,
+    // so the executor skips the review agent while `pending` is "reverify".
+    run.recovery.pending = decision.action;
+    saveRun(run);
+    if (!conflicted) {
+      // The clean rebase rewrote every sha: reconcile origin (force-with-
+      // lease) and the recorded commit artifacts with the new history.
+      pushRunBranch(run);
+      recordCommits(run);
+    }
+    return {
+      ok: false,
+      recover: decision.action,
+      summary: conflicted
+        ? `rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)}) conflicted`
+        : `clean rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)})`,
+    };
+  }
+  if (run.recovery && run.recovery.pending) {
+    delete run.recovery.pending;
+    saveRun(run);
+  }
+  // The prompt's first line is free-form founder/plan text and can contain
+  // backticks, quotes or $ — single-quote it so the shell treats it as data.
+  const prefix = (rig.deploy || {}).type === "harness-merge" ? "self-improvement" : "factory-run";
+  const mergeSubject = `${prefix}: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})`;
+  const r = runCommand(
+    `git merge --no-ff factory/${run.id} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
+    rig.path,
+    logFile,
+    5
+  );
+  if (!r.ok) {
+    runCommand("git merge --abort", rig.path, logFile, 2);
+    return { ok: false, summary: `merge into ${rig.defaultBranch} failed (aborted cleanly): ${r.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
+  }
+  const sha = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --short HEAD`).trim();
+  return { ok: true, sha };
+}
+
+/** Render `url` as a scannable QR png in the run dir. Null qrPath on failure. */
+function generateQr(runDir, url, qrName, logFile) {
+  const qrPath = path.join(runDir, qrName);
+  const q = runCommand(`npx --yes qrcode ${JSON.stringify(url)} -o ${JSON.stringify(qrPath)}`, runDir, logFile, 5);
+  return q.ok ? qrPath : null;
+}
+
+/** Publish an EAS update from the run's worktree to the rig's deploy branch and
+ *  resolve the update-group URL + QR. Shared by the production deploy, the
+ *  preview `update` verdict, and held-deploy releases. */
+function easPublish(run, rig, { message, qrName = "qr.png" } = {}) {
+  const runDir = runDirOf(run.id);
+  const deploy = rig.deploy;
+  const appDir = path.join(run.worktree, rig.appDir || ".");
+  const logFile = path.join(runDir, "deploy.log");
+  const msg = message || `factory-run ${run.id}: ${run.prompt.slice(0, 80)}`;
+  log(runDir, `publishing: eas update --branch ${deploy.branch} (${appDir})`);
+  const r = runCommand(
+    `npx eas ${easPublishArgs(deploy, msg).map((a) => JSON.stringify(a)).join(" ")}`,
+    appDir,
+    logFile,
+    30
+  );
+  if (!r.ok) {
+    return { ok: false, summary: `eas update failed (see deploy.log): ${r.output.split("\n").slice(-5).join(" | ").slice(0, 400)}` };
+  }
+  // The publish output is noisy; query the branch for the newest update group
+  // instead. eas-cli wraps the JSON in upgrade banners — parseFirstJsonObject,
+  // never "stdout is pure JSON".
+  let url = null;
+  const list = runCommand(
+    `npx eas update:list --branch ${JSON.stringify(deploy.branch)} --limit 1 --json --non-interactive`,
+    appDir,
+    logFile,
+    5
+  );
+  const parsed = parseFirstJsonObject(list.output);
+  const group = parsed && parsed.currentPage && parsed.currentPage[0] && parsed.currentPage[0].group;
+  if (group && rig.easSlug && RIGS.easAccount) {
+    url = `https://expo.dev/accounts/${RIGS.easAccount}/projects/${rig.easSlug}/updates/${group}`;
+  }
+  if (!url) {
+    const m = list.output.match(/https:\/\/expo\.dev\S+/) || r.output.match(/https:\/\/expo\.dev\S+/);
+    if (m) url = m[0];
+  }
+  const qrPath = url ? generateQr(runDir, url, qrName, logFile) : null;
+  return { ok: true, summary: url ? `EAS update published: ${url}` : "EAS update published (no URL parsed, see deploy.log)", url, qrPath };
+}
+
+/**
+ * The exact `eas build <...>` argv for a preview build. Single source of truth
+ * like easPublishArgs. `--wait` blocks until the build finishes so the
+ * artifact URL is resolvable; distribution comes from the rig's eas.json
+ * preview profile (internal).
+ */
+function easBuildArgs(deploy) {
+  return [
+    "build",
+    "--profile", "preview",
+    "--platform", deploy.buildPlatform || "ios",
+    "--non-interactive",
+    "--json",
+    "--wait",
+  ];
+}
+
+/** Run a paid `eas build --profile preview` from the run's worktree (only ever
+ *  on a release-decision `build` verdict, its fail-safe, or an explicit
+ *  --build — never a default). Returns {ok, summary, url, qrPath}. */
+function easBuild(run, rig, { qrName = "preview-qr.png" } = {}) {
+  const runDir = runDirOf(run.id);
+  const appDir = path.join(run.worktree, rig.appDir || ".");
+  const logFile = path.join(runDir, "deploy.log");
+  log(runDir, `building: eas build --profile preview (${appDir}) — paid build, 15-30 min`);
+  const r = runCommand(
+    `npx eas ${easBuildArgs(rig.deploy || {}).map((a) => JSON.stringify(a)).join(" ")}`,
+    appDir,
+    logFile,
+    45
+  );
+  if (!r.ok) {
+    return { ok: false, summary: `eas build failed (see deploy.log): ${r.output.split("\n").slice(-5).join(" | ").slice(0, 400)}` };
+  }
+  // --json emits an array of build objects; parseFirstJsonObject lands on the
+  // first one. Prefer the direct install URL, fall back to the build page.
+  const build = parseFirstJsonObject(r.output);
+  let url = (build && build.artifacts && build.artifacts.buildUrl) || null;
+  if (!url && build && build.id && rig.easSlug && RIGS.easAccount) {
+    url = `https://expo.dev/accounts/${RIGS.easAccount}/projects/${rig.easSlug}/builds/${build.id}`;
+  }
+  if (!url) {
+    const m = r.output.match(/https:\/\/expo\.dev\S+/);
+    if (m) url = m[0];
+  }
+  const qrPath = url ? generateQr(runDir, url, qrName, logFile) : null;
+  return { ok: true, summary: url ? `EAS preview build finished: ${url}` : "EAS preview build finished (no URL parsed, see deploy.log)", url, qrPath };
+}
+
+/** The publish half of a deploy (no merging, no policy): what actually ships
+ *  for the rig's deploy mechanism. Shared by deployStep and the held-deploy
+ *  release (`factory-run deploy <id>`). */
+function publishDeploy(run, rig) {
   const runDir = runDirOf(run.id);
   const deploy = rig.deploy || { type: "none" };
   if (deploy.type === "none") {
     return { ok: true, summary: "no deploy configured for this rig (quickfire/spec-only)", url: null };
   }
   if (deploy.type === "harness-merge") {
-    // Self-improvement deploy: merge the validated run branch into the rig's
-    // default branch and restart the gateway so skills/engine reload.
+    // Self-improvement deploy: the merge already landed (policy.merge), so
+    // restart the gateway so skills/engine reload.
     const logFile = path.join(runDir, "deploy.log");
-    let baseSha, mergeBase;
-    try {
-      baseSha = sh(`git -C ${JSON.stringify(run.worktree)} rev-parse ${run.baseBranch}`).trim();
-      mergeBase = sh(`git -C ${JSON.stringify(run.worktree)} merge-base ${run.baseBranch} HEAD`).trim();
-    } catch (err) {
-      return { ok: false, summary: `base drift check failed: ${String(err.message || err).slice(0, 300)}` };
+    if (!run.mergedSha) {
+      return { ok: true, summary: "harness-merge publish skipped: nothing merged yet (policy.merge review) — restart manually after merging", url: null };
     }
-    const iterations = run.recovery ? run.recovery.iterations : 0;
-    const pre = classifyRecovery({ drifted: baseSha !== mergeBase, conflicted: false, iterations });
-    if (pre.action === "escalate") {
-      return { ok: false, recover: "escalate", summary: pre.reason };
-    }
-    if (pre.action !== "merge") {
-      log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing factory/${run.id} in the worktree`);
-      const rb = runCommand(`git rebase ${JSON.stringify(run.baseBranch)}`, run.worktree, logFile, 10);
-      let conflicted = false;
-      if (!rb.ok) {
-        const unmerged = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2);
-        conflicted = unmerged.ok && unmerged.output.trim() !== "";
-        if (!conflicted) {
-          runCommand("git rebase --abort", run.worktree, logFile, 2);
-          return { ok: false, summary: `rebase onto ${run.baseBranch} failed without conflicts (aborted, see deploy.log): ${rb.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
-        }
-        writeConflictContext(run, mergeBase, baseSha, logFile);
-      }
-      const decision = classifyRecovery({ drifted: true, conflicted, iterations });
-      if (!run.recovery) run.recovery = { iterations: 0, attempts: [] };
-      run.recovery.iterations += 1;
-      run.recovery.attempts.push({ at: nowIso(), fromSha: mergeBase, toSha: baseSha, conflicted, outcome: decision.action });
-      // Founder steering: a clean rebase re-runs only the deterministic gates,
-      // so the executor skips the review agent while `pending` is "reverify".
-      run.recovery.pending = decision.action;
-      saveRun(run);
-      if (!conflicted) {
-        // The clean rebase rewrote every sha: reconcile origin (force-with-
-        // lease) and the recorded commit artifacts with the new history.
-        pushRunBranch(run);
-        recordCommits(run);
-      }
-      return {
-        ok: false,
-        recover: decision.action,
-        summary: conflicted
-          ? `rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)}) conflicted`
-          : `clean rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)})`,
-      };
-    }
-    if (run.recovery && run.recovery.pending) {
-      delete run.recovery.pending;
-      saveRun(run);
-    }
-    // The prompt's first line is free-form founder/plan text and can contain
-    // backticks, quotes or $ — single-quote it so the shell treats it as data.
-    const mergeSubject = `self-improvement: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})`;
-    const r = runCommand(
-      `git merge --no-ff factory/${run.id} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
-      rig.path,
-      logFile,
-      5
-    );
-    if (!r.ok) {
-      runCommand("git merge --abort", rig.path, logFile, 2);
-      return { ok: false, summary: `harness merge failed (aborted cleanly): ${r.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
-    }
-    const sha = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --short HEAD`).trim();
+    const sha = run.mergedSha;
     runCommand("openclaw gateway restart < /dev/null", rig.path, logFile, 5);
-    try {
-      tArtifact(run.id, "deploy", "harness_merge_commit", sha);
-    } catch {}
     // The gateway restart reloads gateway-owned code only; the web console is a
     // separate long-lived process, so a merge touching it needs its own restart.
     const diff = runCommand("git diff --name-only HEAD^1 HEAD", rig.path, logFile, 2);
@@ -1745,45 +1985,186 @@ function deployStep(run, rig) {
   if (deploy.type !== "eas-update") {
     return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
   }
-  const appDir = path.join(run.worktree, rig.appDir || ".");
-  const logFile = path.join(runDir, "deploy.log");
-  const msg = `factory-run ${run.id}: ${run.prompt.slice(0, 80)}`;
-  log(runDir, `deploying: eas update --branch ${deploy.branch} (${appDir})`);
-  const r = runCommand(
-    `npx eas ${easPublishArgs(deploy, msg).map((a) => JSON.stringify(a)).join(" ")}`,
-    appDir,
-    logFile,
-    30
-  );
-  if (!r.ok) {
-    return { ok: false, summary: `eas update failed (see deploy.log): ${r.output.split("\n").slice(-5).join(" | ").slice(0, 400)}` };
+  return easPublish(run, rig);
+}
+
+/** Deploy merge-phase decision (pure, exercised by selftest). "merge" runs
+ *  mergeRunBranch; "already-merged" skips it — once a merge lands, the base
+ *  branch tip IS the merge commit, so re-running the drift check on a resumed
+ *  deploy (e.g. retrying a flaky eas publish) would misread that advance as
+ *  base drift and burn a recovery cycle per retry, eventually escalating a
+ *  publish problem as unresolvable drift; "review" leaves the branch for the
+ *  founder. */
+function classifyDeployMerge({ merge, mergedSha }) {
+  if (merge !== "auto") return { action: "review" };
+  return { action: mergedSha ? "already-merged" : "merge" };
+}
+
+function deployStep(run, rig) {
+  const deploy = rig.deploy || { type: "none" };
+  const policy = rig.policy || POLICY_DEFAULTS;
+  if (!["none", "harness-merge", "eas-update"].includes(deploy.type)) {
+    return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
   }
-  // The publish output is noisy; query the branch for the newest update group instead.
-  let url = null;
-  const list = runCommand(
-    `npx eas update:list --branch ${JSON.stringify(deploy.branch)} --limit 1 --json --non-interactive`,
-    appDir,
-    logFile,
-    5
-  );
+  // Merge phase, identical for every deploy type. Order matters for eas rigs:
+  // merge first, publish second — the published bundle must equal what landed
+  // on the default branch. merge "review" leaves the branch for the founder
+  // (the run ends awaiting-merge, set by the executor); an already-landed
+  // merge (run.mergedSha) is never re-run — see classifyDeployMerge.
+  let mergeNote;
+  const mergePhase = classifyDeployMerge({ merge: policy.merge, mergedSha: run.mergedSha });
+  if (mergePhase.action === "merge") {
+    const m = mergeRunBranch(run, rig);
+    if (!m.ok) return m;
+    run.mergedSha = m.sha;
+    saveRun(run);
+    try {
+      tArtifact(run.id, "deploy", deploy.type === "harness-merge" ? "harness_merge_commit" : "merge_commit", m.sha);
+    } catch {}
+    mergeNote = deploy.type === "harness-merge" ? null : `merged factory/${run.id} into ${rig.defaultBranch} (${m.sha}, local only)`;
+  } else if (mergePhase.action === "already-merged") {
+    mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}, local only); retrying publish`;
+  } else {
+    mergeNote = deploy.type === "none" ? null : `branch factory/${run.id} left for founder merge (policy.merge review)`;
+  }
+  // Publish phase. "hold" parks the publish for `factory-run deploy <id>`.
+  if (policy.deploy === "hold" && deploy.type !== "none") {
+    run.deployHeld = true;
+    saveRun(run);
+    const held = `deploy held (policy.deploy "hold") — release with \`factory-run deploy ${run.id}\` or the console`;
+    return { ok: true, summary: mergeNote ? `${mergeNote}; ${held}` : held, url: null };
+  }
+  const pub = publishDeploy(run, rig);
+  if (!pub.ok || !mergeNote) return pub;
+  return { ...pub, summary: `${mergeNote}; ${pub.summary}` };
+}
+
+// ---------- preview (feature-dev preview-and-approve mode) ----------
+//
+// An optional per-run mode: before merge+deploy, publish an installable/loadable
+// preview, hand the founder a link + QR, and gate on approval. Which EAS
+// mechanism to use (paid `eas build` vs free ~90s `eas update`) is decided by
+// the release-decision AGENT step from the branch diff — never a hard-coded
+// heuristic, never a paid-build default (founder decision 2026-08-05).
+
+/** Effective preview mode from the per-run flag and the per-rig policy (pure,
+ *  exercised by selftest): the run flag (true/false, null = unset) overrides
+ *  the rig's policy.preview; default off. */
+function resolvePreviewMode(runFlag, rigPreview) {
+  if (runFlag === true || runFlag === false) return runFlag;
+  return rigPreview === "on";
+}
+
+/** Live effective preview mode for a run: preview-mode.json (written by
+ *  `factory-run preview-mode`, a separate file so executor run.json saves can
+ *  never clobber a mid-run toggle) overrides the start flag, which overrides
+ *  the rig policy. */
+function effectivePreviewMode(run, rig) {
+  const f = readJson(path.join(runDirOf(run.id), "preview-mode.json"), null);
+  const fileFlag = f && (f.mode === "on" || f.mode === "off") ? f.mode === "on" : null;
+  const runFlag = fileFlag !== null ? fileFlag : typeof run.previewMode === "boolean" ? run.previewMode : null;
+  return resolvePreviewMode(runFlag, (rig.policy || POLICY_DEFAULTS).preview);
+}
+
+/** Whether a skipWhen:"no-preview" step (release-decision / preview /
+ *  preview-gate) executes (pure, exercised by selftest). Mode off = today's
+ *  straight-to-deploy. Once the founder has approved this run's preview
+ *  (run.previewApproved), the trio never re-runs: deploy's onRecover target
+ *  ("checks") sits before these steps, so a base-drift recovery loop-back
+ *  would otherwise re-trigger a paid `eas build` and a second approval
+ *  request for a preview the founder already approved. */
+function classifyPreviewStep({ previewOn, previewApproved }) {
+  if (!previewOn) return { run: false, reason: "preview mode off" };
+  if (previewApproved) return { run: false, reason: "preview already approved this run — deploy recovery re-runs the gates, never the preview" };
+  return { run: true, reason: null };
+}
+
+// Synthetic twin of feature-dev's release-decision step, used by the on-demand
+// `factory-run preview` path so both routes run the identical agent.
+const RELEASE_DECISION_STEP = {
+  id: "release-decision",
+  type: "agent",
+  prompt: "release-decision",
+  agent: "release-engineer",
+  timeoutMinutes: 15,
+};
+
+const RELEASE_DECISION_FILE = "release-decision.json";
+
+/** Resolve the release-decision agent's verdict (pure, exercised by selftest).
+ *  `parsed` is release-decision.json (or null), `agentOk` whether the agent
+ *  step itself succeeded. Fail-safe: agent error/timeout or a missing/ambiguous
+ *  verdict resolves to `build` — the direction that cannot silently ship a
+ *  native change as an OTA update that never reaches the device — flagged
+ *  failSafe so a wrong call is diagnosable. */
+function resolveReleaseDecision(parsed, agentOk) {
+  const kind = parsed && (parsed.kind === "update" || parsed.kind === "build") ? parsed.kind : null;
+  if (!agentOk || !kind) {
+    return {
+      kind: "build",
+      reasoning: !agentOk
+        ? "release-decision agent errored or timed out; falling back to a full preview build (an OTA update could silently miss a native change)"
+        : "release-decision output missing or ambiguous; falling back to a full preview build (an OTA update could silently miss a native change)",
+      evidence: [],
+      failSafe: true,
+    };
+  }
+  return {
+    kind,
+    reasoning: String(parsed.reasoning || "").slice(0, 2000),
+    evidence: (Array.isArray(parsed.evidence) ? parsed.evidence : []).map((e) => String(e).slice(0, 300)).slice(0, 20),
+    failSafe: false,
+  };
+}
+
+/** Read + resolve the decision the agent just made, persist it on the run
+ *  (run.preview.decision — rendered in the console beside the artifact) and in
+ *  telemetry. Returns the executor result for the step. */
+function applyReleaseDecision(run, agentOk) {
+  const runDir = runDirOf(run.id);
+  const decision = {
+    ...resolveReleaseDecision(readJson(path.join(runDir, RELEASE_DECISION_FILE), null), agentOk),
+    at: nowIso(),
+  };
+  run.preview = { ...(run.preview || {}), decision };
+  saveRun(run);
   try {
-    const jsonStart = list.output.indexOf("{");
-    const parsed = JSON.parse(list.output.slice(jsonStart));
-    const group = parsed.currentPage && parsed.currentPage[0] && parsed.currentPage[0].group;
-    if (group && rig.easSlug && RIGS.easAccount) {
-      url = `https://expo.dev/accounts/${RIGS.easAccount}/projects/${rig.easSlug}/updates/${group}`;
-    }
-  } catch {
-    const m = r.output.match(/https:\/\/expo\.dev\S+/);
-    if (m) url = m[0];
-  }
-  let qrPath = null;
-  if (url) {
-    qrPath = path.join(runDir, "qr.png");
-    const q = runCommand(`npx --yes qrcode ${JSON.stringify(url)} -o ${JSON.stringify(qrPath)}`, runDir, logFile, 5);
-    if (!q.ok) qrPath = null;
-  }
-  return { ok: true, summary: url ? `EAS update published: ${url}` : "EAS update published (no URL parsed, see deploy.log)", url, qrPath };
+    tArtifact(run.id, "release-decision", "release_decision", `${decision.kind}${decision.failSafe ? " (fail-safe)" : ""}: ${decision.reasoning}`);
+  } catch {}
+  return {
+    ok: true,
+    summary: `release verdict: ${decision.kind}${decision.failSafe ? " (FAIL-SAFE — agent error or ambiguous verdict, defaulting to build)" : ""} — ${decision.reasoning.slice(0, 300)}`,
+  };
+}
+
+/** Publish the preview the release decision called for: `update` → free EAS
+ *  update on the rig's preview branch; `build` → paid internal-distribution
+ *  preview build. The verdict, not a default, spends the build minutes. */
+function publishPreview(run, rig) {
+  const decision = (run.preview && run.preview.decision) || null;
+  // No decision on record can only mean plumbing broke — same fail-safe
+  // direction as an ambiguous verdict: build.
+  const kind = decision && decision.kind === "update" ? "update" : "build";
+  const pub =
+    kind === "update"
+      ? easPublish(run, rig, { message: `factory-run ${run.id} preview: ${run.prompt.slice(0, 70)}`, qrName: "preview-qr.png" })
+      : easBuild(run, rig, { qrName: "preview-qr.png" });
+  if (!pub.ok) return pub;
+  // The build/update above can run for tens of minutes, and the caller's
+  // snapshot may be stale by now: an on-demand preview runs detached from a
+  // possibly-live executor, and a cancel can land mid-build either way. A
+  // full-object save of the pre-build snapshot would silently rewind whatever
+  // was written in that window (stepIndex, state, mergedSha, ...), so re-read
+  // and apply only the preview fields, then mirror the fresh record onto the
+  // caller's copy so its own later saves don't resurrect the stale one.
+  const fresh = loadRun(run.id);
+  fresh.preview = { ...(fresh.preview || {}), url: pub.url || null, qrPath: pub.qrPath || null, kind, at: nowIso() };
+  saveRun(fresh);
+  Object.assign(run, fresh);
+  try {
+    if (pub.url) tArtifact(run.id, "preview", "preview_url", pub.url);
+  } catch {}
+  return { ...pub, summary: `preview (${kind}): ${pub.summary}` };
 }
 
 // ---------- preflight (live external-CLI contract checks) ----------
@@ -1945,23 +2326,41 @@ function easProbes(rig) {
   if (list.status !== 0) {
     probes.push({ name: listName, ok: false, detail: `exited ${list.status}: ${list.output.slice(0, 200)}` });
   } else {
-    // eas-cli prints upgrade banners around the JSON; parse the outermost object.
-    try {
-      const text = list.stdout;
-      JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    // eas-cli prints upgrade banners around the JSON; brace-balanced scan, the
+    // same parse the real publish uses.
+    if (parseFirstJsonObject(list.stdout) !== null) {
       probes.push({ name: listName, ok: true, detail: `branch ${deploy.branch} listable, JSON parseable` });
-    } catch {
+    } else {
       probes.push({ name: listName, ok: false, detail: `branch ${deploy.branch} output not JSON-parseable` });
     }
   }
   return probes;
 }
 
+/** Per-rig policy probe: any policy problem collected by resolveRig fails the
+ *  run before a worktree or agent step exists, naming the rig and key. */
+function policyProbe(rig) {
+  const name = `${rig.name}:policy`;
+  if (rig.policyProblems && rig.policyProblems.length) {
+    return { name, ok: false, detail: rig.policyProblems.join("; ") };
+  }
+  const p = rig.policy;
+  return { name, ok: true, detail: `merge ${p.merge} · deploy ${p.deploy} · preview ${p.preview}` };
+}
+
 /** Run all probes for the given rigs. Returns {ok, probes: [{name, ok, detail}], summary}. */
 function runPreflight(rigNames) {
   const probes = [probeNotifyContract(), probeClaude()];
   for (const name of rigNames) {
-    probes.push(...easProbes(resolveRig(name)));
+    let rig;
+    try {
+      rig = resolveRig(name);
+    } catch (err) {
+      probes.push({ name: `${name}:rig`, ok: false, detail: String(err.message || err).slice(0, 300) });
+      continue;
+    }
+    probes.push(policyProbe(rig));
+    probes.push(...easProbes(rig));
   }
   const failed = probes.filter((p) => !p.ok);
   const summary = failed.length
@@ -2234,8 +2633,10 @@ function handleRecovery(run, workflow, deployDef, result) {
 function execRun(id) {
   const run = loadRun(id);
   const runDir = runDirOf(id);
-  const rig = resolveRig(run.rig);
-  const workflow = loadWorkflow(run.workflow);
+  // Resolved inside the try below so a broken rig/workflow reference (or a bad
+  // rigs.json edit before a resume) ends the run failed instead of crashing
+  // the executor without a state change.
+  let rig, workflow;
   const loops = {};
   // True per-step execution count for telemetry: `loops` only increments for
   // the step that failed, so a looped-back step would repeat attempt numbers.
@@ -2249,10 +2650,13 @@ function execRun(id) {
       log(runDir, `run is already '${run.state}'; executor exiting`);
       return;
     }
+    rig = resolveRig(run.rig);
+    workflow = loadWorkflow(run.workflow);
     tRun(run);
     // Preflight before any worktree or agent step: fail fast on broken external
     // CLI contracts (resumes re-verify too — a resume after a hot-patch was
-    // exactly the smoke-run scenario).
+    // exactly the smoke-run scenario). The policy probe fails here on any
+    // invalid rigs.json policy, naming the rig and key.
     if (process.env.FACTORY_RUN_NO_PREFLIGHT !== "1") {
       const pfStarted = nowIso();
       log(runDir, "preflight: verifying external CLI contracts");
@@ -2267,6 +2671,14 @@ function execRun(id) {
         notify(run, `:x: Run ${id} ${summary}\nRun dir: ${runDir}`);
         return;
       }
+    }
+    // A broken policy must never be worked around: fail before any worktree or
+    // agent step even when preflight itself is skipped.
+    if (rig.policyProblems && rig.policyProblems.length) {
+      const summary = `invalid rig policy: ${rig.policyProblems.join("; ")}`;
+      setState(run, "failed", summary);
+      notify(run, `:x: Run ${id} FAILED: ${summary}\nFix rigs.json and resume.`);
+      return;
     }
     // Worktree setup (idempotent on resume). Read-only workflows (self-review)
     // set "worktree": false and run agent steps against the live checkout.
@@ -2306,7 +2718,17 @@ function execRun(id) {
       const stepStarted = nowIso();
       execCounts[step.id] = (execCounts[step.id] || 0) + 1;
 
-      if (step.type === "agent" && step.id === "review" && run.recovery && run.recovery.pending === "reverify") {
+      const pvStep =
+        step.skipWhen === "no-preview"
+          ? classifyPreviewStep({ previewOn: effectivePreviewMode(run, rig), previewApproved: !!run.previewApproved })
+          : null;
+      if (pvStep && !pvStep.run) {
+        // Preview-and-approve steps only exist when the mode is on (per-run
+        // flag over per-rig policy.preview); off = today's straight-to-deploy.
+        // An approved preview is skipped too, so a deploy-recovery loop-back
+        // through "checks" cannot re-build or re-gate (classifyPreviewStep).
+        result = { ok: true, summary: `${step.id} skipped (${pvStep.reason})` };
+      } else if (step.type === "agent" && step.id === "review" && run.recovery && run.recovery.pending === "reverify") {
         // Founder steering: a clean recovery rebase re-runs only the
         // deterministic gates — no code changed, the review verdict stands.
         result = { ok: true, summary: "review skipped: clean-rebase re-verification runs deterministic gates only" };
@@ -2319,6 +2741,9 @@ function execRun(id) {
         }
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
+        // A stale verdict from an earlier attempt must never masquerade as
+        // this attempt's decision.
+        if (step.id === RELEASE_DECISION_STEP.id) fs.rmSync(path.join(runDir, RELEASE_DECISION_FILE), { force: true });
         result = runAgentStep(run, step);
         // Safety net behind the agents' own per-commit pushes: publish the
         // branch after every agent step, success or failure — a timed-out
@@ -2334,12 +2759,30 @@ function execRun(id) {
           // workflow's onFail loop re-runs the plan step with findings.
           result = { ...evaluatePlanMd(run, "after the plan step"), attempt: result.attempt, usage: result.usage };
         }
+        if (step.id === RELEASE_DECISION_STEP.id) {
+          // Fail-safe lives here: an agent error/timeout still resolves to a
+          // decision (build), so the step never fails the run.
+          result = { ...applyReleaseDecision(run, result.ok), attempt: result.attempt, usage: result.usage };
+        }
+      } else if (step.type === "preview") {
+        setState(run, `running:${step.id}`, null);
+        if (!rig.deploy || rig.deploy.type !== "eas-update") {
+          result = { ok: false, summary: `preview unavailable: rig deploy type '${(rig.deploy || {}).type || "none"}' (needs eas-update)` };
+        } else {
+          result = publishPreview(run, rig);
+        }
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
         result = runCommandsStep(run, step, rig);
       } else if (step.type === "gate") {
         result = waitForGate(run, step);
-        if (result.ok) setState(run, "approved", result.summary);
+        if (result.ok) {
+          // A passed preview gate is durable (survives resume): a later
+          // deploy-recovery loop-back skips the preview trio instead of
+          // re-building and re-asking (classifyPreviewStep).
+          if (step.skipWhen === "no-preview") run.previewApproved = true;
+          setState(run, "approved", result.summary);
+        }
       } else if (step.type === "discussion") {
         // Conversational founder gate: manages its own states (running:<id>
         // per turn, awaiting-approval between turns) and per-turn telemetry.
@@ -2361,12 +2804,19 @@ function execRun(id) {
             return run.prompt.slice(0, 80);
           }
         })();
-        const lines = [
-          `:white_check_mark: Run ${id} complete: *${planTitle}*`,
-          `Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`,
-          run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : "No deployable artifact for this rig.",
-          `Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (or ask the chief of staff).`,
-        ];
+        const lines = [`:white_check_mark: Run ${id} complete: *${planTitle}*`];
+        if (run.mergedSha) {
+          lines.push(`Rig: ${run.rig} · merged into ${run.baseBranch} (${run.mergedSha}) — local merge only, push when ready.`);
+        } else {
+          lines.push(`Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`);
+        }
+        lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
+        if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
+          lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
+        }
+        if (!run.mergedSha) {
+          lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
+        }
         if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
         const usage = usageLine(id);
         if (usage) lines.push(usage);
@@ -2512,11 +2962,22 @@ function execRun(id) {
       run.stepIndex = i;
       saveRun(run);
     }
-    setState(run, "done", null);
-    // Reclaim the worktree/branch when already merged (harness-merge rigs
-    // merge during deploy). Manual-merge rigs skip as unmerged, preserving the
-    // "worktree kept for merge review" flow. A cleanup failure must never
-    // change the run's terminal state.
+    // Terminal state: a merge-policy "review" run whose workflow had a deploy
+    // (merge-capable) step and still owns an unmerged branch parks in
+    // awaiting-merge (terminal, a success — the founder merges factory/<id>
+    // by hand); everything else is done. Read-only workflows (worktree:
+    // false) have no branch to merge, and workflows without a deploy step
+    // were never going to merge (greenTerminalState).
+    if (greenTerminalState(workflow, rig.policy, run.mergedSha) === "awaiting-merge") {
+      setState(run, "awaiting-merge", `branch factory/${id} awaits founder merge into ${run.baseBranch} (local merge — the engine never pushes ${run.baseBranch})`);
+    } else {
+      setState(run, "done", null);
+    }
+    // Reclaim the worktree/branch when already merged (merge-policy "auto"
+    // rigs merge during deploy). Awaiting-merge runs skip as unmerged,
+    // preserving the "worktree kept for merge review" flow until the founder
+    // merges — the next cleanup then reclaims both. A cleanup failure must
+    // never change the run's terminal state.
     try {
       const c = cleanupRun(run, {});
       log(runDir, `cleanup: ${c.action} (${c.reason})`);
@@ -2535,7 +2996,7 @@ function execRun(id) {
 
 // ---------- commands ----------
 
-function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun }) {
+function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview }) {
   const rig = resolveRig(rigName);
   const wf = loadWorkflow(wfName);
   // Fail before the run dir or worktree exists on a broken step reference.
@@ -2552,6 +3013,9 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun }) 
     rig: rigName,
     prompt,
     auto: !!auto,
+    // Per-run preview flag: true/false overrides the rig's policy.preview,
+    // null defers to it (resolvePreviewMode).
+    previewMode: preview === true || preview === false ? preview : null,
     parentRun: parentRun || null,
     baseBranch: rig.defaultBranch,
     worktree: path.join(WORKTREES_DIR, id),
@@ -2577,11 +3041,12 @@ function cmdStart(argv) {
   const wfName = argOf(argv, "--workflow") || "feature-dev";
   const prompt = argOf(argv, "--prompt");
   const auto = argv.includes("--auto");
+  const preview = argv.includes("--preview") ? true : argv.includes("--no-preview") ? false : null;
   if (!rigName || !prompt) {
-    console.error('usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto]');
+    console.error('usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]');
     process.exit(1);
   }
-  console.log(createRun({ rig: rigName, workflow: wfName, prompt, auto }));
+  console.log(createRun({ rig: rigName, workflow: wfName, prompt, auto, preview }));
 }
 
 function cmdReport(argv) {
@@ -2667,7 +3132,7 @@ function cmdReport(argv) {
   const artifacts = db
     .prepare(
       `SELECT a.run_id, a.type, a.value FROM artifacts a JOIN runs r ON r.id = a.run_id
-       WHERE a.type IN ('artifact_url', 'harness_merge_commit', 'commit') AND r.created_at >= ?
+       WHERE a.type IN ('artifact_url', 'harness_merge_commit', 'merge_commit', 'release_decision', 'preview_url', 'commit') AND r.created_at >= ?
        ORDER BY a.created_at DESC LIMIT 40`
     )
     .all(since);
@@ -2889,9 +3354,13 @@ function cmdContext(argv) {
   }
 }
 
-function detachExec(id) {
+/** Detach a background worker for a run (executor by default; also the
+ *  on-demand preview and held-deploy releases), logging to executor.log so the
+ *  caller — a Slack skill, the web console, a spawning run — returns
+ *  immediately. */
+function detachExec(id, verb = "exec", extraArgs = []) {
   const out = fs.openSync(path.join(runDirOf(id), "executor.log"), "a");
-  const child = spawn(process.execPath, [__filename, "exec", id], {
+  const child = spawn(process.execPath, [__filename, verb, id, ...extraArgs], {
     detached: true,
     stdio: ["ignore", out, out],
   });
@@ -2973,11 +3442,16 @@ function cmdResume(argv) {
   // First positional that is neither a flag nor --step's value.
   const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--step"));
   const run = loadRun(id);
-  // done/killed are final by meaning. cancelled is explicitly resumable: a
-  // kept cancelled run picks up from the step it was interrupted at (cancel
-  // never advances stepIndex).
-  if (["done", "killed"].includes(run.state)) {
-    console.error(`run ${id} is ${run.state}; nothing to resume`);
+  // done/killed/awaiting-merge are final by meaning (awaiting-merge: the
+  // engine is done, only the founder's hand-merge remains). cancelled is
+  // explicitly resumable: a kept cancelled run picks up from the step it was
+  // interrupted at (cancel never advances stepIndex).
+  if (["done", "killed", "awaiting-merge"].includes(run.state)) {
+    console.error(
+      run.state === "awaiting-merge"
+        ? `run ${id} is awaiting-merge; the engine is done — merge factory/${id} by hand (nothing to resume)`
+        : `run ${id} is ${run.state}; nothing to resume`
+    );
     process.exit(1);
   }
   // Double-execute guard: resuming past a live executor would run the step
@@ -3128,23 +3602,27 @@ function cmdRetry(argv) {
  *  detail strings. `currentStep` mirrors what the human output prints (raw
  *  stepIndex over total, id/type from the workflow, index clamped for id
  *  lookup). For awaiting-approval runs, `gate` says which kind of founder
- *  gate is pending: a plan gate, or a discussion awaiting a reply (with
- *  pendingReplies/lastActivityAt from the discussion helpers). */
+ *  gate is pending: a plan gate, a preview gate, or a discussion awaiting a
+ *  reply (with pendingReplies/lastActivityAt from the discussion helpers).
+ *  For awaiting-merge runs, `pendingMerge` names the branch the founder must
+ *  merge — machine-readable, so the standup never parses history strings. */
 function statusExtras(run) {
+  const pendingMerge =
+    run.state === "awaiting-merge" ? { branch: `factory/${run.id}`, baseBranch: run.baseBranch || null } : null;
   let wf;
   try {
     wf = loadWorkflow(run.workflow);
   } catch {
-    return { currentStep: null, gate: null };
+    return { currentStep: null, gate: null, pendingMerge };
   }
   const step = wf.steps[Math.min(run.stepIndex || 0, wf.steps.length - 1)];
   const currentStep = { index: run.stepIndex || 0, total: wf.steps.length, id: step.id, type: step.type };
-  if (run.state !== "awaiting-approval") return { currentStep, gate: null };
+  if (run.state !== "awaiting-approval") return { currentStep, gate: null, pendingMerge };
   if (step.type === "discussion") {
     const runDir = runDirOf(run.id);
     // A run dir can be absent (pruned, or a synthetic run in selftest); report
     // the gate kind rather than letting `status --json` die on one bad run.
-    if (!fs.existsSync(runDir)) return { currentStep, gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null } };
+    if (!fs.existsSync(runDir)) return { currentStep, gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null }, pendingMerge };
     const turns = readDiscussionTurns(runDir, step.id);
     const repliesPath = path.join(runDir, "discussion-replies.jsonl");
     const replies = fs.existsSync(repliesPath)
@@ -3157,6 +3635,7 @@ function statusExtras(run) {
         pendingReplies: countPendingReplies(turns, replies),
         lastActivityAt: discussionLastActivity(turns, replies),
       },
+      pendingMerge,
     };
   }
   if (step.type === "commands") {
@@ -3166,11 +3645,14 @@ function statusExtras(run) {
     return {
       currentStep,
       gate: { kind: "check-gate", check: cg ? cg.cmd : null, pendingReplies: null, lastActivityAt: run.updatedAt || null },
+      pendingMerge,
     };
   }
-  // Plan gate (or any non-discussion approval wait): no reply mechanism, so
-  // pendingReplies is null; last activity is the state transition that posted it.
-  return { currentStep, gate: { kind: "plan-gate", pendingReplies: null, lastActivityAt: run.updatedAt || null } };
+  // Plan/preview gate (or any non-discussion approval wait): no reply
+  // mechanism, so pendingReplies is null; last activity is the state
+  // transition that posted it.
+  const kind = step.type === "gate" && step.skipWhen === "no-preview" ? "preview-gate" : "plan-gate";
+  return { currentStep, gate: { kind, pendingReplies: null, lastActivityAt: run.updatedAt || null }, pendingMerge };
 }
 
 function cmdStatus(argv) {
@@ -3197,6 +3679,13 @@ function cmdStatus(argv) {
         console.log(`  recovery: ${r.recovery.iterations}/${RECOVERY_CAP} cycle(s)${detail ? ` — ${detail}` : ""}`);
       }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
+      if (r.state === "awaiting-merge") console.log(`  pending merge: factory/${r.id} into ${r.baseBranch} (local merge — the engine never pushes ${r.baseBranch})`);
+      if (r.deployHeld) console.log(`  deploy held: release with \`factory-run deploy ${r.id}\``);
+      if (r.preview && r.preview.url) console.log(`  preview (${r.preview.kind}): ${r.preview.url}`);
+      if (r.preview && r.preview.decision) {
+        const d = r.preview.decision;
+        console.log(`  release decision: ${d.kind}${d.failSafe ? " (fail-safe)" : ""} — ${(d.reasoning || "").split("\n")[0].slice(0, 120)}`);
+      }
       console.log(`  worktree: ${r.worktree}`);
       console.log(`  run dir:  ${runDirOf(r.id)}`);
     }
@@ -3281,6 +3770,145 @@ function cmdCancel(id) {
   );
 }
 
+/** `factory-run preview <id> [--build|--update]`: publish an on-demand preview
+ *  from the run's worktree, independent of the preview gate. The
+ *  release-decision agent picks build vs update unless a flag forces it; the
+ *  work runs detached (a build takes 15-30 min) and lands in run.json, Slack,
+ *  and the console. */
+function cmdPreviewTrigger(argv) {
+  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+  const run = loadRun(id);
+  const rig = resolveRig(run.rig);
+  if (!rig.deploy || rig.deploy.type !== "eas-update") {
+    console.error(`run ${id}: rig ${run.rig} has deploy type '${(rig.deploy || {}).type || "none"}' — preview needs eas-update`);
+    process.exit(1);
+  }
+  if (!fs.existsSync(run.worktree)) {
+    console.error(`run ${id}: worktree ${run.worktree} no longer exists — nothing to publish from`);
+    process.exit(1);
+  }
+  const forced = argv.includes("--build") ? "build" : argv.includes("--update") ? "update" : null;
+  detachExec(id, "preview-exec", forced ? [`--${forced}`] : []);
+  console.log(
+    forced
+      ? `preview started for ${id} (forced --${forced}); URL + QR land in run.json and the console`
+      : `preview started for ${id} (release-decision agent picks build vs update); URL + QR land in run.json and the console`
+  );
+}
+
+/** Detached worker behind `factory-run preview`: decide (agent, unless forced),
+ *  publish, record, notify. Never calls setState — an on-demand preview must
+ *  not disturb whatever state the run (possibly still executing) is in; run
+ *  mutations re-read run.json first so a concurrent executor save is not
+ *  clobbered with a stale copy. */
+function execPreview(id, argv) {
+  let run = loadRun(id);
+  const runDir = runDirOf(id);
+  const rig = resolveRig(run.rig);
+  const forced = argv.includes("--build") ? "build" : argv.includes("--update") ? "update" : null;
+  if (forced) {
+    run.preview = {
+      ...(run.preview || {}),
+      decision: { kind: forced, reasoning: `forced by --${forced} (no agent decision)`, evidence: [], failSafe: false, at: nowIso() },
+    };
+    saveRun(run);
+  } else {
+    fs.rmSync(path.join(runDir, RELEASE_DECISION_FILE), { force: true });
+    const started = nowIso();
+    log(runDir, `on-demand preview: ${RELEASE_DECISION_STEP.id} started`);
+    const r = runAgentStep(run, RELEASE_DECISION_STEP);
+    run = loadRun(id); // the run may have advanced while the agent worked
+    const applied = applyReleaseDecision(run, r.ok);
+    try {
+      tStep(id, RELEASE_DECISION_STEP.id, r.attempt, "ok", applied.summary, started, r.usage);
+    } catch {}
+    log(runDir, `on-demand preview: ${applied.summary}`);
+  }
+  const pub = publishPreview(run, rig);
+  log(runDir, `on-demand preview: ${pub.summary}`);
+  const d = (run.preview && run.preview.decision) || {};
+  if (!pub.ok) {
+    notify(run, `:x: Run ${id}: on-demand preview FAILED — ${pub.summary}`);
+    return;
+  }
+  notify(
+    run,
+    `:iphone: Run ${id}: on-demand preview published.\n` +
+      (pub.url ? `Preview: ${pub.url}\n` : "") +
+      `Release decision: *${d.kind}*${d.failSafe ? " — FAIL-SAFE: the decision agent errored or was ambiguous, so it defaulted to a full build" : ""}` +
+      (d.reasoning ? `\n> ${String(d.reasoning).slice(0, 700)}` : ""),
+    pub.qrPath
+  );
+}
+
+/** `factory-run preview-mode <id> on|off`: toggle a live run's preview mode,
+ *  allowed until the preview step has run. Written to preview-mode.json (not
+ *  run.json) so a concurrent executor save can never clobber it. */
+function cmdPreviewMode(rest) {
+  const mode = rest[1];
+  if (!rest[0] || (mode !== "on" && mode !== "off")) {
+    console.error("usage: factory-run preview-mode <run_id> on|off");
+    process.exit(1);
+  }
+  const id = resolveRunId(rest[0]);
+  const run = loadRun(id);
+  if (TERMINAL_STATES.includes(run.state)) {
+    console.error(`run ${id} is ${run.state}; preview mode is settable only on a live run`);
+    process.exit(1);
+  }
+  const wf = loadWorkflow(run.workflow);
+  const previewIdx = wf.steps.findIndex((s) => s.type === "preview");
+  if (previewIdx === -1) {
+    console.error(`workflow ${run.workflow} has no preview step`);
+    process.exit(1);
+  }
+  if ((run.stepIndex || 0) > previewIdx) {
+    console.error(`run ${id} is past the preview step (step ${run.stepIndex}); use \`factory-run preview ${id}\` for an on-demand preview`);
+    process.exit(1);
+  }
+  writeJson(path.join(runDirOf(id), "preview-mode.json"), { mode, at: nowIso() });
+  console.log(`preview mode ${mode} recorded for ${id} (applies when the run reaches the preview steps)`);
+}
+
+/** `factory-run deploy <id>`: release a deploy held by policy.deploy "hold".
+ *  Detached — an EAS publish takes minutes. */
+function cmdDeployTrigger(argv) {
+  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+  const run = loadRun(id);
+  if (!run.deployHeld) {
+    console.error(`run ${id} has no held deploy (deployHeld is not set)`);
+    process.exit(1);
+  }
+  detachExec(id, "deploy-exec");
+  console.log(`held deploy released for ${id}; artifact URL lands in run.json and the console`);
+}
+
+/** Detached worker behind `factory-run deploy`: publish, record, notify. */
+function execDeployHeld(id) {
+  let run = loadRun(id);
+  const runDir = runDirOf(id);
+  const rig = resolveRig(run.rig);
+  const pub = publishDeploy(run, rig);
+  log(runDir, `held deploy: ${pub.ok ? "OK" : "FAIL"} (${pub.summary})`);
+  if (!pub.ok) {
+    notify(run, `:x: Run ${id}: held deploy FAILED — ${pub.summary}\nStill held; retry with \`factory-run deploy ${id}\`.`);
+    return;
+  }
+  // The publish takes minutes; a `factory-run merge` (or anything else) may
+  // have written run.json in that window. Same discipline as publishPreview:
+  // never save the stale pre-publish snapshot — re-read and apply only the
+  // deploy fields.
+  run = loadRun(id);
+  run.deployHeld = false;
+  if (pub.url) run.artifactUrl = pub.url;
+  if (pub.qrPath) run.qrPath = pub.qrPath;
+  saveRun(run);
+  try {
+    if (pub.url) tArtifact(id, "deploy", "artifact_url", pub.url);
+  } catch {}
+  notify(run, `:package: Run ${id}: held deploy released — ${pub.summary}`, pub.qrPath || null);
+}
+
 function cmdPreflight(argv) {
   const rigName = argOf(argv, "--rig");
   const rigNames = rigName ? [rigName] : Object.keys(RIGS.rigs);
@@ -3324,6 +3952,16 @@ function cmdSelftest() {
     console.log(`prompt ${RESOLVE_STEP.prompt} (synthetic ${RESOLVE_STEP.id}): ${okMark(p)}`);
     if (!p) problems.push(`missing prompt ${RESOLVE_STEP.prompt} for synthetic step ${RESOLVE_STEP.id}`);
   }
+  {
+    // The on-demand preview path runs RELEASE_DECISION_STEP outside any
+    // workflow, so its prompt/profile references need their own check.
+    const p = fs.existsSync(path.join(ORCH_DIR, "prompts", `${RELEASE_DECISION_STEP.prompt}.md`));
+    console.log(`prompt ${RELEASE_DECISION_STEP.prompt} (synthetic ${RELEASE_DECISION_STEP.id}): ${okMark(p)}`);
+    if (!p) problems.push(`missing prompt ${RELEASE_DECISION_STEP.prompt} for synthetic step ${RELEASE_DECISION_STEP.id}`);
+    const a = fs.existsSync(path.join(AGENTS_DIR, `${RELEASE_DECISION_STEP.agent}.md`));
+    console.log(`agent ${RELEASE_DECISION_STEP.agent} (synthetic ${RELEASE_DECISION_STEP.id}): ${okMark(a)}`);
+    if (!a) problems.push(`missing agent profile ${RELEASE_DECISION_STEP.agent} for synthetic step ${RELEASE_DECISION_STEP.id}`);
+  }
   for (const bin of ["claude", "openclaw", "git", "npx"]) {
     const found = spawnSync("which", [bin], { encoding: "utf8" }).status === 0;
     console.log(`binary ${bin}: ${okMark(found)}`);
@@ -3355,11 +3993,66 @@ function cmdSelftest() {
     console.log(`run-id ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`run-id check failed: ${name}`);
   }
+  // Per-rig policy resolution (pure, plus the live rigs.json wiring).
+  const pol = (raw) => resolveRigPolicy("selftest-rig", raw);
+  const policyChecks = [
+    ["absent policy resolves to safe defaults", JSON.stringify(pol(undefined).policy) === JSON.stringify({ merge: "review", deploy: "auto", preview: "off" })],
+    ["absent policy has no problems", pol(undefined).problems.length === 0],
+    ["explicit auto/auto accepted", (() => { const r = pol({ merge: "auto", deploy: "auto" }); return r.problems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    ["hold and preview values accepted", (() => { const r = pol({ deploy: "hold", preview: "on" }); return r.problems.length === 0 && r.policy.deploy === "hold" && r.policy.preview === "on"; })()],
+    ["invalid value rejected naming rig and key", pol({ merge: "yes" }).problems.some((p) => p === "rig selftest-rig: policy.merge 'yes' invalid (allowed: auto|review)")],
+    ["invalid value falls back to the safe default", pol({ merge: "yes" }).policy.merge === "review"],
+    ["unknown key rejected naming rig and key", pol({ merg: "auto" }).problems.some((p) => p.includes("rig selftest-rig: unknown policy key 'merg'"))],
+    ["non-object policy rejected", pol("auto").problems.length === 1],
+    ["skip-hero is merge-auto deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    ["app-factory is merge-auto deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    ["running-with-pace defaults to merge-review", resolveRig("running-with-pace").policy.merge === "review"],
+    ["awaiting-merge is a terminal state", TERMINAL_STATES.includes("awaiting-merge")],
+    ["web lib agrees awaiting-merge is terminal", (() => {
+      try {
+        return require(path.join(ORCH_DIR, "web", "lib", "runs.mjs")).TERMINAL_STATES.includes("awaiting-merge");
+      } catch {
+        return false;
+      }
+    })()],
+    // The engine never pushes the rig's default branch (D26): auto-merge is
+    // local-only for every rig. The engine DOES push the run's own
+    // factory/<id> branch (pushRunBranchCommand — console commit links,
+    // agents' upstream), so the scan targets command literals, not call
+    // sites (a call site split across lines must not dodge it): every
+    // non-comment `git push` string in the source must name factory/.
+    // The scan's own lines, and selftest lines that quote the literal for
+    // other checks, carry the no-push-scan marker and are excluded.
+    ["every git push in the engine targets factory/<id>, never the base branch", (() => {
+      const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
+      const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
+      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l)); // no-push-scan
+    })()],
+    ["engine's only push command is the run branch push", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
+    // greenTerminalState: awaiting-merge only when a merge was actually in
+    // play (worktree + deploy step + review policy + nothing merged).
+    ["review-policy worktree run with a deploy step and no merge parks awaiting-merge",
+      greenTerminalState({ steps: [{ type: "agent" }, { type: "deploy" }] }, { merge: "review" }, null) === "awaiting-merge"],
+    ["worktree workflow with no deploy step ends done, not awaiting-merge",
+      greenTerminalState({ steps: [{ type: "agent" }, { type: "manual" }] }, { merge: "review" }, null) === "done"],
+    ["read-only workflow (worktree:false) ends done",
+      greenTerminalState({ worktree: false, steps: [{ type: "deploy" }] }, { merge: "review" }, null) === "done"],
+    ["merged review-policy run ends done",
+      greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "review" }, "abc123") === "done"],
+    ["auto-merge-policy run ends done",
+      greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "auto" }, "abc123") === "done"],
+  ];
+  for (const [name, ok] of policyChecks) {
+    console.log(`policy ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`policy check failed: ${name}`);
+  }
   // Cleanup decision core (pure — no git or filesystem access).
   const cls = (over, opts) =>
     classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, ...over }, opts).action;
   const cleanupChecks = [
     ["in-flight run skipped", cls({ state: "running:implement" }) === "skip"],
+    ["awaiting-merge run skipped while unmerged", (() => { const d = classifyCleanup({ state: "awaiting-merge", worktreeExists: true, branchExists: true, dirty: false, merged: false }); return d.action === "skip" && d.reason === "branch not merged into default branch"; })()],
+    ["awaiting-merge run reclaimed after manual merge", cls({ state: "awaiting-merge" }) === "clean"],
     ["dirty worktree skipped even when merged", cls({ dirty: true }) === "skip"],
     ["unmerged branch skipped by default", cls({ merged: false }) === "skip"],
     ["merged and clean reclaimed", cls({}) === "clean"],
@@ -3400,6 +4093,10 @@ function cmdSelftest() {
     ["backend-only change keeps frontend build", classifyWebRestart(["orchestration/web/server.mjs"]).rebuildFrontend === false],
     ["frontend change forces rebuild", classifyWebRestart(["orchestration/web/frontend/src/App.tsx"]).rebuildFrontend === true],
     ["empty diff is a no-op", classifyWebRestart([""]).restart === false],
+    // Pins that the preview/merge-policy console surfaces added by this run
+    // fall inside the restart set with no classifyWebRestart change.
+    ["preview routes (server.mjs) restart web", classifyWebRestart(["orchestration/web/server.mjs", "orchestration/web/lib/runs.mjs"]).restart === true],
+    ["preview components force frontend rebuild", classifyWebRestart(["orchestration/web/frontend/src/components/RunDetail.tsx", "orchestration/web/frontend/src/components/NewRun.tsx"]).rebuildFrontend === true],
   ];
   for (const [name, ok] of webChecks) {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
@@ -3450,10 +4147,10 @@ function cmdSelftest() {
   const pushChecks = [
     ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
     ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
-    ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")],
+    ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")], // no-push-scan
     ["implement/fix prompts push per commit, stay on the branch", ["implementer", "bug-fixer"].every((n) => {
       const p = stepPrompt(n);
-      return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches");
+      return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches"); // no-push-scan
     })],
     ["resolver failure paths push the branch before terminating", resolveFailSrc.includes("pushRunBranch(run)")],
     ["resolver failure paths re-record commits", resolveFailSrc.includes("recordCommits(run)")],
@@ -3461,6 +4158,22 @@ function cmdSelftest() {
   for (const [name, ok] of pushChecks) {
     console.log(`push ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`push check failed: ${name}`);
+  }
+  // Deploy merge-phase decision (pure): a resumed deploy whose merge already
+  // landed (run.mergedSha set, e.g. retrying a flaky eas publish) must never
+  // re-run mergeRunBranch — the merge commit on the base reads as drift and
+  // burns a recovery cycle per retry until a publish problem "escalates" as
+  // unresolvable base drift.
+  const dm = (over) => classifyDeployMerge({ merge: "auto", mergedSha: null, ...over }).action;
+  const deployMergeChecks = [
+    ["auto policy merges", dm({}) === "merge"],
+    ["landed merge never re-runs on resume", dm({ mergedSha: "abc1234" }) === "already-merged"],
+    ["review policy leaves the branch", dm({ merge: "review" }) === "review"],
+    ["review outranks a stale mergedSha", dm({ merge: "review", mergedSha: "abc1234" }) === "review"],
+  ];
+  for (const [name, ok] of deployMergeChecks) {
+    console.log(`deploy-merge ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`deploy-merge check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
   const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
@@ -3622,15 +4335,18 @@ function cmdSelftest() {
   // detail strings. The discussion gate branch reads a live run dir and is
   // covered by the discussion helpers above.
   const sx = (over) =>
-    statusExtras({ id: "selftest-0000", workflow: "feature-dev", stepIndex: 1, state: "running:plan", updatedAt: "2026-01-01T00:00:00.000Z", ...over });
+    statusExtras({ id: "selftest-0000", workflow: "feature-dev", stepIndex: 1, state: "running:plan", baseBranch: "main", updatedAt: "2026-01-01T00:00:00.000Z", ...over });
   const statusChecks = [
-    ["currentStep carries index/total/id/type", (() => { const c = sx({ stepIndex: 2 }).currentStep; return c.index === 2 && c.total === 8 && c.id === "implement" && c.type === "agent"; })()],
+    ["currentStep carries index/total/id/type", (() => { const c = sx({ stepIndex: 2 }).currentStep; return c.index === 2 && c.total === 11 && c.id === "implement" && c.type === "agent"; })()],
     ["non-awaiting run has no gate", sx({}).gate === null],
     ["awaiting-approval at a gate step is a plan gate", (() => { const g = sx({ workflow: "self-review", stepIndex: 1, state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z"; })()],
+    ["awaiting-approval at the preview gate is a preview gate", (() => { const g = sx({ stepIndex: 8, state: "awaiting-approval" }).gate; return g !== null && g.kind === "preview-gate"; })()],
     ["awaiting-approval at a discussion step is a discussion gate", (() => { const g = sx({ state: "awaiting-approval" }).gate; return g !== null && g.kind === "discussion"; })()],
     ["awaiting-approval at a commands step is a check gate", (() => { const g = sx({ stepIndex: 3, state: "awaiting-approval" }).gate; return g !== null && g.kind === "check-gate" && g.pendingReplies === null; })()],
-    ["completed run clamps to the last step", sx({ stepIndex: 8, state: "done" }).currentStep.id === "notify"],
-    ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null })],
+    ["completed run clamps to the last step", sx({ stepIndex: 11, state: "done" }).currentStep.id === "notify"],
+    ["awaiting-merge run reports a machine-readable pendingMerge", (() => { const p = sx({ stepIndex: 11, state: "awaiting-merge" }).pendingMerge; return p !== null && p.branch === "factory/selftest-0000" && p.baseBranch === "main"; })()],
+    ["non-awaiting-merge run has no pendingMerge", sx({}).pendingMerge === null],
+    ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null, pendingMerge: null })],
   ];
   for (const [name, ok] of statusChecks) {
     console.log(`status-json ${name}: ${ok ? "ok" : "FAIL"}`);
@@ -3799,6 +4515,69 @@ function cmdSelftest() {
     console.log(`transcript ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`transcript check failed: ${name}`);
   }
+  // Preview mode resolution (pure): per-run flag over per-rig policy, default off.
+  const previewModeChecks = [
+    ["rig off + run flag on resolves on", resolvePreviewMode(true, "off") === true],
+    ["rig on + run flag off resolves off", resolvePreviewMode(false, "on") === false],
+    ["no run flag defers to rig on", resolvePreviewMode(null, "on") === true],
+    ["no run flag defers to rig off", resolvePreviewMode(null, "off") === false],
+    ["unset everywhere defaults off", resolvePreviewMode(null, undefined) === false],
+  ];
+  for (const [name, ok] of previewModeChecks) {
+    console.log(`preview-mode ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`preview-mode check failed: ${name}`);
+  }
+  // Preview-step gating across deploy recoveries (pure): deploy's onRecover
+  // target ("checks") sits before release-decision/preview/preview-gate, so a
+  // base-drift recovery on a preview run would re-run all three — a second
+  // paid `eas build` and a second approval request for a preview the founder
+  // already approved. An approved preview pins the trio skipped.
+  const ps = (over) => classifyPreviewStep({ previewOn: true, previewApproved: false, ...over });
+  const previewStepChecks = [
+    ["mode off skips the trio", ps({ previewOn: false }).run === false],
+    ["mode on runs the trio", ps({}).run === true],
+    ["approved preview never re-runs on recovery", ps({ previewApproved: true }).run === false],
+    ["approved skip reason names the approval", /already approved/.test(ps({ previewApproved: true }).reason)],
+    ["mode off outranks approval", ps({ previewOn: false, previewApproved: true }).reason === "preview mode off"],
+  ];
+  for (const [name, ok] of previewStepChecks) {
+    console.log(`preview-step ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`preview-step check failed: ${name}`);
+  }
+  // Release-decision verdict parsing + fail-safe (pure): agent error, timeout,
+  // or ambiguity resolves to build — never a silent OTA of a native change.
+  const rd = (parsed, agentOk = true) => resolveReleaseDecision(parsed, agentOk);
+  const releaseChecks = [
+    ["clear update verdict honored", (() => { const d = rd({ kind: "update", reasoning: "JS-only diff", evidence: ["src/App.tsx"] }); return d.kind === "update" && !d.failSafe && d.reasoning === "JS-only diff" && d.evidence[0] === "src/App.tsx"; })()],
+    ["clear build verdict honored", (() => { const d = rd({ kind: "build", reasoning: "new native dep", evidence: ["package.json"] }); return d.kind === "build" && !d.failSafe; })()],
+    ["ambiguous verdict fail-safes to build", (() => { const d = rd({ kind: "maybe", reasoning: "?" }); return d.kind === "build" && d.failSafe === true; })()],
+    ["missing verdict file fail-safes to build", (() => { const d = rd(null); return d.kind === "build" && d.failSafe === true; })()],
+    ["agent error fail-safes to build", (() => { const d = rd({ kind: "update", reasoning: "stale file" }, false); return d.kind === "build" && d.failSafe === true; })()],
+    ["non-array evidence degrades to empty", rd({ kind: "update", evidence: "package.json" }).evidence.length === 0],
+  ];
+  for (const [name, ok] of releaseChecks) {
+    console.log(`release-decision ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`release-decision check failed: ${name}`);
+  }
+  // Embedded-JSON extraction (pure). The fixture mirrors real `eas update:list
+  // --json --non-interactive` output: the payload followed by the eas-cli
+  // upgrade banner that broke the old slice(indexOf("{")) parse.
+  const easListFixture =
+    '{"currentPage":[{"group":"12ab34cd-5678-90ef-abcd-1234567890ab","message":"factory-run feature-x: msg","branch":"preview"}],"nextPage":null}\n' +
+    "\n★ eas-cli@16.20.3 is now available.\nTo upgrade, run npm install -g eas-cli.\nProudly serving the Expo community.\n";
+  const jsonChecks = [
+    ["real eas update:list output parses", (() => { const p = parseFirstJsonObject(easListFixture); return p !== null && p.currentPage[0].group === "12ab34cd-5678-90ef-abcd-1234567890ab"; })()],
+    ["leading spinner noise skipped", parseFirstJsonObject("Loading updates...\n" + easListFixture) !== null],
+    ["non-JSON brace runs skipped, later object found", (() => { const p = parseFirstJsonObject('spinner {not json} then {"a":{"b":1}} trailing'); return p !== null && p.a.b === 1; })()],
+    ["braces inside strings do not derail the scan", (() => { const p = parseFirstJsonObject('{"msg":"has } and { inside","n":2}'); return p !== null && p.n === 2; })()],
+    ["escaped quotes inside strings survive", (() => { const p = parseFirstJsonObject('{"msg":"say \\"hi\\" {","ok":true}'); return p !== null && p.ok === true; })()],
+    ["no object yields null", parseFirstJsonObject("★ eas-cli is now available") === null],
+    ["empty input yields null", parseFirstJsonObject("") === null],
+  ];
+  for (const [name, ok] of jsonChecks) {
+    console.log(`json-extract ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`json-extract check failed: ${name}`);
+  }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);
     process.exit(1);
@@ -3825,13 +4604,18 @@ try {
   else if (cmd === "reply") cmdReply(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
+  else if (cmd === "preview") cmdPreviewTrigger(rest);
+  else if (cmd === "preview-exec") execPreview(rest[0], rest.slice(1));
+  else if (cmd === "preview-mode") cmdPreviewMode(rest);
+  else if (cmd === "deploy") cmdDeployTrigger(rest);
+  else if (cmd === "deploy-exec") execDeployHeld(rest[0]);
   else if (cmd === "cleanup") cmdCleanup(rest);
   else if (cmd === "preflight") cmdPreflight(rest);
   else if (cmd === "selftest") cmdSelftest();
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|cancel|cleanup|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|preview|preview-mode|deploy|cancel|cleanup|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {

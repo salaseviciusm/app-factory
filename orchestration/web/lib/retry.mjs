@@ -16,7 +16,9 @@
 
 // "killed" is the discussion step's don't-build ending: terminal and a
 // SUCCESS (early kill = money saved), never rendered as a failure.
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed"];
+// "awaiting-merge" is a merge-policy "review" run that finished green: terminal
+// (the engine is done; the founder merges factory/<id> by hand), also a success.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge"];
 
 // A non-terminal, non-awaiting run with no state update for this long counts
 // as stuck. A legitimately long agent step also trips this, which is why

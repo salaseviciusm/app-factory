@@ -29,6 +29,7 @@ import {
   getRunDetail,
   readRunLog,
   readStepDoc,
+  readRunArtifact,
   resolveGateArtifact,
   RUN_ID_RE,
   TERMINAL_STATES,
@@ -251,6 +252,19 @@ async function handleApi(req, res, pathname, query) {
       fs.createReadStream(art.path).pipe(res);
       return;
     }
+    if ((m = /^\/api\/runs\/([^/]+)\/artifact\/([^/]+)$/.exec(pathname))) {
+      // readRunArtifact enforces the closed filename whitelist (qr.png /
+      // preview-qr.png) — never a path lookup from unvalidated input.
+      const buf = readRunArtifact(ORCH_DIR, m[1], m[2]);
+      if (buf === null) return sendJson(res, 404, { error: "no such artifact" });
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      if (req.method === "HEAD") return res.end();
+      return res.end(buf);
+    }
     if ((m = /^\/api\/runs\/([^/]+)\/step\/([^/]+)\/([^/]+)$/.exec(pathname))) {
       // readStepDoc validates every segment (run id, workflow-declared step id,
       // kind whitelist, bounded attempt) and maps bad input to 400, missing
@@ -307,7 +321,7 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- POST /api/runs : start ----
   if (pathname === "/api/runs") {
-    const { rig, workflow, prompt, auto } = body;
+    const { rig, workflow, prompt, auto, preview } = body;
     if (typeof rig !== "string" || !rigExists(rig)) {
       return sendJson(res, 400, { error: `unknown rig: ${String(rig).slice(0, 100)}` });
     }
@@ -317,8 +331,13 @@ async function handleApi(req, res, pathname, query) {
     if (typeof prompt !== "string" || !prompt.trim() || prompt.length > PROMPT_CAP) {
       return sendJson(res, 400, { error: `prompt must be a non-empty string (max ${PROMPT_CAP} chars)` });
     }
+    if (preview !== undefined && preview !== null && typeof preview !== "boolean") {
+      return sendJson(res, 400, { error: "preview must be a boolean (or omitted for the rig default)" });
+    }
     const args = ["start", "--rig", rig, "--workflow", workflow, "--prompt", prompt];
     if (auto === true) args.push("--auto");
+    if (preview === true) args.push("--preview");
+    if (preview === false) args.push("--no-preview");
     const r = await factoryRun(args);
     const runId = r.stdout.trim().split("\n").pop() || "";
     logAudit("start", runId || `${rig}/${workflow}`, r.ok ? "ok" : r.stderr.slice(0, 200));
@@ -328,8 +347,8 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
@@ -340,7 +359,25 @@ async function handleApi(req, res, pathname, query) {
   // the worktree and branch of one terminal run via cleanup --discard.
   const args = action === "discard" ? ["cleanup", id, "--discard"] : [action, id];
   let retryTier = null;
-  if (action === "approve" || action === "reject") {
+  if (action === "preview") {
+    // On-demand preview publish; the CLI validates worktree/rig and detaches
+    // the (possibly 30-minute) work. Optional forced kind.
+    const kind = body.kind;
+    if (kind !== undefined && kind !== "build" && kind !== "update") {
+      return sendJson(res, 400, { error: "kind must be 'build' or 'update' (or omitted for the agent decision)" });
+    }
+    if (kind) args.push(`--${kind}`);
+  } else if (action === "preview-mode") {
+    if (body.mode !== "on" && body.mode !== "off") {
+      return sendJson(res, 400, { error: "preview-mode requires mode 'on' or 'off'" });
+    }
+    if (TERMINAL_STATES.includes(state)) {
+      return sendJson(res, 409, { error: `run is already ${state}` });
+    }
+    args.push(body.mode);
+  } else if (action === "deploy") {
+    // Held-deploy release; the CLI rejects runs without deployHeld.
+  } else if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
     }

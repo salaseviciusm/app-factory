@@ -33,6 +33,10 @@
       "tier": "production",
       "defaultBranch": "main",
       "notifyChannelName": "factory-app-factory",
+      "policy": {
+        "merge": "auto",
+        "deploy": "auto"
+      },
       "setup": [],
       "checks": [
         "node --check orchestration/bin/factory-run",
@@ -55,6 +59,10 @@
       "tier": "production",
       "defaultBranch": "main",
       "notifyChannelName": "factory-skiphero",
+      "policy": {
+        "merge": "auto",
+        "deploy": "auto"
+      },
       "setup": [
         "npm install"
       ],

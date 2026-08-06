@@ -375,6 +375,72 @@ factory-status skill shares the same disease (its step 1 reads STATE.md and even
 instructs fixing it when stale) — flagged, deliberately untouched here as a
 separate founder decision.
 
+## D26 — Per-rig merge/deploy policy, awaiting-merge, and agent-decided preview mode (2026-08-05)
+
+**Context:** whether a run's branch merged was an accident of its rig's deploy
+mechanism: harness-merge rigs (app-factory) merged during deploy, eas-update rigs
+(skip-hero, running-with-pace) never merged and never said so — 1.9 GB of skip-hero
+worktrees stranded silently as `done` runs whose branches nobody knew to merge.
+There was also no way for the founder to try an app build before it shipped.
+**Decision:**
+- Every rig gets an explicit, validated `policy` object beside `deploy`:
+  `{"merge": "auto"|"review", "deploy": "auto"|"hold", "preview": "on"|"off"}`.
+  Policy is the whether/when; `deploy.type` stays the mechanism (how). Unknown
+  keys/values fail the run at preflight, naming the rig and key, before any
+  worktree or agent step.
+- **Safe defaults:** absent `merge` → `"review"` (never auto-merge by surprise),
+  absent `deploy` → `"auto"` (publishing a preview update is additive and was
+  already every rig's behaviour), absent `preview` → `"off"`. skip-hero and
+  app-factory are configured `{"merge": "auto", "deploy": "auto"}` (founder
+  decision 2026-08-05); running-with-pace and quickfire apps keep the defaults.
+- Merging is a first-class action shared by every deploy type (`mergeRunBranch`,
+  extracted from harness-merge, including the base-drift `classifyRecovery`
+  rebase/reverify/resolve loop). Order: merge first, publish second — the
+  published bundle equals what landed on the default branch.
+- **The engine never pushes the rig's default branch:** auto-merge is local-only
+  for every rig. The engine's only push is the run's own `factory/<id>` branch
+  (`git push --force-with-lease -u origin factory/<id>`, so console commit links
+  resolve and agents' plain `git push` has an upstream); a selftest pins that
+  every push command in the engine targets `factory/<id>` and never the base
+  branch. A future `policy.push` can opt in to pushing the merged default branch.
+- Merge-policy "review" runs end in the new terminal state **`awaiting-merge`**
+  (not `done`): a completed success holding a founder action. Slack, the console,
+  the standup, and `status --json` (machine-readable `pendingMerge: {branch}`)
+  all name the branch; cleanup skips it while unmerged and reclaims worktree +
+  branch after the manual merge.
+- `deploy: "hold"` ends the run `done` with `deployHeld: true`; the publish is
+  released on demand (`factory-run deploy <id>` / console button).
+- **feature-dev preview mode** (per-run flag over per-rig `policy.preview`,
+  default off): before merge+deploy, a `release-decision` agent step — profile
+  `agents/release-engineer.md`, a narrow classification charter — reads the
+  branch diff and rules `build` (anything needing a new native binary: deps,
+  app.json/app.config/eas.json/plugins, ios/android dirs, expo-* SDK or
+  runtimeVersion) vs `update` (JS/TS/asset-only → free ~90s `eas update`). The
+  verdict, not a default, spends paid build minutes. Kind + reasoning + decisive
+  evidence are stored in run.json, telemetry, and rendered in the console beside
+  the artifact. **Fail-safe: agent error, timeout, or ambiguity resolves to
+  `build`** — the direction that cannot silently ship a native change as an OTA
+  update that never reaches a device — flagged `failSafe: true` and named in the
+  Slack notification. The preview gate reuses the `gate` step type with
+  `autoApprove: false`: `--auto` skips the plan discussion, never the
+  try-it-first gate.
+- **Deploy retries and recoveries never repeat the merge or the preview.** A
+  landed merge is recorded (`run.mergedSha`) and skipped on any resumed deploy —
+  re-checking drift after the merge commit lands would misread the advanced base
+  as drift and burn recovery cycles on retries of an unrelated publish failure.
+  Likewise a passed preview gate is recorded (`run.previewApproved`), so a
+  genuine base-drift recovery looping back through `checks` re-runs the
+  deterministic gates but never release-decision/preview/preview-gate — no
+  second paid build, no second approval request. Both decisions are pure
+  functions (`classifyDeployMerge`, `classifyPreviewStep`) pinned by selftest.
+**Why:** merge behaviour must be a stated policy, not an artifact of the deploy
+mechanism — the safety asymmetry is that merging is irreversible and touches the
+default branch, while publishing a preview is additive. The preview mechanism is
+agent-decided (founder decision 2026-08-05, superseding a hard-coded heuristic)
+because the build-vs-update call depends on what actually changed, and a wrong
+call must be diagnosable from recorded reasoning rather than buried in a
+heuristic's silence.
+
 ## D27 — skip-hero is the priority app; pullup is backlogged (2026-08-06)
 
 **Context:** pullup had been app #1 since 2026-08-02 (BUILD-WITH-CHANGES verdict,
