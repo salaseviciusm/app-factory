@@ -374,3 +374,23 @@ ritual; hand-maintained state had already drifted from engine truth. The
 factory-status skill shares the same disease (its step 1 reads STATE.md and even
 instructs fixing it when stale) — flagged, deliberately untouched here as a
 separate founder decision.
+
+## D27 — skip-hero is the priority app; pullup is backlogged (2026-08-06)
+
+**Context:** pullup had been app #1 since 2026-08-02 (BUILD-WITH-CHANGES verdict,
+on-device Vision spike VALIDATED) but has sat ON HOLD at its spec gate since
+2026-08-03 09:20, while skip-hero was only ever a rig used for harness smoke runs
+(`feature-msdn5cuj` done, `feature-msdpir37` failed since 2026-08-03). Three days
+of factory-improving-the-factory with zero product movement on either.
+**Decision:** skip-hero becomes the priority app and takes all product capacity.
+pullup is sidelined to the backlog entirely — not killed, not un-paused; its spec
+gate is withdrawn rather than pending, and `apps/pullup/` artifacts (spec.md,
+market-notes.md, spike results) are preserved untouched for a possible later
+restart. Do not schedule pullup work, re-open its spec gate, or list it as an
+awaiting-founder item until the founder explicitly reverses this. The stale
+`feature-msdpir37` skip-hero run is now on the priority app and should be
+resolved or killed rather than left failed.
+**Why (founder-stated, 2026-08-06):** "skiphero is now the priority. We can
+sideline/backlog the pullup app entirely." Supersedes the pullup-as-app-#1
+direction from 2026-08-02 and removes the recurring "un-pause pullup" standup
+recommendation.

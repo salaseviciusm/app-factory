@@ -87,12 +87,19 @@ Next milestone: **factory fully online** (founder confirmed standup visible in S
 
 ## Active apps
 
-- **pullup** — **ON HOLD (founder paused at spec gate, 2026-08-03 09:20).** Paused, not
-  killed: Stages 1–2 + 2D & 3D feasibility spikes all delivered and on disk as a resumable
-  evidence pack. Spark: record pullups, score ROM + form via Apple Vision poses. iOS-native
-  (`VNDetectHumanBodyPoseRequest`; 3D `…Pose3DRequest` for angle tolerance). Product-lead
-  verdict was **BUILD-WITH-CHANGES**. Artifacts in `apps/pullup/`: spec.md, market-notes.md,
-  decisions.md, spikes/. Do NOT resume Stage 3+ until the founder un-pauses.
+- **skip-hero** — **PRIORITY APP (founder steer, 2026-08-06, D26).** Takes all product
+  capacity. Registered rig in `orchestration/rigs.json` with a production deploy path.
+  Carry-over: `feature-msdpir37` has been failed at implement 2/8 since 2026-08-03
+  ($31.70 sunk) — resolve or kill it rather than leaving it failed.
+
+- **pullup** — **BACKLOGGED (founder steer, 2026-08-06, D26).** Sidelined entirely,
+  not killed: its spec gate is withdrawn rather than pending. Stages 1–2 + 2D & 3D
+  feasibility spikes are on disk as a resumable evidence pack. Spark: record pullups,
+  score ROM + form via Apple Vision poses. iOS-native (`VNDetectHumanBodyPoseRequest`;
+  3D `…Pose3DRequest` for angle tolerance). Product-lead verdict was
+  **BUILD-WITH-CHANGES**. Artifacts in `apps/pullup/`: spec.md, market-notes.md,
+  decisions.md, spikes/. Do NOT schedule pullup work, re-open its spec gate, or list
+  it as awaiting-founder until the founder explicitly reverses D26.
 
 ## Today
 
