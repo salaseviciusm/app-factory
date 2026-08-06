@@ -1054,6 +1054,63 @@ th {
   overflow-wrap: anywhere;
 }
 
+.file-root-summary {
+  cursor: pointer;
+}
+
+.file-root-summary h3 {
+  display: inline;
+  margin: 0;
+}
+
+.file-root-summary .file-root-meta {
+  display: inline;
+  margin-left: 8px;
+}
+
+.file-root[open] > .file-root-summary {
+  margin-bottom: 10px;
+}
+
+.file-folder {
+  margin: 2px 0;
+}
+
+.file-folder > summary {
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.file-folder-count {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-left: 4px;
+}
+
+/* Each nesting level indents relative to its parent folder. */
+.file-folder > .file-folder,
+.file-folder > .file-row {
+  margin-left: 18px;
+}
+
+.file-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.file-row .file-link {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-row-meta {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .file-link {
   background: none;
   border: none;

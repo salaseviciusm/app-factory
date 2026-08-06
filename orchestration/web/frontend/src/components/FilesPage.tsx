@@ -24,10 +24,11 @@ interface PreviewTarget {
   kind: Exclude<MediaKind, null>;
 }
 
-/** Browse the allowlisted skip-hero directories: files grouped by root,
- *  newest-first. Videos, images, and text docs open inline (blob fetch — an
- *  <a href> can't carry the token); everything else downloads. Strictly
- *  read-only. */
+/** Browse the allowlisted directories: each root is a collapsed-by-default
+ *  panel whose files are grouped into a collapsible folder tree (folders A-Z,
+ *  files newest-first). Videos, images, and text docs open inline (blob
+ *  fetch — an <a href> can't carry the token); everything else downloads.
+ *  Strictly read-only. */
 export function FilesPage() {
   // Listings are cheap stat walks; refresh every 30 s (paused while hidden).
   const { data, error, loading, refresh } = usePolling(() => api.files(), 30000);
@@ -90,6 +91,33 @@ export function FilesPage() {
   );
 }
 
+/** Directory tree built client-side from the `/`-separated entry paths.
+ *  Files stay in the backend's newest-first order; folders render A-Z. */
+interface DirNode {
+  dirs: Map<string, DirNode>;
+  files: FileEntry[];
+  fileCount: number; // recursive
+}
+
+function buildTree(files: FileEntry[]): DirNode {
+  const root: DirNode = { dirs: new Map(), files: [], fileCount: files.length };
+  for (const f of files) {
+    const parts = f.path.split("/");
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      let child = node.dirs.get(part);
+      if (!child) {
+        child = { dirs: new Map(), files: [], fileCount: 0 };
+        node.dirs.set(part, child);
+      }
+      node = child;
+      node.fileCount++;
+    }
+    node.files.push(f);
+  }
+  return root;
+}
+
 function RootPanel({
   root,
   busyPath,
@@ -102,11 +130,13 @@ function RootPanel({
   onDownload: (entry: FileEntry) => void;
 }) {
   return (
-    <section className="panel">
-      <h3>{root.label}</h3>
-      <div className="file-root-meta">
-        <code>{root.path}</code> · {root.count} file(s) · {fmtBytes(root.totalBytes)}
-      </div>
+    <details className="panel file-root">
+      <summary className="file-root-summary">
+        <h3>{root.label}</h3>
+        <span className="file-root-meta">
+          <code>{root.path}</code> · {root.count} file(s) · {fmtBytes(root.totalBytes)}
+        </span>
+      </summary>
       {root.truncated && (
         <div className="notice-box">Listing truncated — showing the newest {root.count} entries.</div>
       )}
@@ -115,44 +145,72 @@ function RootPanel({
       ) : root.files.length === 0 ? (
         <div className="empty-state">No files in this directory.</div>
       ) : (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>file</th>
-                <th>size</th>
-                <th>modified</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {root.files.map((f) => (
-                <tr key={f.path}>
-                  <td>
-                    <button className="file-link" onClick={() => onOpen(f)}>
-                      {mediaKind(f.path) === "video" ? "🎞 " : mediaKind(f.path) === "image" ? "🖼 " : "📄 "}
-                      {f.path}
-                    </button>
-                  </td>
-                  <td>{fmtBytes(f.bytes)}</td>
-                  <td>{fmtWhen(f.mtime)}</td>
-                  <td>
-                    <button
-                      className="btn btn-ghost file-dl-btn"
-                      title="Download"
-                      disabled={busyPath === `${root.key}/${f.path}`}
-                      onClick={() => onDownload(f)}
-                    >
-                      ⬇
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="file-tree">
+          <TreeLevel
+            node={buildTree(root.files)}
+            rootKey={root.key}
+            busyPath={busyPath}
+            onOpen={onOpen}
+            onDownload={onDownload}
+          />
         </div>
       )}
-    </section>
+    </details>
+  );
+}
+
+function TreeLevel({
+  node,
+  rootKey,
+  busyPath,
+  onOpen,
+  onDownload,
+}: {
+  node: DirNode;
+  rootKey: string;
+  busyPath: string | null;
+  onOpen: (entry: FileEntry) => void;
+  onDownload: (entry: FileEntry) => void;
+}) {
+  const folders = [...node.dirs.keys()].sort();
+  return (
+    <>
+      {folders.map((name) => {
+        const child = node.dirs.get(name)!;
+        return (
+          <details className="file-folder" key={name}>
+            <summary>
+              📁 {name} <span className="file-folder-count">{child.fileCount} file(s)</span>
+            </summary>
+            <TreeLevel
+              node={child}
+              rootKey={rootKey}
+              busyPath={busyPath}
+              onOpen={onOpen}
+              onDownload={onDownload}
+            />
+          </details>
+        );
+      })}
+      {node.files.map((f) => (
+        <div className="file-row" key={f.path}>
+          <button className="file-link" onClick={() => onOpen(f)}>
+            {mediaKind(f.path) === "video" ? "🎞 " : mediaKind(f.path) === "image" ? "🖼 " : "📄 "}
+            {f.path.split("/").pop() ?? f.path}
+          </button>
+          <span className="file-row-meta">{fmtBytes(f.bytes)}</span>
+          <span className="file-row-meta">{fmtWhen(f.mtime)}</span>
+          <button
+            className="btn btn-ghost file-dl-btn"
+            title="Download"
+            disabled={busyPath === `${rootKey}/${f.path}`}
+            onClick={() => onDownload(f)}
+          >
+            ⬇
+          </button>
+        </div>
+      ))}
+    </>
   );
 }
 
