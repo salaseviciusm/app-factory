@@ -605,6 +605,22 @@ textarea {
   margin: 10px auto;
 }
 
+/* Markdown-file modal header: title left, raw/rendered + close right. */
+.md-modal-head {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.md-modal-head h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.md-modal-btns {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---------- plan editor (discussion edit mode) ---------- */
 
 .pe-hint {
