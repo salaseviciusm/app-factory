@@ -798,6 +798,49 @@ evidence source 1 and starting ranking — open items first, `declined` items
 excluded — and its improvement plan names the `R<N>` item it takes.
 `workflows/self-review.json` itself is unchanged.
 
+## 12h. Stale-run watchdog (implemented 2026-08-06)
+
+Nothing used to watch runs *between* state changes: feature-msdpir37 sat
+`failed` for three days with $31.70 spent and nobody was told. `factory-run
+watchdog [--hours N] [--cooldown-hours N] [--dry-run] [--json]` is a
+cron-friendly scan that finds runs sitting quiet past a threshold and posts
+one outcome-first Slack message per stale run to its rig channel (standard
+`notify()` routing: per-rig channel created on demand, global fallback). It
+reports and suggests only — remediation stays a founder action.
+
+- **Policy lives in a pure core** (`web/lib/watchdog.mjs`, engine-wired via
+  the retry.mjs require(esm) pattern, covered by `watchdog.test.mjs` and
+  selftest). The activity clock is `run.updatedAt` — `setState` stamps it on
+  every transition, so no new bookkeeping.
+- **Two threshold tiers, one override**: engine-active states (`queued`,
+  `setup`, `approved`, `running:*`, `deploying`, `recovering`) alert after
+  **6h** of silence — the agent step timeout is 90 minutes, so 6 quiet hours
+  means a dead executor. Founder-wait and resumable states
+  (`awaiting-approval`, `awaiting-merge`, `failed`, and `done` with a held
+  deploy) alert after **24h**. `--hours N` overrides both tiers uniformly.
+  Never alerted: released `done`, `killed`, `cancelled`, `rejected` — settled
+  outcomes, not silence.
+- **De-duplication**: each successful alert records a snapshot
+  (`runs/<id>/watchdog.json`: state, stepIndex, updatedAt, alertedAt). While
+  the snapshot still matches, the run is not re-alerted until the cooldown
+  (default 72h, `--cooldown-hours N`) elapses; any movement — state or step
+  change, or `updatedAt` advancing (the run woke up and re-stalled) —
+  re-alerts immediately. A failed Slack send leaves the snapshot unwritten so
+  the next scan retries.
+- **The message** carries the run id, rig, state, current step, quiet
+  duration, the telemetry cost line, and a concrete next action derived from
+  the state: `failed`/silent-active → `factory-run retry <id>` (retry itself
+  picks resume vs triage), `awaiting-approval` → approve/reject/reply,
+  `awaiting-merge` → merge `factory/<id>` then cleanup, held deploy →
+  `factory-run deploy <id>`.
+- **Cron-safe**: no TTY needed, exit 0 whether or not stale runs were found
+  and alerted (a completed scan is a success; only a usage error exits 1).
+  Recommended schedule, hourly:
+
+  ```
+  0 * * * * /Users/morkus/src/app-factory/orchestration/bin/factory-run watchdog >> /Users/morkus/src/app-factory/orchestration/watchdog.log 2>&1
+  ```
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.
