@@ -134,6 +134,65 @@ export function BlockNode({ block }: { block: PlanBlock }) {
   return <BlockNodes tokens={[block.token]} />;
 }
 
+/** Fullscreen rendered-markdown modal (fixed overlay, so the page underneath
+ *  keeps its DOM and scroll position): title, raw/rendered toggle, close
+ *  button, Escape-to-close, raw fallback with notice on parse failure.
+ *  `markdown === null` shows a loading state. */
+export function MarkdownModal({
+  title,
+  markdown,
+  error,
+  onClose,
+}: {
+  title: string;
+  markdown: string | null;
+  error?: string | null;
+  onClose: () => void;
+}) {
+  const parse = useMemo(() => (markdown === null ? null : parsePlan(markdown)), [markdown]);
+  const [showRaw, setShowRaw] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const raw = showRaw || (parse !== null && !parse.ok);
+  return (
+    <div className="plan-fullscreen" role="dialog" aria-label={title}>
+      <div className="plan-controls md-modal-head">
+        <h3>{title}</h3>
+        <span className="md-modal-btns">
+          {parse?.ok && (
+            <button className="btn btn-ghost" onClick={() => setShowRaw(!showRaw)}>
+              {showRaw ? "rendered" : "raw"}
+            </button>
+          )}
+          <button className="btn btn-ghost" onClick={onClose}>
+            ✕ close
+          </button>
+        </span>
+      </div>
+      {error && <div className="error-box">preview failed to load: {error}</div>}
+      {markdown === null && !error && <div className="empty-state">Loading markdown…</div>}
+      {parse && !parse.ok && (
+        <div className="error-box">showing raw — markdown failed to render ({parse.problems.join("; ")})</div>
+      )}
+      {markdown !== null &&
+        (raw ? (
+          <pre className="doc-view plan-doc">{markdown}</pre>
+        ) : (
+          <div className="markdown plan-doc">
+            <BlockNodes tokens={parse!.tokens} />
+          </div>
+        ))}
+    </div>
+  );
+}
+
 /** Rendered plan panel: markdown by default, raw/rendered toggle, fullscreen
  *  overlay with Escape-to-close, raw fallback with notice on parse failure. */
 export function PlanView({ markdown }: { markdown: string }) {

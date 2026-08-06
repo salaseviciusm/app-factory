@@ -3,17 +3,20 @@ import { api } from "../api";
 import type { FileEntry, FileRootListing } from "../types";
 import { usePolling } from "../hooks/usePolling";
 import { fmtBytes, fmtWhen } from "../format";
+import { MarkdownModal } from "./PlanView";
 
 const VIDEO_EXTS = [".mov", ".mp4"];
 const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
-const TEXT_EXTS = [".md", ".txt", ".json"];
+const MARKDOWN_EXTS = [".md"];
+const TEXT_EXTS = [".txt", ".json"];
 
-type MediaKind = "video" | "image" | "text" | null;
+type MediaKind = "video" | "image" | "markdown" | "text" | null;
 
 function mediaKind(name: string): MediaKind {
   const lower = name.toLowerCase();
   if (VIDEO_EXTS.some((e) => lower.endsWith(e))) return "video";
   if (IMAGE_EXTS.some((e) => lower.endsWith(e))) return "image";
+  if (MARKDOWN_EXTS.some((e) => lower.endsWith(e))) return "markdown";
   if (TEXT_EXTS.some((e) => lower.endsWith(e))) return "text";
   return null;
 }
@@ -27,7 +30,8 @@ interface PreviewTarget {
 /** Browse the allowlisted directories: each root is a collapsed-by-default
  *  panel whose files are grouped into a collapsible folder tree (folders A-Z,
  *  files newest-first). Videos, images, and text docs open inline (blob
- *  fetch — an <a href> can't carry the token); everything else downloads.
+ *  fetch — an <a href> can't carry the token); markdown opens in the shared
+ *  fullscreen rendered-markdown modal; everything else downloads.
  *  Strictly read-only. */
 export function FilesPage() {
   // Listings are cheap stat walks; refresh every 30 s (paused while hidden).
@@ -77,7 +81,12 @@ export function FilesPage() {
         {error && <div className="error-box">refresh failed: {error}</div>}
         {actionError && <div className="error-box">{actionError}</div>}
       </div>
-      {preview && <FilePreview target={preview} onClose={() => setPreview(null)} />}
+      {preview &&
+        (preview.kind === "markdown" ? (
+          <MarkdownFilePreview target={preview} onClose={() => setPreview(null)} />
+        ) : (
+          <FilePreview target={preview} onClose={() => setPreview(null)} />
+        ))}
       {data.roots.map((root) => (
         <RootPanel
           key={root.key}
@@ -212,6 +221,34 @@ function TreeLevel({
       ))}
     </>
   );
+}
+
+/** Markdown files open in the shared fullscreen rendered-markdown modal (the
+ *  plan-viewer widget). The overlay is position: fixed, so the file tree keeps
+ *  its DOM and scroll offset — closing lands the user exactly where they were. */
+function MarkdownFilePreview({ target, onClose }: { target: PreviewTarget; onClose: () => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setText(null);
+    setError(null);
+    api
+      .fileBlob(target.rootKey, target.path)
+      .then(async (blob) => {
+        const body = await blob.text();
+        if (!cancelled) setText(body);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target.rootKey, target.path]);
+
+  return <MarkdownModal title={target.path} markdown={text} error={error} onClose={onClose} />;
 }
 
 /** Inline preview: auth-fetch the blob, then object-URL it into a <video> or
