@@ -2,20 +2,31 @@
 
 > Kept truthful by the chief of staff; verified against git/session records.
 
-- **Stage:** 2 complete + feasibility spikes (2D **and** 3D) delivered. **ON HOLD — founder
-  paused the idea at the spec gate 2026-08-03 09:20.** Do not advance to Stage 3+ (brand/
-  design/architecture) until the founder un-pauses.
-- **Last updated:** 2026-08-03 09:20 (founder hold)
-- **Last verified:** 2026-08-05 18:00 (EOD sync) — still accurate. No pullup runs in
-  `factory-run list`, no subagents, no commits touching `apps/pullup/` since `1e98a1d`
-  (2026-08-04, which tracked the existing artifacts in git). Hold unchanged for 2 days.
+- **Stage:** 2 complete + feasibility spikes (2D **and** 3D) delivered. **BACKLOGGED —
+  the founder sidelined the app entirely on 2026-08-06 (D27); skip-hero is the priority
+  app.** This is stronger than the 08-03 hold: the spec gate is **withdrawn, not
+  pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
+  founder until he explicitly reverses D27.
+- **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
+- **Last verified:** 2026-08-06 18:00 (EOD sync). No pullup runs in `factory-run list`
+  or `telemetry.db` (ever); no subagents since 2026-08-05 12:12; no commit has touched
+  `apps/pullup/` since `1e98a1d` (2026-08-04, which tracked the existing artifacts).
+  Artifacts intact on disk and in git. Dormant 3 days.
 
-## HOLD (2026-08-03)
+## BACKLOGGED (2026-08-06, D27) — supersedes the 08-03 hold
+
+Founder: *"skiphero is now the priority. We can sideline/backlog the pullup app
+entirely."* Pullup is **backlogged**, not killed. All artifacts (spec.md,
+market-notes.md, spikes/001 2D + spikes/002 3D verdicts, decisions.md) remain on disk
+and in git as a dated, resumable evidence pack. Nothing here is waiting on the founder;
+there is no open question to answer. If the app is ever restarted, resume from the spec
+gate with the questions in `spec.md`.
+
+### Prior state — HOLD (2026-08-03)
 
 Founder: "Nah hold off on this idea" — replying to the Monday standup's pullup spec-gate ask.
-Pullup is **paused**, not killed. All artifacts (spec.md, market-notes.md, spikes/001 2D +
-spikes/002 3D verdicts, decisions.md) remain on disk as a dated, resumable evidence pack —
-resume from the spec gate whenever. No further build work; no Stage 3–4 dispatch.
+At that point pullup was **paused at an open gate** and the spec questions were still
+live-but-parked. D27 closed that gate rather than leaving it parked.
 
 ## In-flight
 
@@ -47,9 +58,9 @@ answers the spec-gate questions.
 
 ## Blocked
 
-Not hard-blocked, but **two founder dependencies** before build — both **parked, not
-pending**, since the 2026-08-03 hold. Nothing here is waiting on an answer today; they
-become live again only if the founder un-pauses the app:
+**Nothing is blocked, because nothing is scheduled.** The two founder dependencies below
+are **archived, not pending** — they were parked by the 08-03 hold and closed by D27 on
+08-06. They become live again only if the founder explicitly restarts the app:
 1. **Spec gate** — founder to answer the product-lead's open questions in `spec.md`.
 2. **One clean front/¾ pull-up clip** (face visible, phone upright) to close end-to-end
    validation on the founder's actual conditions. `IMG_0451.MOV` never resolved to disk —

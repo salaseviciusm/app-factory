@@ -6,8 +6,9 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-08-05 18:00 (EOD sync — every in-flight item reconciled against
-> `factory-run list`, git log and branch state; stale entries corrected below)
+> Last updated: 2026-08-06 18:00 (EOD sync — every in-flight item reconciled against
+> `factory-run list`/`status --json`, telemetry.db, git log + branch state, and the
+> subagent run table; stale entries corrected below)
 
 ## Orchestration layer (new 2026-08-03)
 
@@ -45,31 +46,37 @@ Vertical slice of `docs/08-orchestration-layer.md` implemented and live:
 
 ## In flight
 
-**Verified 2026-08-05 18:00 against `factory-run list` + git. No run is executing and
-no gate is open.** Two runs sit in `failed` and are the only real in-flight work:
+**Verified 2026-08-06 18:00 against `factory-run list`, `status --json` histories,
+`orchestration/telemetry.db`, git log/branch state and the OpenClaw `subagent_runs`
+table. Zero runs executing, zero gates open, one failed run, no active subagents.**
 
-- **`feature-part-c-repoint-daily`** (app-factory) — **failed at deploy 07:32 UTC**,
-  step 6/8. Founder approved the plan 08:20 local; implement → checks → review →
-  tests all passed (two implement passes). Engine reason: `harness merge failed
-  (aborted cleanly): Merge with strategy ort failed`. Work is safe on branch
-  `factory/feature-part-c-repoint-daily` — 2 commits ahead of main (`e6b78e4`
-  machine-readable `currentStep`/gate kind in `status --json`; `f9b44f8` standup
-  sources run/gate/cost facts from factory-run, STATE.md narrative only, D23).
-  **Unblock = commit pass on main's dirty prose files, then re-run deploy** (main
-  is still dirty at EOD — see Housekeeping).
-- **`feature-msdpir37`** (skip-hero) — failed at implement 2/8 since 2026-08-03,
-  untouched for two days. $31.70 spent, 4 agent steps. Either retry with a scoped
-  prompt or kill it; leaving it is the third day of drift.
+- **`feature-msdpir37`** (skip-hero) — the only in-flight item, and it has not moved
+  in three days. `failed` at step 2/11 (`implement`) since **2026-08-03 23:47 UTC**;
+  engine reason is now known: **`agent step 'implement' timed out after 90m`** (not a
+  code failure — the step never returned). $31.70 spent, 4 agent steps. Its branch
+  `factory/feature-msdpir37` is 3 commits ahead of skip-hero main (`e816749` OTA
+  update ID in the Settings About footer, `fb8b387` react-hooks lint clean,
+  `db22b23` speech adapter survives a missing native module) and its worktree is
+  still mounted. The work is *mostly done* — retry from the branch with a scoped
+  prompt, or kill it and cherry-pick the two useful commits. Third day of drift, and
+  it now sits on the priority app (D27).
 
-Resolved since the last update (previously listed here as in flight):
-`feature-deploy-step-recover-merge` **completed** end-to-end and merged
-(`0a4706b` + `735dd2d`) — the drift-recovery rebase loop is live, not pending.
-`feature-improvement-plan-context` still reads `failed` in the engine but its work
-**did** land on main (`d0a7b77`, `131555b`) via hand-merge — engine state is stale
-for that run, treat main as truth.
+**Corrected from the 2026-08-05 EOD entry (both claims were stale within hours):**
 
-Open follow-up (unowned): serialize runs targeting the app-factory rig — the drift
-fix handles conflicts but does not stop concurrent harness runs colliding.
+- `feature-part-c-repoint-daily` is **`done`, not failed**. It was recovered by hand
+  at **2026-08-05 21:25** — after last night's sync — and merged as **`3c736ca`**.
+  Engine detail: *"deploy recovered manually: main was dirty at merge time, then
+  drifted; merged after conflict resolution in STATE.md + decision-log (D23
+  renumbered to D25)"*. The commit pass it was waiting on happened the same night.
+- The dirty-main blocker is **gone**. `app-factory` main is clean apart from this
+  file. `docs/marketing/` (~35 files), `docs/09-deployment-and-security.md`,
+  `docs/07-roadmap.md` and the decision log were all committed on 08-05 evening.
+
+Open follow-up (unowned, carried): serialize runs targeting the app-factory rig — the
+drift fix handles conflicts but does not stop concurrent harness runs colliding.
+Second follow-up from msdpir37: the 90m agent-step timeout kills a run and leaves no
+retry path — the engine should checkpoint or auto-retry a timed-out implement step
+rather than terminating the run.
 
 ## Phase
 
@@ -87,21 +94,92 @@ Next milestone: **factory fully online** (founder confirmed standup visible in S
 
 ## Active apps
 
-- **skip-hero** — **PRIORITY APP (founder steer, 2026-08-06, D26).** Takes all product
+- **skip-hero** — **PRIORITY APP (founder steer, 2026-08-06, D27).** Takes all product
   capacity. Registered rig in `orchestration/rigs.json` with a production deploy path.
-  Carry-over: `feature-msdpir37` has been failed at implement 2/8 since 2026-08-03
-  ($31.70 sunk) — resolve or kill it rather than leaving it failed.
+  Carry-over: `feature-msdpir37` has been failed at implement 2/11 since 2026-08-03
+  ($31.70 sunk, 90m step timeout) — resolve or kill it rather than leaving it failed.
+  Shipped today: two-preview split, save-video fix, pose stabilizer, share-sheet
+  recording export (`4e2a40f`) — all merged to skip-hero main by 09:32.
 
-- **pullup** — **BACKLOGGED (founder steer, 2026-08-06, D26).** Sidelined entirely,
+- **pullup** — **BACKLOGGED (founder steer, 2026-08-06, D27).** Sidelined entirely,
   not killed: its spec gate is withdrawn rather than pending. Stages 1–2 + 2D & 3D
   feasibility spikes are on disk as a resumable evidence pack. Spark: record pullups,
   score ROM + form via Apple Vision poses. iOS-native (`VNDetectHumanBodyPoseRequest`;
   3D `…Pose3DRequest` for angle tolerance). Product-lead verdict was
   **BUILD-WITH-CHANGES**. Artifacts in `apps/pullup/`: spec.md, market-notes.md,
   decisions.md, spikes/. Do NOT schedule pullup work, re-open its spec gate, or list
-  it as awaiting-founder until the founder explicitly reverses D26.
+  it as awaiting-founder until the founder explicitly reverses D27.
 
 ## Today
+
+**2026-08-06 11:00 — cutoff: founder replied, day re-planned.** The 08:21 standup
+proposal is superseded. Founder's 10:39 redirect: spend the day researching SkipHero's
+target audiences, target platforms, and marketing strategy — branding (themes, naming)
+is open to change. Cap of 2-3 research agents concurrent, building on yesterday's
+documented learnings. Four questions to answer: which audiences to target, which
+platforms, what content works per audience, what features each audience wants.
+
+**⚠️ CORRECTED AT EOD — the re-plan was written down but never executed.** This file
+claimed at 11:02 that "Wave 1 dispatched 10:42 (audiences / platforms / branding), in
+flight at cutoff; outputs to `~/src/skip-hero/marketing/research-2026-08-06/`". That is
+**false**. Verified three independent ways at 18:00:
+
+1. `subagent_runs` in `~/.openclaw/state/openclaw.sqlite` — the **last subagent of any
+   kind was `marketing_wave3_synthesis`, ended 2026-08-05 12:12**. Nothing was spawned
+   on 08-06. Thirteen subagent runs total, none today.
+2. `~/src/skip-hero/marketing/research-2026-08-06/` **does not exist**.
+3. No file anywhere under `~/src` was written after 09:32 today except `STATE.md`
+   itself (11:02), `orchestration/telemetry.db` and `orchestration/web/audit.log`.
+
+So the founder's 10:39 redirect produced a plan and a STATE.md entry and **no work**.
+Wave 2 never had a Wave 1 to fire from. **The factory has been idle since 09:32** —
+8.5 hours, on the day the founder redirected it.
+
+The 5 files in `~/src/skip-hero/marketing/` (strategy, brand-direction,
+content-calendar, content-samples, naming-aso, all 09:30) **predate** the redirect and
+are unrelated to it — they are not Wave 1 output. Still untracked in that repo.
+
+Carried and still not done: resolve `feature-msdpir37` (see In flight) and clean its
+branch. Dropped: the marketing workflow template (item 4) — the research supersedes it
+and should shape it.
+
+Closed before cutoff, nothing in flight on either rig. **Verified against telemetry —
+four runs were created on 08-06, all `done`, all merged, last finishing 09:32:**
+- `feature-split-preview-into-two` (skip-hero, 07:21→07:44), $9.71 — two-screen preview.
+- `bug-save-video-not-working` (skip-hero, 07:22→07:48), $14.09.
+  Both landed on main via the founder's own PRs #1/#2 (`af67a05`, `acd0f12`).
+- `feature-files-dir-page-orchestration` (app-factory, 08:01→08:32) merged
+  (`6c4b1cc` + `b35c228`), $8.29 — files page serving `examples/` and `debug/`.
+- `feature-way-get-session-s` (skip-hero, 08:31→09:32) merged to skip-hero main
+  (`4e2a40f`), $6.89 — pose recordings exportable via the iOS share sheet (ADR 0021).
+- `feature-give-every-rig-explicit` ($87.08, 19 steps) is **an 08-05 run**, not an 08-06
+  one — started 21:37 on 08-05, finished 23:43; its merge commit `0cc9807` lands at
+  09:08 today, which is what made it look like today's work. Same for `ce530aa` (D27
+  docs) and `31a56f2`. Today's genuine new spend is **$38.98** across four runs.
+- Pose stabilizer (`e2c310b`) is likewise an 08-05 run merged this morning.
+
+**2026-08-06 18:00 — EOD sync (chief of staff).** Reconciled every in-flight claim in
+this file and `apps/pullup/STATUS.md` against `factory-run list` / `status --json`
+histories, `orchestration/telemetry.db`, `git log` + branch/worktree state, and the
+OpenClaw `subagent_runs` table. Corrections applied:
+- **The 11:02 "Wave 1 dispatched" claim was false** — no subagent ran today at all
+  (see the ⚠️ block above). This is the serious one: the file asserted work that did
+  not exist, which is exactly what this section is supposed to prevent.
+- `feature-part-c-repoint-daily` was recorded as `failed`; it is `done` and merged
+  (`3c736ca`), recovered by hand at 21:25 on 08-05.
+- The "dirty main blocks every harness merge" blocker was recorded as open; it was
+  cleared the same night. Main is clean apart from this file.
+- Housekeeping listed app-factory branches that no longer exist, and missed the three
+  merged-but-unreclaimed skip-hero branches/worktrees that do.
+- `feature-msdpir37`'s failure reason is now recorded (90m implement timeout) and its
+  step count corrected (2/11, not 2/8).
+- Decision references fixed: the skip-hero-priority steer is **D27**, not D26.
+- pullup's STATUS.md still described a *hold at the spec gate*; D27 withdrew that gate
+  and backlogged the app — corrected there.
+
+State of play at close: **zero runs executing, zero gates open, one failed run
+(`feature-msdpir37`), no active subagents, both main branches clean of blockers but
+unpushed.**
 
 **2026-08-05 08:00 — Daily standup posted to `#factory-standup`.** Yesterday was the
 biggest engineering day so far and all of it was harness: 17 runs on the `app-factory`
@@ -175,8 +253,10 @@ recommended is in effect de facto — the day went to marketing research, not to
 factory improving the factory. `feature-msdpir37` (skip-hero badge) remains failed and
 untouched since 2026-08-03.
 
-**18:00 — EOD sync (chief of staff).** Reconciled every in-flight claim in this file
-and `apps/pullup/STATUS.md` against `factory-run list`, `git log`, branch state and
+**2026-08-05 18:00 — EOD sync (chief of staff).** _(Historical. Two of its conclusions
+were overtaken within four hours — Part C was hand-recovered at 21:25 and the commit
+pass landed the same night; see the 08-06 EOD entry.)_ Reconciled every in-flight claim
+in this file and `apps/pullup/STATUS.md` against `factory-run list`, `git log`, branch state and
 run event logs. Corrections applied: the `feature-deploy-step-recover-merge` entry
 was stale (that run finished and merged on 08-04, not awaiting a gate); the
 housekeeping list was stale (`apps/pullup/`, `tooling/` are tracked now, while
@@ -185,24 +265,39 @@ pullup spec gate was still listed as an open founder gate despite the 08-03 hold
 Waves 2 and 3 of the marketing research are both complete on disk. State of play at
 close: **zero runs executing, zero gates open, two failed runs, one dirty main.**
 
-**Needs founder attention tomorrow (in order):**
+**Needs founder attention tomorrow (in order) — refreshed 2026-08-06 18:00:**
 
-1. **Commit pass on app-factory main.** Blocks Part C's re-deploy and every future
-   harness-merge run. ~35 untracked marketing files + `docs/09` + 3 modified files.
-   Cheapest fix, unblocks the most.
-2. **Part C:** after the commit pass, re-run deploy on
-   `factory/feature-part-c-repoint-daily` — the work is done and reviewed, only the
-   merge failed.
-3. **`feature-msdpir37` (skip-hero):** three days failed and untouched, $31.70 sunk.
-   Retry with a scoped prompt or kill it — but decide.
-4. **Product direction is still the real gap.** Three days, zero product work: pullup
-   is paused, no app #1 replacement chosen. The marketing research now exists to
-   support whichever app ships; nothing ships without this call.
+1. **The factory stopped working at 09:32 and nobody noticed for eight hours.** The
+   10:39 redirect to SkipHero marketing research was planned, written into this file
+   as "dispatched", and never actually dispatched — zero subagents ran today. This is
+   a reliability failure in the chief-of-staff layer, not a founder decision, but the
+   founder should know his redirect produced nothing. **Ask: re-issue the research
+   brief tomorrow morning, or is it superseded?** If re-issued it runs first thing.
+   Harness follow-up (mine): a dispatch must be verified — write the STATE.md entry
+   *after* the spawn returns run ids, never before, and have the heartbeat flag
+   "planned work with no corresponding subagent/run" as an alert.
+2. **`feature-msdpir37` (skip-hero):** three days failed, $31.70 sunk, now sitting on
+   the priority app. Cause is a **90-minute implement-step timeout**, not broken code,
+   and its branch already carries three usable commits (OTA update ID in Settings,
+   lint clean, speech-adapter guard). Cheapest path: cherry-pick the two safe commits
+   and kill the run. **Decide: retry scoped, or kill and cherry-pick [rec].**
+3. **Nothing is pushed.** `app-factory` main is **12 commits ahead of origin**;
+   `skip-hero` main is **2 ahead**. A full day of merged work exists only on this
+   machine — and the 08-05 "push every commit immediately" fix (`db94ccf`) explicitly
+   narrowed pushing to run branches, not the base branch. One `git push` per repo
+   fixes today; the policy question (should harness merges push main?) is the founder's.
+4. **Product direction — still the gap, but narrowing.** D27 made skip-hero the
+   priority app and today four skip-hero features shipped, so this is no longer "zero
+   product work". What is still missing is a **destination**: no ship date, no v1 scope
+   line, no store-submission target for skip-hero. The marketing research exists to
+   support a launch that has not been scheduled.
 5. **Marketing workflow template** — the founder asked for a reusable factory
-   workflow, not just research. `synthesis/playbook.md` is the operating rhythm;
-   turning it into an executable `factory-run` workflow is unstarted and unassigned.
+   workflow, not just research. `docs/marketing/synthesis/playbook.md` is the operating
+   rhythm; turning it into an executable `factory-run` workflow is unstarted and
+   unassigned. Third day carried.
 6. Still open from 08-05 morning, never answered: branch protection on `main`
    (recommended, external change to the GitHub repos) and local-vs-rented VM timing.
+   Note item 3 makes branch protection more relevant, not less.
 
 **2026-08-03 08:41 — Daily standup posted to `#factory-standup`.** Phase 0; pullup at
 the spec gate, blocked on founder. No engineering to allocate until the gate opens.
@@ -257,30 +352,31 @@ resolved to disk — re-share if intended.
 - Invite the bot (`/invite @OpenClaw`) into `#factory-standup`, `#factory-approvals`, `#factory-builds` — then say so and the outbound smoke test + a live standup run finish verification
 - ~~DM the bot `status` in Slack for the conversational-loop check~~ ✅ done 2026-08-02 13:48 (founder DM'd `status`; reply delivered)
 - ~~O2: analytics provider~~ ✅ resolved 2026-08-02 → D16 (PostHog, factory-wide)
-- ~~Pick the idea for app #1~~ ✅ resolved 2026-08-02 → **pullup** (see Active apps)
-- ~~**Next gate (open):** spec approval for pullup~~ — **superseded 2026-08-03 09:20:
-  the founder paused pullup at this gate.** The questions in `apps/pullup/spec.md` are
-  parked, not pending; nothing to answer until he un-pauses the app.
-- **Founder ask (parked with pullup):** send ONE clean front/¾ pull-up clip (phone upright, face + full
-  body + bar in frame) so the spike can close end-to-end validation on the founder's own
-  conditions. The two clips sent 2026-08-02 were pushups (worm's-eye) and pull-ups-from-behind
-  — neither validates the pull-up mechanic on his setup. Optionally re-share `IMG_0451.MOV`
-  (never resolved to disk).
-- **Heads-up (not a gate):** the spike downgraded real-world capture to PARTIAL — v1 must
-  ship a capture guide + confidence/orientation gate. Fold into the spec before build.
+- ~~Pick the idea for app #1~~ ✅ resolved 2026-08-02 → pullup; **superseded 2026-08-06
+  by D27 → skip-hero is the priority app**
+- ~~**Next gate (open):** spec approval for pullup~~ — **closed. Paused 2026-08-03
+  09:20, then withdrawn entirely 2026-08-06 by D27.** The questions in
+  `apps/pullup/spec.md` are archived, not pending. Nothing here is awaiting the founder.
+- ~~**Founder ask:** send ONE clean front/¾ pull-up clip~~ — **archived with pullup
+  (D27).** Only relevant if pullup is restarted. `IMG_0451.MOV` never resolved to disk.
+- ~~**Heads-up:** capture-UX/confidence gate is a v1 pullup requirement~~ — archived
+  with pullup (D27); fold into the spec if the app is ever restarted.
 
-## In-flight
+**Live founder items are the numbered list under "Today", not this section.**
 
-_No active subagents._ Both of today's runs delivered:
+## In-flight (subagents)
+
+_No active subagents — verified 2026-08-06 18:00 against `subagent_runs`._ The last
+subagent of any kind ended **2026-08-05 12:12** (`marketing_wave3_synthesis`). Nothing
+was spawned on 08-06, which is the day's headline problem — see the ⚠️ block in Today.
+
+Historical, both delivered 2026-08-02 (archived with pullup under D27):
 
 - ~~**pullup product-lead (stages 1–2)** — run `ce6e55c4-…`~~ ✅ delivered ~13:58.
   spec.md + market-notes.md written; verdict BUILD-WITH-CHANGES.
 - ~~**pullup pose-feasibility spike** — run `7e580994-…`~~ ✅ delivered. Stock verdict
   VALIDATED/go (~14:22); founder-footage re-run PARTIAL for impromptu capture (~17:48).
   Artifacts in `apps/pullup/spikes/001-pose-feasibility/` (+ `founder/`).
-
-**Paused, awaiting founder input:** end-to-end validation on the founder's own conditions
-is blocked on him sending one clean front/¾ pull-up clip (see Awaiting founder).
 
 ## Deployment & security (new 2026-08-05, awaiting founder)
 
@@ -306,25 +402,37 @@ same script), security controls, phased migration.
 
 ## Housekeeping (git hygiene)
 
-**Re-verified 2026-08-05 18:00 (`git status`).** The old entry here was stale:
-`apps/pullup/` and `tooling/` **are now tracked** (landed 2026-08-04 as `1e98a1d`).
+**Re-verified 2026-08-06 18:00 (`git status`, `git branch -vv`, `git worktree list`
+in both repos).** The 08-05 entry here is fully superseded — the dirty-main blocker it
+described was cleared that same evening, and the app-factory branches it listed no
+longer exist.
 
-What is actually dirty on `app-factory` main right now:
+**`app-factory`:**
 
-- Modified: `STATE.md`, `docs/07-roadmap.md`, `docs/process/decision-log.md`
-- Untracked: `docs/09-deployment-and-security.md`, `docs/marketing/` (~35 files —
-  the entire day's research output)
+- Working tree is **clean apart from `STATE.md`** (this sync). `docs/marketing/`
+  (~35 files), `docs/09-deployment-and-security.md`, `docs/07-roadmap.md` and the
+  decision log were all committed on 08-05 evening. The Part C blocker is gone.
+- Local branches: **`main` only.** Every `factory/*` branch has been reclaimed and
+  there are no stale worktrees. Branch reclamation is working.
+- ⚠️ **`main` is 12 commits ahead of `origin/main` — unpushed.** Everything from
+  `c002399` (per-rig merge/deploy policy) through `b35c228` (files page) exists only
+  on this machine. This is new debt, not carried, and it is the riskiest item here.
 
-This is no longer only hygiene: **it is what blocks `feature-part-c-repoint-daily`
-from re-deploying**, and any harness-merge run started tomorrow will hit the same wall.
-A commit pass on these files is the single highest-leverage first action tomorrow.
+**`skip-hero`:**
 
-Also loose, lower priority:
-
-- Merged-but-undeleted branches on app-factory: `factory/bug-merged-run-branches`,
-  `factory/feature-improvement-plan-context` — ironic, given the first one *is* the
-  branch-reclamation fix. Reclamation appears not to clean its own branch.
-- `skip-hero`: `marketing/` (5 files: strategy, brand-direction, content-calendar,
-  content-samples, naming-aso) is untracked in that repo, and branches
-  `factory/feature-msdn5cuj` (the verified smoke run) + `factory/feature-msdpir37`
-  (the failed badge run) are both still unmerged.
+- ⚠️ **`main` is 2 commits ahead of `origin/main` — unpushed** (`d55af96`, `4e2a40f`).
+- Untracked: `marketing/` (5 files: strategy, brand-direction, content-calendar,
+  content-samples, naming-aso, written 08-06 09:30). Modified: `.gitignore` (adds a
+  `debug/` ignore for ad-hoc screen recordings — a real change worth committing).
+- **Three merged-but-unreclaimed branches, each still holding a worktree** under
+  `app-factory/orchestration/worktrees/`: `factory/bug-save-video-not-working`,
+  `factory/feature-split-preview-into-two`, `factory/feature-pose-stabilizer-tracking`.
+  All three are merged into skip-hero main and safe to delete. **Why reclamation
+  missed them:** all three landed via the *founder's* GitHub PR merges or a manual
+  merge, not through the engine's deploy step — so the engine never saw the merge and
+  never ran cleanup. Worth a harness fix: reclaim on "branch is an ancestor of the base
+  branch", not only on "this run merged it".
+- `factory/feature-msdpir37` is genuinely unmerged (the failed run) — keep its worktree
+  until that run is retried or its commits are cherry-picked.
+- `factory/feature-msdn5cuj` (the 08-03 smoke run) has been reclaimed since the last
+  entry; its work is on main as `bafb3c0`.
