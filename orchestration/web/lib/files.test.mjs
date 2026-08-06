@@ -7,12 +7,13 @@ import path from "node:path";
 
 import { FILE_ROOTS, listFileRoots, resolveFileDownload } from "./files.mjs";
 
-/** Build a throwaway fake home containing both allowlisted skip-hero roots. */
+/** Build a throwaway fake home containing all allowlisted skip-hero roots. */
 function makeHome(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "files-test-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const examples = path.join(home, "src", "skip-hero", "examples");
   const debug = path.join(home, "src", "skip-hero", "debug");
+  const documents = path.join(home, "src", "skip-hero", "documents");
   const write = (base, rel, text, mtime) => {
     const p = path.join(base, rel);
     fs.mkdirSync(path.dirname(p), { recursive: true });
@@ -23,7 +24,9 @@ function makeHome(t) {
   write(examples, "clips/warmup.mov", "x".repeat(64), new Date("2026-03-01T00:00:00Z"));
   write(debug, "render.debug.mov", "x".repeat(128), new Date("2026-02-01T00:00:00Z"));
   write(debug, "pose/frame-1.png", "x".repeat(32), new Date("2026-02-02T00:00:00Z"));
-  return { home, examples, debug };
+  write(documents, "skip-hero-architecture.md", "# Architecture\n", new Date("2026-04-01T00:00:00Z"));
+  write(documents, "decisions/0001-adr.md", "# ADR 1\n", new Date("2026-04-02T00:00:00Z"));
+  return { home, examples, debug, documents };
 }
 
 function rootByKey(roots, key) {
@@ -53,6 +56,13 @@ test("listFileRoots lists both allowlisted roots newest-first with totals", (t) 
   assert.deepEqual(
     debug.files.map((f) => f.path),
     ["pose/frame-1.png", "render.debug.mov"]
+  );
+  const documents = rootByKey(roots, "skip-hero-documents");
+  assert.equal(documents.exists, true);
+  assert.equal(documents.path, "~/src/skip-hero/documents");
+  assert.deepEqual(
+    documents.files.map((f) => f.path),
+    ["decisions/0001-adr.md", "skip-hero-architecture.md"]
   );
 });
 
@@ -98,6 +108,11 @@ test("resolveFileDownload serves real files with the right type and disposition"
   assert.equal(encoded.inline, true); // encoded separator decodes to the same file
   const json = resolveFileDownload("skip-hero-examples", "run.golden.json", home);
   assert.deepEqual({ type: json.type, inline: json.inline }, { type: "application/json", inline: false });
+  const md = resolveFileDownload("skip-hero-documents", "decisions/0001-adr.md", home);
+  assert.deepEqual(
+    { type: md.type, inline: md.inline, filename: md.filename },
+    { type: "text/markdown; charset=utf-8", inline: false, filename: "0001-adr.md" }
+  );
 });
 
 test("resolveFileDownload rejects traversal, encoded traversal, and absolute paths", (t) => {
@@ -114,10 +129,12 @@ test("resolveFileDownload rejects traversal, encoded traversal, and absolute pat
     "..\\loot.txt",
     "bad\0.png",
   ]) {
-    const r = resolveFileDownload("skip-hero-debug", rel, home);
-    assert.ok(r.error, `expected rejection for ${JSON.stringify(rel)}`);
-    assert.ok([400, 403, 404].includes(r.status), `unexpected status for ${JSON.stringify(rel)}`);
-    assert.equal(r.path, undefined);
+    for (const key of ["skip-hero-debug", "skip-hero-documents"]) {
+      const r = resolveFileDownload(key, rel, home);
+      assert.ok(r.error, `expected rejection for ${key} ${JSON.stringify(rel)}`);
+      assert.ok([400, 403, 404].includes(r.status), `unexpected status for ${key} ${JSON.stringify(rel)}`);
+      assert.equal(r.path, undefined);
+    }
   }
 });
 
@@ -135,6 +152,18 @@ test("resolveFileDownload rejects symlink escapes with realpath containment", (t
   // An inside-the-root symlink still resolves.
   fs.symlinkSync(path.join(debug, "render.debug.mov"), path.join(debug, "alias.mov"));
   assert.equal(resolveFileDownload("skip-hero-debug", "alias.mov", home).inline, true);
+});
+
+test("resolveFileDownload contains the documents root exactly like the others", (t) => {
+  const { home, documents } = makeHome(t);
+  const outside = path.join(home, "outside");
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "secret.md"), "x");
+  fs.symlinkSync(path.join(outside, "secret.md"), path.join(documents, "escape.md"));
+  const escaped = resolveFileDownload("skip-hero-documents", "escape.md", home);
+  assert.deepEqual({ status: escaped.status, path: escaped.path }, { status: 403, path: undefined });
+  // A sibling root's file is not reachable through the documents key.
+  assert.equal(resolveFileDownload("skip-hero-documents", "render.debug.mov", home).status, 404);
 });
 
 test("resolveFileDownload accepts only declared root keys", (t) => {

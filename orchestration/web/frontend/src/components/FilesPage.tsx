@@ -6,13 +6,15 @@ import { fmtBytes, fmtWhen } from "../format";
 
 const VIDEO_EXTS = [".mov", ".mp4"];
 const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+const TEXT_EXTS = [".md", ".txt", ".json"];
 
-type MediaKind = "video" | "image" | null;
+type MediaKind = "video" | "image" | "text" | null;
 
 function mediaKind(name: string): MediaKind {
   const lower = name.toLowerCase();
   if (VIDEO_EXTS.some((e) => lower.endsWith(e))) return "video";
   if (IMAGE_EXTS.some((e) => lower.endsWith(e))) return "image";
+  if (TEXT_EXTS.some((e) => lower.endsWith(e))) return "text";
   return null;
 }
 
@@ -22,9 +24,10 @@ interface PreviewTarget {
   kind: Exclude<MediaKind, null>;
 }
 
-/** Browse the allowlisted skip-hero debug directories: files grouped by root,
- *  newest-first. Videos and images open inline (blob object-URL — an <a href>
- *  can't carry the token); everything else downloads. Strictly read-only. */
+/** Browse the allowlisted skip-hero directories: files grouped by root,
+ *  newest-first. Videos, images, and text docs open inline (blob fetch — an
+ *  <a href> can't carry the token); everything else downloads. Strictly
+ *  read-only. */
 export function FilesPage() {
   // Listings are cheap stat walks; refresh every 30 s (paused while hidden).
   const { data, error, loading, refresh } = usePolling(() => api.files(), 30000);
@@ -153,23 +156,31 @@ function RootPanel({
   );
 }
 
-/** Inline media preview: auth-fetch the blob, object-URL it into a <video> or
- *  <img>. No range support — large videos fully download before playing. */
+/** Inline preview: auth-fetch the blob, then object-URL it into a <video> or
+ *  <img>, or read it as text into a <pre>. No range support — large videos
+ *  fully download before playing. */
 function FilePreview({ target, onClose }: { target: PreviewTarget; onClose: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let obj: string | null = null;
     let cancelled = false;
     setUrl(null);
+    setText(null);
     setError(null);
     api
       .fileBlob(target.rootKey, target.path)
-      .then((blob) => {
+      .then(async (blob) => {
         if (cancelled) return;
-        obj = URL.createObjectURL(blob);
-        setUrl(obj);
+        if (target.kind === "text") {
+          const body = await blob.text();
+          if (!cancelled) setText(body);
+        } else {
+          obj = URL.createObjectURL(blob);
+          setUrl(obj);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -178,7 +189,7 @@ function FilePreview({ target, onClose }: { target: PreviewTarget; onClose: () =
       cancelled = true;
       if (obj) URL.revokeObjectURL(obj);
     };
-  }, [target.rootKey, target.path]);
+  }, [target.rootKey, target.path, target.kind]);
 
   return (
     <section className="panel file-preview">
@@ -189,9 +200,10 @@ function FilePreview({ target, onClose }: { target: PreviewTarget; onClose: () =
         </button>
       </div>
       {error && <div className="error-box">preview failed to load: {error}</div>}
-      {!url && !error && <div className="empty-state">Loading {target.kind}… (full file downloads before playing)</div>}
+      {!url && text === null && !error && <div className="empty-state">Loading {target.kind}…</div>}
       {url && target.kind === "video" && <video className="file-preview-media" src={url} controls autoPlay playsInline />}
       {url && target.kind === "image" && <img className="file-preview-media" src={url} alt={target.path} />}
+      {text !== null && target.kind === "text" && <pre className="doc-view">{text}</pre>}
     </section>
   );
 }
