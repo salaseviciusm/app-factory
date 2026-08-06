@@ -755,6 +755,49 @@ identically.
   executor before resuming. `resume` gained the same guard: it refuses when a
   live executor exists, pointing at `retry --force`.
 
+## 12g. factory-retro: weekly harness retrospective with a living backlog (implemented 2026-08-06)
+
+Self-review started every cycle from a cold telemetry read, and the daily
+standup kept re-surfacing the same top observation because nothing durable
+recorded it. `factory-retro` is the factory's memory of harness observations.
+
+**Workflow** (`workflows/factory-retro.json`, rig `app-factory`,
+`"worktree": false` like self-review — it works in the live checkout): one
+agent step `retro` (prompt `retro-analyst`, 30 min) then a `notify` step. No
+gates, no deploy, no spawned runs; it changes no app code. Cadence is manual —
+`factory-run start --rig app-factory --workflow factory-retro --prompt "..."` —
+no cron is wired (founder decides cadence separately).
+
+**What the retro step does:** digests the last 7 days of run evidence —
+`factory-run report --days 7 --json`, the run dirs of runs that reached a
+terminal state in the window (`engine.log`, `findings.md`, `escalation.md`),
+`factory-run context <run_id>` for per-step cost on outliers — and maintains
+`docs/process/harness-backlog.md`.
+
+**The backlog file contract** (`docs/process/harness-backlog.md`): one ranked
+living file, most valuable open item first. Items are `## R<N> — <title>`
+blocks with a Status (`open` | `accepted` | `declined` | `done`), an
+Observation carrying evidence (run id plus step, cost, or review cycles), a
+Proposed change, and a Rough cost to try. Append-aware rules mirror the
+decision log: append new items, update Status/evidence in place, never delete
+or renumber. The retro reconciles statuses against
+`docs/process/decision-log.md` — an item the founder declined is marked
+`declined (see D<n>)` and is never re-raised as a new open item. The agent
+commits only the backlog file, directly to `main` (same trust level as
+appending to the decision log); no commit when the window changed nothing.
+
+**Summary notification:** the retro writes a short `retro-summary.md` into the
+run dir (window stats, top open items, status changes), and the notify step
+posts it via the step's `summaryFile` field — a notify step with `summaryFile`
+posts that run-dir file's contents (plus the usage line) instead of the
+default merge/deploy-flavoured completion message; without the field the
+message is byte-identical to before (`classifyNotifyMessage`, selftest-pinned).
+
+**Feed into self-review:** the self-reviewer prompt reads the backlog as
+evidence source 1 and starting ranking — open items first, `declined` items
+excluded — and its improvement plan names the `R<N>` item it takes.
+`workflows/self-review.json` itself is unchanged.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.

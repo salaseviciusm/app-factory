@@ -2011,6 +2011,18 @@ function classifyDeployMerge({ merge, mergedSha }) {
   return { action: mergedSha ? "already-merged" : "merge" };
 }
 
+/** Pure core of the notify step's message choice. A workflow may set
+ *  `summaryFile` on its notify step (e.g. factory-retro's retro-summary.md):
+ *  when the run-dir file exists with content, its text replaces the default
+ *  merge/deploy-flavoured completion message (the usage line is still
+ *  appended by the caller). Absent field, missing file, or blank file all
+ *  fall back to the default, so workflows without summaryFile are untouched. */
+function classifyNotifyMessage({ summaryFile, summaryText }) {
+  const hasSummary = typeof summaryText === "string" && summaryText.trim().length > 0;
+  if (summaryFile && hasSummary) return { source: "summary", body: summaryText.trim() };
+  return { source: "default" };
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -2808,31 +2820,50 @@ function execRun(id) {
           saveRun(run);
         }
       } else if (step.type === "notify") {
-        const planTitle = (() => {
+        // summaryFile (e.g. factory-retro): the step posts a run-dir summary
+        // instead of the merge/deploy message — see classifyNotifyMessage.
+        const summaryText = (() => {
+          if (!step.summaryFile) return null;
           try {
-            return fs.readFileSync(path.join(runDir, "plan.md"), "utf8").split("\n")[0].replace(/^#\s*/, "");
+            return fs.readFileSync(path.join(runDir, step.summaryFile), "utf8");
           } catch {
-            return run.prompt.slice(0, 80);
+            return null;
           }
         })();
-        const lines = [`:white_check_mark: Run ${id} complete: *${planTitle}*`];
-        if (run.mergedSha) {
-          lines.push(`Rig: ${run.rig} · merged into ${run.baseBranch} (${run.mergedSha}) — local merge only, push when ready.`);
+        const choice = classifyNotifyMessage({ summaryFile: step.summaryFile || null, summaryText });
+        if (choice.source === "summary") {
+          const lines = [choice.body];
+          const usage = usageLine(id);
+          if (usage) lines.push(usage);
+          notify(run, lines.join("\n"), run.qrPath);
+          result = { ok: true, summary: "founder notified" };
         } else {
-          lines.push(`Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`);
+          const planTitle = (() => {
+            try {
+              return fs.readFileSync(path.join(runDir, "plan.md"), "utf8").split("\n")[0].replace(/^#\s*/, "");
+            } catch {
+              return run.prompt.slice(0, 80);
+            }
+          })();
+          const lines = [`:white_check_mark: Run ${id} complete: *${planTitle}*`];
+          if (run.mergedSha) {
+            lines.push(`Rig: ${run.rig} · merged into ${run.baseBranch} (${run.mergedSha}) — local merge only, push when ready.`);
+          } else {
+            lines.push(`Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`);
+          }
+          lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
+          if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
+            lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
+          }
+          if (!run.mergedSha) {
+            lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
+          }
+          if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
+          const usage = usageLine(id);
+          if (usage) lines.push(usage);
+          notify(run, lines.join("\n"), run.qrPath);
+          result = { ok: true, summary: "founder notified" };
         }
-        lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
-        if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
-          lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
-        }
-        if (!run.mergedSha) {
-          lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
-        }
-        if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
-        const usage = usageLine(id);
-        if (usage) lines.push(usage);
-        notify(run, lines.join("\n"), run.qrPath);
-        result = { ok: true, summary: "founder notified" };
       } else if (step.type === "spawn") {
         // Chained run: launch a full workflow run (its own graph execution)
         // with the founder-approved prompt file from this run's dir.
@@ -4421,6 +4452,21 @@ function cmdSelftest() {
   for (const [name, ok] of notifyChecks) {
     console.log(`notify-routing ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`notify-routing check failed: ${name}`);
+  }
+  // Notify-step message choice (pure): a summaryFile step posts the run-dir
+  // summary; every fallback path keeps the default message, so workflows
+  // without the field are byte-identical to before summaryFile existed.
+  const nm = (over) => classifyNotifyMessage({ summaryFile: null, summaryText: null, ...over });
+  const notifyMessageChecks = [
+    ["no summaryFile keeps the default message", nm({}).source === "default"],
+    ["summaryFile with content posts the summary", (() => { const c = nm({ summaryFile: "retro-summary.md", summaryText: "Retro: 3 open items\n" }); return c.source === "summary" && c.body === "Retro: 3 open items"; })()],
+    ["summaryFile but missing file falls back", nm({ summaryFile: "retro-summary.md" }).source === "default"],
+    ["summaryFile but blank file falls back", nm({ summaryFile: "retro-summary.md", summaryText: " \n\t" }).source === "default"],
+    ["stray summary text without the field is ignored", nm({ summaryText: "orphan" }).source === "default"],
+  ];
+  for (const [name, ok] of notifyMessageChecks) {
+    console.log(`notify-message ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`notify-message check failed: ${name}`);
   }
   // Check normalization, protected-path matching, gate resolution, and
   // renderer loading (pure cores + the live rigs.json / renderers/ contract).

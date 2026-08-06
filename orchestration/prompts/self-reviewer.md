@@ -9,33 +9,40 @@ Founder focus for this review (may be generic):
 
 {{STEERING}}
 
-## Evidence to gather (telemetry first, then targeted context reads)
+## Evidence to gather (backlog first, then telemetry, then targeted context reads)
 
-1. Run `~/src/app-factory/orchestration/bin/factory-run report --days 30` - run
+1. Read `docs/process/harness-backlog.md` — the ranked harness-improvement
+   backlog the factory-retro workflow maintains from weekly run evidence. Its
+   open items, most-valuable-first, are your default ranking: start from the
+   top open item and let the rest of the evidence confirm, re-rank, or displace
+   it. Never propose an item marked `declined` — the founder already said no
+   (the status names the decision entry). If the file does not exist yet, start
+   from the telemetry instead.
+2. Run `~/src/app-factory/orchestration/bin/factory-run report --days 30` - run
    outcomes, step statistics (failure counts, durations, retry attempts), review
    findings, deploy artifacts.
-2. Run `~/src/app-factory/orchestration/bin/factory-run context <run_id>` on runs
+3. Run `~/src/app-factory/orchestration/bin/factory-run context <run_id>` on runs
    that stand out - per step/attempt: prompt size, steering/findings injections,
    tokens by category (cache reads dominate cost), cost, duration, assistant
    turns, tool_use counts by tool, and model(s). This is where "why was this run
    expensive/slow" gets answered with numbers.
-3. For any interesting run, inspect `~/src/app-factory/orchestration/runs/<id>/`:
+4. For any interesting run, inspect `~/src/app-factory/orchestration/runs/<id>/`:
    `engine.log` (step transitions), `review.json` (validation verdicts),
    `*.prompt.md` (exactly what each agent was told), `findings.md`,
    `deviations.md`, and `*.transcript.jsonl` (each step's full stream-json
    working transcript). Transcripts are MBs: sample, don't ingest - pull
    specific events (grep for a tool name or an error string, read the first and
    last lines), never read a whole transcript into your context.
-4. Inventory the founder<->OpenClaw conversations that start runs:
+5. Inventory the founder<->OpenClaw conversations that start runs:
    `~/src/app-factory/orchestration/bin/factory-run context --sessions`
    (mtime, size, message counts per session transcript). Sample the relevant
    sessions the same way: targeted reads, not full ingestion.
-5. Read the harness itself in this checkout: `orchestration/bin/factory-run`
+6. Read the harness itself in this checkout: `orchestration/bin/factory-run`
    (engine), `orchestration/prompts/*.md` (node prompts),
    `orchestration/workflows/*.json`, `orchestration/rigs.json`,
    `openclaw/workspace/skills/factory-feature/SKILL.md`, and the design doc
    `docs/08-orchestration-layer.md`.
-6. Read the founder record: `docs/process/decision-log.md` (what was decided and
+7. Read the founder record: `docs/process/decision-log.md` (what was decided and
    why - especially entries that supersede earlier ones) and the "Observed founder
    patterns" section of `docs/process/example-run.md` (how the founder decides,
    and the corrections he has had to make). These are the only durable trace of
@@ -69,6 +76,9 @@ What the telemetry shows, with run ids. What works (keep) and what doesn't (chan
 ## The ONE improvement
 The single highest-leverage change to the factory harness, implementable in one
 feature-dev run on the app-factory repo. Name the exact files to change and how.
+Name the backlog item this takes (`R<N>` from `docs/process/harness-backlog.md`);
+if the improvement is not on the backlog, say so and justify displacing the top
+open item.
 
 ## Acceptance criteria
 Numbered, testable statements (a separate model validates the implementation

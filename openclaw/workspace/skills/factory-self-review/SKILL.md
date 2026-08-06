@@ -18,9 +18,12 @@ review verdicts, step durations; never raw context dumps).
   --prompt "<founder's focus, or: periodic self-review - find the highest-leverage harness improvement>"
 ```
 
-The analyze node reads the telemetry report + run dirs + the harness source and
-writes an improvement plan (ONE concrete change + backlog). The engine posts the
-plan to #factory-builds and waits at the gate.
+The analyze node starts from `docs/process/harness-backlog.md` — the ranked
+harness-improvement backlog the `factory-retro` workflow maintains from weekly
+run evidence (open items first; `declined` items are off the table) — then
+reads the telemetry report + run dirs + the harness source and writes an
+improvement plan (ONE concrete change + backlog). The engine posts the plan to
+#factory-builds and waits at the gate.
 
 ## The founder conversation (your main job)
 

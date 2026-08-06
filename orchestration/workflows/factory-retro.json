@@ -1,0 +1,9 @@
+{
+  "name": "factory-retro",
+  "description": "Weekly-ish harness retrospective: digest the last 7 days of run evidence (telemetry report, terminal runs' dirs, decision log) in the live app-factory checkout, maintain the single ranked harness-improvement backlog at docs/process/harness-backlog.md (append new items, update statuses in place, reconcile against founder decisions), commit only that file, then post a short summary to the rig channel. No gates, no deploy, no spawned runs; cadence is manual via factory-run start.",
+  "worktree": false,
+  "steps": [
+    { "id": "retro", "type": "agent", "prompt": "retro-analyst", "timeoutMinutes": 30 },
+    { "id": "notify", "type": "notify", "summaryFile": "retro-summary.md" }
+  ]
+}
