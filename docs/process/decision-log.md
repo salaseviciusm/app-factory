@@ -460,3 +460,28 @@ resolved or killed rather than left failed.
 sideline/backlog the pullup app entirely." Supersedes the pullup-as-app-#1
 direction from 2026-08-02 and removes the recurring "un-pause pullup" standup
 recommendation.
+
+## D28 — Camera counting is not the wedge; footwork verification is (2026-08-07)
+
+**Context:** the 08-06 skip-hero marketing strategy read camera-based rep counting
+as "table stakes, not the wedge," because every competitor ships it. The research
+commissioned by the founder on 08-07 (`docs/marketing/apps/skip-hero.md`, `da3a46b`)
+pulled the store numbers: all five camera-based jump-rope counters hold **44 US
+ratings between them** across three and a half years, while hardware-tethered
+Crossrope — £199 rope plus $4.99/mo — holds **13,476**. Competitors shipping a
+feature nobody downloads is evidence about demand, not saturation.
+**Decision:** stop positioning skip-hero on counting. The defensible wedge is
+**footwork verification** ("it can tell which foot you landed on"), gated on F1 —
+surfacing the landing readout on the live session and summary screens, since it
+exists today only on the Debug screen. F1 started as
+`feature-f1-surface-footwork-readout`. Run **tile rush as a rhythm game** as a
+distribution experiment only (filmable today, zero product work, worst-monetising
+cohort — it tests whether we can get reach at all, it is not positioning). Let the
+**"no £199 rope"** Crossrope-intercept query set compound on YouTube in the
+background; it is the only audience in this space proven to spend money.
+Standing copy constraint: the app must never claim to name a move — there is no
+move classifier, and marketing recognition invites a review-driven expectation gap.
+**Why:** the previous read inverted the evidence, and the content plan built on it
+was unbuildable — its designated hero clip shows the app naming what the user's feet
+did, which no user-facing screen does. Every calendar in that set also assumed a
+store launch against a repo at 0.1.0 with no listing, no paywall and no IAP.
