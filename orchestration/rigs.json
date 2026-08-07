@@ -25,7 +25,8 @@
       "easSlug": "pace",
       "deploy": {
         "type": "eas-update",
-        "branch": "preview"
+        "branch": "preview",
+        "updatePlatform": "ios"
       }
     },
     "app-factory": {

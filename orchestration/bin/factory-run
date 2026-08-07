@@ -816,8 +816,21 @@ function maxStepAttempt(names, stepId) {
  *  safe when the executor leads its own group (the detachExec invariant);
  *  skipped otherwise so a foreground `factory-run exec` can never kill its
  *  caller's shell job. */
+/** Node 26 removed process.getpgrp(); fall back to ps. Returns null when the
+ *  pgid cannot be determined, which callers must treat as "not the leader". */
+function currentProcessGroup() {
+  if (typeof process.getpgrp === "function") {
+    try {
+      return process.getpgrp();
+    } catch {}
+  }
+  const out = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).stdout || "";
+  const pgid = parseInt(out.trim(), 10);
+  return Number.isFinite(pgid) ? pgid : null;
+}
+
 function reapAgentSurvivors(runDir) {
-  if (process.getpgrp() !== process.pid) {
+  if (currentProcessGroup() !== process.pid) {
     log(runDir, "timeout reap skipped: executor is not its own process-group leader");
     return;
   }
