@@ -2332,6 +2332,35 @@ function probeClaude() {
   return { name, ok: true, detail: res.output.trim().split("\n")[0] };
 }
 
+/** Pure decision core for probeRigsCommitted (exercised by selftest): given
+ *  `git status --porcelain -- orchestration/rigs.json` output, returns the
+ *  problem message, or null when the file is clean. */
+function rigsDirtyProblem(porcelainOutput) {
+  if (!porcelainOutput || !porcelainOutput.trim()) return null;
+  return (
+    "orchestration/rigs.json has uncommitted changes; runs and worktrees only durably " +
+    "see committed rig config — commit it, then start (or resume) the run"
+  );
+}
+
+/** The governing rigs.json (snapshotted into RIGS at module load) must be
+ *  committed: worktree-executed engine copies read the committed file, and an
+ *  executor's snapshot is whatever the checkout held at spawn time, so an
+ *  uncommitted edit means the run silently ignores config the operator
+ *  believes is in effect. Scoped to the single rigs.json pathspec so unrelated
+ *  dirt (STATE.md, runs/**) never trips it. */
+function probeRigsCommitted() {
+  const name = "rigs:committed";
+  const root = path.resolve(ORCH_DIR, "..");
+  const res = preflightSpawn("git", ["-C", root, "status", "--porcelain", "--", "orchestration/rigs.json"], undefined, 15000);
+  if (res.status !== 0) {
+    return { name, ok: false, detail: `git status for orchestration/rigs.json in ${root} exited ${res.status}: ${res.output.slice(0, 200)}` };
+  }
+  const problem = rigsDirtyProblem(res.stdout);
+  if (problem) return { name, ok: false, detail: `${problem} (repo: ${root})` };
+  return { name, ok: true, detail: "orchestration/rigs.json clean" };
+}
+
 /** EAS probes for one rig, run in the rig's live app directory (preflight runs
  *  before any worktree exists). Rigs without eas-update deploy get none. */
 function easProbes(rig) {
@@ -2399,7 +2428,7 @@ function policyProbe(rig) {
 
 /** Run all probes for the given rigs. Returns {ok, probes: [{name, ok, detail}], summary}. */
 function runPreflight(rigNames) {
-  const probes = [probeNotifyContract(), probeClaude()];
+  const probes = [probeRigsCommitted(), probeNotifyContract(), probeClaude()];
   for (const name of rigNames) {
     let rig;
     try {
@@ -4785,6 +4814,20 @@ function cmdSelftest() {
   for (const [name, ok] of publishChecks) {
     console.log(`publish-args ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`publish-args check failed: ${name}`);
+  }
+  // Dirty-rigs preflight decision (pure): only non-empty porcelain output for
+  // orchestration/rigs.json is a problem, and the message names the file and
+  // the commit remedy. The git-spawning probe itself stays out of selftest so
+  // worktree-executed selftest never depends on the live tree's state.
+  const rigsDirtyChecks = [
+    ["clean output is no problem", rigsDirtyProblem("") === null],
+    ["whitespace-only output is no problem", rigsDirtyProblem(" \n") === null],
+    ["modified rigs.json names the file", /orchestration\/rigs\.json/.test(rigsDirtyProblem(" M orchestration/rigs.json\n") || "")],
+    ["modified rigs.json instructs to commit", /commit/.test(rigsDirtyProblem(" M orchestration/rigs.json\n") || "")],
+  ];
+  for (const [name, ok] of rigsDirtyChecks) {
+    console.log(`rigs-dirty ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`rigs-dirty check failed: ${name}`);
   }
   // Embedded-JSON extraction (pure). The fixture mirrors real `eas update:list
   // --json --non-interactive` output: the payload followed by the eas-cli
