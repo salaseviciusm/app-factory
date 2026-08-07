@@ -65,6 +65,27 @@ export function stateKind(state: string): string {
   return "muted";
 }
 
+export type RunSectionKey = "approval" | "running" | "failed" | "completed";
+
+/** Run-list sections in attention order: founder-blocked first, archive last. */
+export const RUN_SECTIONS: { key: RunSectionKey; label: string }[] = [
+  { key: "approval", label: "Needs approval" },
+  { key: "running", label: "Running" },
+  { key: "failed", label: "Failed" },
+  { key: "completed", label: "Completed" },
+];
+
+/** Which run-list section a run's state falls in. "rejected"/"cancelled" are
+ *  settled founder decisions, not open problems, so they archive under
+ *  completed alongside any unknown state; stalled runs are still `running:*`
+ *  and stay in running with their badge carrying the warning. */
+export function runSection(state: string): RunSectionKey {
+  if (state === "awaiting-approval" || state === "awaiting-merge") return "approval";
+  if (state.startsWith("running:") || state === "deploying" || state === "setup" || state === "queued" || state === "recovering") return "running";
+  if (state === "failed") return "failed";
+  return "completed";
+}
+
 /** CSS modifier for a telemetry step-status badge ("recover" = deploy hit base
  *  drift and looped the gates back; "gate" = a founder-gated check parked the
  *  run on the check gate — neither is a step failure). */
