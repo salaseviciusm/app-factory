@@ -8,10 +8,13 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-08-06 18:00 (EOD sync). No pullup runs in `factory-run list`
-  or `telemetry.db` (ever); no subagents since 2026-08-05 12:12; no commit has touched
-  `apps/pullup/` since `1e98a1d` (2026-08-04, which tracked the existing artifacts).
-  Artifacts intact on disk and in git. Dormant 3 days.
+- **Last verified:** 2026-08-07 18:00 (EOD sync). Still correct, still dormant, nothing
+  to change. No pullup runs in `factory-run list` or `telemetry.db` (ever); no subagent
+  has been spawned since 2026-08-05 12:12; the only commit to touch `apps/pullup/` since
+  `1e98a1d` (2026-08-04) is `f361b41` — the 08-06 EOD sync editing this very file, not
+  product work. Artifacts intact on disk and in git. Dormant 4 days, correctly so under
+  D27; skip-hero took all capacity again today (D28 named its wedge).
+  _(Prior verification: 2026-08-06 18:00, same conclusion.)_
 
 ## BACKLOGGED (2026-08-06, D27) — supersedes the 08-03 hold
 

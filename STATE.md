@@ -6,9 +6,10 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-08-06 18:00 (EOD sync — every in-flight item reconciled against
-> `factory-run list`/`status --json`, telemetry.db, git log + branch state, and the
-> subagent run table; stale entries corrected below)
+> Last updated: 2026-08-07 18:00 (EOD sync — every in-flight item reconciled against
+> `factory-run list`/`status --json`, telemetry.db, per-run engine.logs, git log +
+> branch/worktree/merge-base state in all three rigs, and the subagent run table;
+> corrections in the 2026-08-07 EOD block near the end of this file)
 
 ## Orchestration layer (new 2026-08-03)
 
@@ -516,3 +517,105 @@ No open gates, no held deploys.
 **Carried:** the shirtless-footage reach risk (a silent IG down-rank corrupts the
 small-stranger-audience test the whole pipeline reads its signal from) — cheapest fix a
 vest, better fix the skeleton-replay export. Not started; needs a founder call on which.
+
+### 18:00 EOD sync (chief of staff) — engine- and git-verified
+
+Reconciled every in-flight claim above and in `apps/pullup/STATUS.md` against
+`factory-run list` / `status --json` histories, `orchestration/telemetry.db`, per-run
+`engine.log`s, `git log` / `git branch -vv` / `git worktree list` / `merge-base` in all
+three rigs, and the OpenClaw `subagent_runs` table.
+
+**State of play at close: zero runs executing, zero gates open, one run failed today,
+three runs `awaiting-merge`, no active subagents.**
+
+**Corrections to the 11:00 cutoff entry above (both items it listed as "started"):**
+
+- **`feature-f1-surface-footwork-readout` did not run — it FAILED at 15:05 BST**
+  (14:05:55 UTC), step 1/11 `plan-discussion`, reason `discussion idle timeout hit
+  (240 minutes with no founder activity) — failing loudly, never auto-approving`.
+  $3.06 spent, **zero commits** (its branch tip is just main). The plan step succeeded:
+  it verified the approach against the code (`landing-detected` carries `feet`/`stance`,
+  `SessionRuntime.recentLandings` is what the debug feed renders, the summary screen
+  already reads a single `SessionDetail` projection) and posted a good plan summary to
+  Slack at **11:05 BST**. Nobody answered for four hours. `plan.md` and the full
+  discussion transcript are preserved under
+  `orchestration/runs/feature-f1-surface-footwork-readout/` — a retry can re-use them
+  and start from the same plan. **The only defensible marketing wedge (D28) is
+  therefore still unbuilt.**
+  Engine notified Slack correctly both times (question 11:05, failure 15:06), so this
+  is a missed reply, not a missed dispatch — the opposite failure mode to 08-06.
+  Harness follow-up: a *discussion* gate that hits its idle timeout destroys the run and
+  its spend. It should park the run as `awaiting-approval` indefinitely, or checkpoint so
+  a retry resumes at turn 2, rather than terminating work that had already passed plan.
+- **`bug-preflight-assertion-fails` is `done` and merged** — `c5a77a6` (11:11) +
+  `308b947` (11:17), $6.46 (the entry estimated ~$4). Runs now abort at preflight while
+  `orchestration/rigs.json` is uncommitted. Confirmed live in the f1 run's own preflight
+  block.
+
+**Idle since 11:17.** No file was written anywhere under `~/src` after 11:20 except
+`telemetry.db` and the f1 run's own failure records — verified by `find -newermt`. No
+subagent was spawned today. That is 6h45m idle, the second consecutive day with a long
+dead afternoon, though for a different reason than yesterday's.
+
+**Awaiting founder, unchanged since the cutoff and now verified by `merge-base`:** all
+three Pace branches are genuinely unmerged into `running-with-pace` main —
+`factory/feature-pace-social-page-signed` (4 commits, $12.06),
+`factory/feature-move-territory-calculation` (4 commits, $28.82),
+`factory/feature-reduce-event-storage-phone` (5 commits, $50.52). All three sit at
+`awaiting-merge` 11/11 with review and tests green. **$91.40 of finished, green work has
+now been parked for a full day** because the pace merge policy is "review" and the engine
+never pushes a base branch.
+
+**Overnight skip-hero work absent from the narrative above** (all landed before the
+standup, all on main and pushed): `a49123c` founder pre-fix device captures as fixtures
+guarding ADR 0023, `81c2c61` drop the redundant y-flip in live iOS pose mapping,
+`bug-live-ios-pose-y` (done, $11.22, incl. a founder-approved golden re-baseline and a
+correct auto-revert of protected-path changes), and the `examples/img-0502-regression-fixture`
+merge `0285e4d` carrying the OTA badge plus the IMG_0502/0508/0509 goldens.
+
+**`running-with-pace` is still not listed under "Active apps"** — the 08-07 standup
+flagged this itself and it was not fixed. It has three finished runs awaiting merge and
+was the largest overnight consumer. Fix at the next standup or now.
+
+**Housekeeping — re-verified 18:00, and it has got worse, not better:**
+
+- **`app-factory` main is 37 commits ahead of `origin/main`** (recorded as 12 at the last
+  EOD; nothing was pushed in between). Everything from the per-rig merge policy through
+  today's preflight assertion exists only on this machine. This is now the single largest
+  piece of unmanaged risk in the factory. Working tree clean apart from `STATE.md`.
+- **`skip-hero` main is in sync with origin** — the "2 commits ahead" from 08-06 was
+  cleared overnight. Untracked there: `marketing/` (5 files, still), plus a new `app.json`;
+  modified `.gitignore`. The `app.json` appearing untracked is worth a look — it is
+  normally a tracked Expo config.
+- **`running-with-pace` main is in sync with origin.**
+- **Merged-but-unreclaimed skip-hero branches are up from three to five**, each still
+  holding a worktree: `bug-save-video-not-working`, `feature-split-preview-into-two`,
+  `feature-pose-stabilizer-tracking`, `feature-retry-failed-run-feature`, and the empty
+  `feature-f1-surface-footwork-readout`. All are ancestors of main and safe to delete. The
+  08-06 harness fix for this — reclaim on "branch is an ancestor of the base branch", not
+  only "this run merged it" — was written down and never built. Third day carried.
+- `feature-msdpir37` is **closed**: worktree and branch force-removed 09:16, 2.10 GB
+  reclaimed, tip preserved as tag `archive/feature-msdpir37`. Confirmed on disk.
+
+**Needs founder attention tomorrow (in order):**
+
+1. **Merge the three Pace branches** — $91.40 of green, reviewed work idle for a day.
+   This is one command per branch and it is the highest-value thing on the list.
+   The policy question behind it (should a "review" rig auto-merge once review + tests
+   pass?) is still the founder's and still unanswered.
+2. **Retry F1 (`feature-f1-surface-footwork-readout`)** — it died on a four-hour
+   unanswered plan question, not on a problem. The plan was correct and is on disk.
+   **Ask: approve the plan as posted so the retry runs straight through** (it is the
+   only surface that makes the D28 footwork wedge filmable).
+3. **`app-factory` is 37 commits unpushed.** One `git push` fixes it. The standing
+   policy question — should harness merges push the base branch? — has now been open
+   three days while the exposure tripled.
+4. **Product destination, still missing.** D27 made skip-hero the priority and D28 named
+   the wedge, but there is still no ship date, no v1 scope line, and no store-submission
+   target. The marketing research and the F1 surface both exist to serve a launch that
+   has not been scheduled.
+5. **Marketing workflow template** — a reusable `factory-run` workflow off
+   `docs/marketing/synthesis/playbook.md`. Unstarted, unassigned, fourth day carried.
+6. **Shirtless-footage reach risk** — vest or skeleton-replay export. Needs a call.
+7. Still open from 08-05: branch protection on `main` (item 3 keeps making this more
+   relevant) and local-vs-rented VM timing.
