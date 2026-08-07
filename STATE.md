@@ -436,3 +436,83 @@ longer exist.
   until that run is retried or its commits are cherry-picked.
 - `factory/feature-msdn5cuj` (the 08-03 smoke run) has been reclaimed since the last
   entry; its work is on main as `bafb3c0`.
+
+---
+
+## Today — 2026-08-07 (standup posted 08:50)
+
+Engine-verified at 08:45 (`factory-run status --json`, `report --days 2/7`, git log in
+all three rigs). Overnight the founder ran a large build session: 15 runs reached a
+terminal state since the 08-06 standup, ~$155. **running-with-pace (Pace) is now an
+active app taking real capacity** — it is not yet listed under "Active apps" above.
+
+Proposed plan (proceeds at 11:00 absent a founder reply):
+
+1. **Pace — resume `feature-move-territory-calculation` at the deploy step.** Work is
+   done and green (4 commits, review + tests passed, failed only at 9/11 on the EAS web
+   export). Requires committing the `updatePlatform: "ios"` edit to `rigs.json` first.
+   DoD: EAS preview published, run reaches awaiting-merge.
+2. **Pace — restart `feature-reduce-event-storage-phone`.** Crashed at plan-discussion
+   turn 2 on `process.getpgrp is not a function` (engine bug, not the product); zero
+   commits on its branch. DoD: run reaches the plan gate again.
+3. **app-factory — fix `factory-run:820` `process.getpgrp`** (Node 26 removed it).
+   Two-minute guarded edit, not a run.
+4. **skip-hero — the 08-06 marketing research, still outstanding.** Never executed
+   (see the 08-06 correction above). Narrow it to one task: run the
+   `docs/marketing/synthesis/platform-selection.md` procedure against skip-hero and
+   write the answer to `docs/marketing/apps/skip-hero.md`. DoD: audiences, platforms,
+   per-audience content, and requested features, each with evidence or an explicit gap.
+
+Awaiting founder (engine-sourced): merge `factory/feature-pace-social-page-signed`;
+kill `feature-msdpir37` (superseded — its OTA badge landed as `d166920` via
+`feature-retry-failed-run-feature`); yes/no on the dirty-rigs preflight check.
+
+### 11:00 cutoff — founder replied at 09:10, day re-planned. Engine-verified.
+
+Founder's reply (09:10 BST): "3. Do this / 4. Yes please kick this off. Find multiple
+possible audiences and angles we could target / Kill the msdpir37 worktree." Acted on
+immediately (09:16 and 09:29 in-thread), remainder proceeded on the 11:00 default.
+
+**Done:**
+- `feature-msdpir37` **killed**; worktree and branch force-removed, 2.10 GB reclaimed.
+  Branch tip preserved as tag `archive/feature-msdpir37` in skip-hero (react-hooks lint
+  clean + speech-adapter-survives-missing-native-module; the OTA badge commit is
+  superseded by `d166920`). Third-day drift item closed.
+- Item 3 — `process.getpgrp` guarded (`db36627`); falls back to `ps -o pgid=` and treats
+  an undeterminable pgid as "not the group leader". `selftest` green. The pace rig's
+  `updatePlatform: "ios"` was committed in the same commit — that uncommitted edit was
+  the $28.82 overnight failure, and it is now actually closed rather than merely known.
+- Item 4 — research landed and **committed** (`da3a46b`, `docs/marketing/apps/skip-hero.md`,
+  738 lines). Broadened per the founder to multiple audiences and angles: 8 audiences,
+  each with its own kill-reason, and 3 ranked audience × angle × platform combos.
+  Spot-checked against source: `ad0bd8a` real, no RevenueCat/StoreKit in the repo, App
+  Store rating counts re-pulled independently (Crossrope 13,476 / 4.85, Jump Rope Counter
+  Pro 11, YaoYao 1,016) — all check out.
+  Headline finding: all five camera-based jump-rope counters hold **44 US ratings between
+  them** over 3.5 years, against Crossrope's 13,476. Camera counting is not "table stakes";
+  it is a table nobody is sitting at. Programming, structure and community are what sell.
+  Two consequences: the designated 08-06 hero clip is **unfilmable** (it shows the app
+  naming what your feet did, which no user-facing screen does), and Rank 0 is skipped —
+  no listing, no paywall, no IAP, so every calendar in that set assumes a launch that
+  cannot happen.
+- Items 1 and 2 (silent default, started 09:16) both **finished green and are now
+  `awaiting-merge`**: `feature-move-territory-calculation` ($28.82) and
+  `feature-reduce-event-storage-phone` ($50.52).
+
+**Proceeded on the 11:00 default (unanswered twice):**
+- **Dirty-rigs preflight check** → started as `bug-preflight-assertion-fails`
+  (app-factory, bug-fix, ~$4 expected). Scoped to `orchestration/rigs.json` only, so it
+  will not fire on unrelated dirt like this file.
+- **F1 — footwork readout on the live session + summary screens** → started as
+  `feature-f1-surface-footwork-readout` (skip-hero). UI surface only, reusing
+  `debug.tsx:183-210`; it gates the only defensible marketing angle. Explicit constraint
+  in the prompt: the app never claims to name a move.
+
+**Awaiting founder at cutoff:** three Pace branches to merge by hand (merge policy is
+"review"; the engine never pushes a base branch) — `factory/feature-pace-social-page-signed`
+($12.06), `factory/feature-move-territory-calculation`, `factory/feature-reduce-event-storage-phone`.
+No open gates, no held deploys.
+
+**Carried:** the shirtless-footage reach risk (a silent IG down-rank corrupts the
+small-stranger-audience test the whole pipeline reads its signal from) — cheapest fix a
+vest, better fix the skeleton-replay export. Not started; needs a founder call on which.
