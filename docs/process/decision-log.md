@@ -485,3 +485,31 @@ move classifier, and marketing recognition invites a review-driven expectation g
 was unbuildable — its designated hero clip shows the app naming what the user's feet
 did, which no user-facing screen does. Every calendar in that set also assumed a
 store launch against a repo at 0.1.0 with no listing, no paywall and no IAP.
+
+## D29 — Review-policy runs end at a PR; `sync` is the only exit from awaiting-merge (2026-08-09)
+
+**Context:** green runs on rigs without `policy.merge: "auto"` pushed
+`factory/<id>` and parked forever in `awaiting-merge` — no PR to review or
+discuss, and the run never turned green after the founder merged. D26 already
+pinned that the engine never pushes a rig's default branch.
+**Decision:** the deploy step's review path opens (or idempotently reuses) a
+GitHub PR from the run's branch into the rig default branch via `gh`
+(`gh pr create` pushes nothing, so D26 stands; a non-GitHub origin or missing
+`gh` degrades to a recorded `run.prWarning`, never a failed run).
+`factory-run sync <id>` is the single sanctioned exit from the still-terminal
+`awaiting-merge` state: a merged PR flips the run to `done` (recording
+`mergedSha` from the merge commit); a PR closed without merging flips it to the
+new terminal `closed` state — worktree torn down, branch kept alive in git
+(founder steering, 2026-08-09) so the chain is restartable. Follow-up runs
+(`factory-run followup`, or the run page's composer) chain feature-dev/bug-fix
+runs onto a green terminal parent (`awaiting-merge`, `done`, or `closed` —
+post-merge follow-ups allowed per founder steering: the PR gives good reference
+context), continuing the parent's branch and worktree so one PR accumulates the
+whole conversation; they run non-auto, so the child's plan discussion *is* the
+PR conversation. Cleanup refuses to reclaim a branch or worktree shared with a
+live chain member.
+**Why:** merging is a founder judgment and GitHub is where that judgment
+happens — the engine's job ends at an open, reviewable PR, and re-entering the
+run lifecycle must go through one auditable verb rather than loosened terminal
+states. Keeping the branch when a PR closes preserves the option value of the
+work at near-zero cost (a worktree is GBs; a branch is a ref).
