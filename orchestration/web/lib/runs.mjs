@@ -65,6 +65,9 @@ function summaryFromRunJson(run, usage, runDir) {
     stepIndex: run.stepIndex ?? 0,
     artifactUrl: run.artifactUrl || null,
     preview: run.preview || null,
+    branch: run.branch || `factory/${run.id}`,
+    pr: run.pr || null,
+    prWarning: run.prWarning || null,
     deployHeld: !!run.deployHeld,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
@@ -90,6 +93,9 @@ function summaryFromDbRow(r, usage) {
     stepIndex: null,
     artifactUrl: null,
     preview: null,
+    branch: `factory/${r.id}`,
+    pr: null,
+    prWarning: null,
     deployHeld: false,
     createdAt: r.created_at,
     updatedAt: r.finished_at || r.created_at,
@@ -304,6 +310,64 @@ export function readStepDoc(orchDir, id, stepId, kind, attempt) {
   return { text };
 }
 
+/**
+ * Ordered run chain (root → tip) containing `id`, derived from parentRun
+ * back-links over lightweight node records {id, parentRun, createdAt, ...}.
+ * Pure — exported for tests. Derivation (not a persisted childRuns array)
+ * keeps it schema-migration-free and robust to the single-childRun overwrite:
+ * the root is found by walking up (cycle-guarded), then every transitive
+ * descendant of the root is collected and ordered by createdAt.
+ */
+export function deriveChain(nodes, id) {
+  const byId = new Map(nodes.filter((n) => n && n.id).map((n) => [n.id, n]));
+  if (!byId.has(id)) return [];
+  let root = byId.get(id);
+  const seen = new Set([root.id]);
+  while (root.parentRun && byId.has(root.parentRun) && !seen.has(root.parentRun)) {
+    root = byId.get(root.parentRun);
+    seen.add(root.id);
+  }
+  const members = [root];
+  const inChain = new Set([root.id]);
+  const rest = [...byId.values()].sort((a, b) => ((a.createdAt || "") < (b.createdAt || "") ? -1 : 1));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const n of rest) {
+      if (!inChain.has(n.id) && n.parentRun && inChain.has(n.parentRun)) {
+        members.push(n);
+        inChain.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  return members.sort((a, b) => ((a.createdAt || "") < (b.createdAt || "") ? -1 : 1));
+}
+
+/** Chain entries for one run's detail page: every run dir's minimal record
+ *  (telemetry-only runs have no dir and stay out of the chain view). */
+function chainFor(orchDir, id) {
+  const runsDir = runsDirOf(orchDir);
+  const nodes = [];
+  if (fs.existsSync(runsDir)) {
+    for (const d of fs.readdirSync(runsDir)) {
+      if (!RUN_ID_RE.test(d)) continue;
+      const run = readJson(path.join(runsDir, d, "run.json"), null);
+      if (!run || !run.id) continue;
+      nodes.push({
+        id: run.id,
+        parentRun: run.parentRun || null,
+        workflow: run.workflow,
+        state: run.state,
+        prompt: (run.prompt || "").split("\n")[0].slice(0, 200),
+        pr: run.pr || null,
+        createdAt: run.createdAt || null,
+      });
+    }
+  }
+  return deriveChain(nodes, id);
+}
+
 /** Observed facts classifyRetry needs, gathered from the run dir + workflow. */
 function retryCtx(orchDir, runDir, run, opts = {}) {
   const stepIds = workflowStepIds(orchDir, run.workflow);
@@ -359,6 +423,8 @@ export function getRunDetail(orchDir, id) {
   return {
     run: summary,
     repoUrl: repoUrlForRig(orchDir, summary.rig),
+    // Follow-up lineage (root → tip); a single-run "chain" renders as none.
+    chain: chainFor(orchDir, id),
     history: (run && run.history) || [],
     steps: stepsForRun(db, id),
     artifacts: artifactsForRun(db, id),

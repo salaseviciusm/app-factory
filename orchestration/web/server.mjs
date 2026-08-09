@@ -56,6 +56,9 @@ const FACTORY_RUN = process.env.FACTORY_WEB_RUN_BIN || path.join(ORCH_DIR, "bin"
 const BODY_CAP = 64 * 1024; // JSON body cap for mutations
 const MUTATION_LIMIT = new RateLimiter(10, 60 * 1000); // 10 mutations/min per IP
 const PROMPT_CAP = 20000;
+// Follow-up guards, mirroring the CLI's classifyFollowup (which re-checks).
+const FOLLOWUP_WORKFLOWS = ["feature-dev", "bug-fix"];
+const FOLLOWUP_PARENT_STATES = ["awaiting-merge", "done", "closed"];
 
 // ---------- startup: host/port/token ----------
 
@@ -374,8 +377,8 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 201, { ok: true, runId });
   }
 
-  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy) ----
-  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy)$/.exec(pathname);
+  // ---- POST /api/runs/<id>/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy|sync|followup) ----
+  const m = /^\/api\/runs\/([^/]+)\/(approve|reject|steer|cancel|reply|retry|resume|discard|preview|preview-mode|deploy|sync|followup)$/.exec(pathname);
   if (!m) return sendJson(res, 404, { error: "not found" });
   const [, id, action] = m;
   if (!RUN_ID_RE.test(id)) return sendJson(res, 400, { error: "invalid run id" });
@@ -404,6 +407,34 @@ async function handleApi(req, res, pathname, query) {
     args.push(body.mode);
   } else if (action === "deploy") {
     // Held-deploy release; the CLI rejects runs without deployHeld.
+  } else if (action === "sync") {
+    // The only exit from awaiting-merge: refresh the run's PR from GitHub.
+    // The CLI re-checks under the same rules (classifySync) before acting.
+    if (state !== "awaiting-merge") {
+      return sendJson(res, 409, { error: `run is '${state}' — sync applies to awaiting-merge runs only` });
+    }
+    const run = readJsonFile(path.join(ORCH_DIR, "runs", id, "run.json"), null);
+    if (!run || !run.pr || !run.pr.number) {
+      return sendJson(res, 409, { error: "no PR recorded on this run (nothing to sync against)" });
+    }
+  } else if (action === "followup") {
+    // Chained run on a green terminal parent, continuing the same branch and
+    // worktree (one PR per chain). Mirrors the CLI's classifyFollowup guards;
+    // the CLI re-checks before creating anything.
+    if (!FOLLOWUP_PARENT_STATES.includes(state)) {
+      return sendJson(res, 409, {
+        error: `run is '${state}' — follow-ups continue green terminal runs only (${FOLLOWUP_PARENT_STATES.join(", ")})`,
+      });
+    }
+    const workflow = body.workflow;
+    if (typeof workflow !== "string" || !FOLLOWUP_WORKFLOWS.includes(workflow) || !workflowExists(workflow)) {
+      return sendJson(res, 400, { error: `followup workflow must be one of: ${FOLLOWUP_WORKFLOWS.join(", ")}` });
+    }
+    const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (!prompt || prompt.length > PROMPT_CAP) {
+      return sendJson(res, 400, { error: `followup requires a non-empty 'prompt' (max ${PROMPT_CAP} chars)` });
+    }
+    args.push("--workflow", workflow, "--prompt", prompt);
   } else if (action === "approve" || action === "reject") {
     if (state !== "awaiting-approval") {
       return sendJson(res, 409, { error: `run is '${state}', not awaiting-approval` });
@@ -473,6 +504,14 @@ async function handleApi(req, res, pathname, query) {
   logAudit(action, id, r.ok ? "ok" : r.stderr.slice(0, 200));
   if (!r.ok) {
     return sendJson(res, 502, { error: `factory-run ${action} failed: ${(r.stderr || r.stdout).slice(0, 400)}` });
+  }
+  if (action === "followup") {
+    // cmdFollowup prints the child run id (resolveRunId notes go to stderr).
+    const childId = r.stdout.trim().split("\n").pop() || "";
+    if (!RUN_ID_RE.test(childId)) {
+      return sendJson(res, 502, { error: `factory-run followup returned no run id: ${r.stdout.slice(0, 400)}` });
+    }
+    return sendJson(res, 201, { ok: true, runId: childId });
   }
   return sendJson(res, 200, {
     ok: true,
