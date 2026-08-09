@@ -183,7 +183,9 @@ class BlockBoundary extends Component<{ raw: string; children: ReactNode }, { fa
 
 function BlockNodes({ tokens }: { tokens: Token[] | undefined }): ReactNode {
   return (tokens ?? []).map((t, i) => {
-    if (t.type === "space" || t.type === "def") return null;
+    // "checkbox" is the task-list marker token — ListItemNode already renders
+    // the real <input> from item.task/item.checked, so drop the raw "[ ] ".
+    if (t.type === "space" || t.type === "def" || t.type === "checkbox") return null;
     return (
       <BlockBoundary key={i} raw={t.raw}>
         <BlockContent token={t} />
