@@ -37,7 +37,7 @@ function makeSandbox(t) {
   for (const d of ["bin", "web/lib", "workflows", "prompts"]) fs.mkdirSync(path.join(orch, d), { recursive: true });
   fs.copyFileSync(path.join(REAL_ORCH, "bin", "factory-run"), path.join(orch, "bin", "factory-run"));
   fs.chmodSync(path.join(orch, "bin", "factory-run"), 0o755);
-  for (const lib of ["discussion.mjs", "plan-md.mjs", "retry.mjs", "watchdog.mjs"]) {
+  for (const lib of ["discussion.mjs", "plan-md.mjs", "retry.mjs", "watchdog.mjs", "github.mjs"]) {
     fs.copyFileSync(path.join(REAL_ORCH, "web", "lib", lib), path.join(orch, "web", "lib", lib));
   }
 

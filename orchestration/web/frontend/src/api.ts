@@ -123,6 +123,11 @@ export const api = {
       { force }
     ),
   resume: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/resume`, {}),
+  /** Refresh an awaiting-merge run's PR from GitHub (merged → done, closed → closed). */
+  sync: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/sync`, {}),
+  /** Chained follow-up run continuing the parent's branch (one PR per chain). */
+  followup: (id: string, workflow: "feature-dev" | "bug-fix", prompt: string) =>
+    post<{ ok: boolean; runId: string }>(`/api/runs/${encodeURIComponent(id)}/followup`, { workflow, prompt }),
   discard: (id: string) => post<{ ok: boolean; message?: string }>(`/api/runs/${encodeURIComponent(id)}/discard`, {}),
   preview: (id: string, kind?: "build" | "update") =>
     post<{ ok: boolean; message: string }>(`/api/runs/${encodeURIComponent(id)}/preview`, kind ? { kind } : {}),

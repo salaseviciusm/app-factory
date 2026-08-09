@@ -172,6 +172,39 @@ pre {
   border-color: var(--warn);
 }
 
+/* Follow-up chain: children indent under their root in the run list… */
+.run-chained {
+  margin-left: 16px;
+  border-left: 2px solid var(--border);
+  padding-left: 6px;
+}
+
+/* …and the run page lists the whole chain root → tip. */
+.chain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.chain-list li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.chain-list li:last-child {
+  border-bottom: none;
+}
+.chain-prompt {
+  display: block;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain-current {
+  background: color-mix(in srgb, var(--active) 8%, transparent);
+}
+
 /* Preview QR: large enough to scan straight off another device's screen. */
 .qr-image {
   display: block;

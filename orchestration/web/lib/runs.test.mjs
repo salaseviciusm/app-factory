@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { TERMINAL_STATES, classifyRunRetry, getRunDetail, readRunArtifact, readRunLog, readStepDoc, resolveGateArtifact } from "./runs.mjs";
+import { TERMINAL_STATES, classifyRunRetry, deriveChain, getRunDetail, readRunArtifact, readRunLog, readStepDoc, resolveGateArtifact } from "./runs.mjs";
 
 const RUN_ID = "feature-test-run";
 
@@ -384,4 +384,95 @@ test("readRunLog serves the fixed whitelist and rejects everything else", (t) =>
   assert.equal(readRunLog(orchDir, RUN_ID, "executor"), null); // whitelisted but absent
   assert.equal(readRunLog(orchDir, RUN_ID, "secrets"), null);
   assert.equal(readRunLog(orchDir, RUN_ID, "../engine"), null);
+});
+
+test("run summaries surface pr, branch, and prWarning (defaults for legacy runs)", (t) => {
+  const pr = { number: 12, url: "https://github.com/o/r/pull/12", createdAt: "2026-01-01T00:40:00.000Z" };
+  const withPr = makeOrchDir(t, {}, { state: "awaiting-merge", branch: "factory/feature-root", pr });
+  const d = getRunDetail(withPr, RUN_ID);
+  assert.deepEqual(d.run.pr, pr);
+  assert.equal(d.run.branch, "factory/feature-root");
+  assert.equal(d.run.prWarning, null);
+  // Legacy run.json without the new fields: branch defaults to factory/<id>.
+  const legacy = makeOrchDir(t, {}, { prWarning: "origin remote is not GitHub — no PR; merge the branch locally" });
+  const dl = getRunDetail(legacy, RUN_ID);
+  assert.equal(dl.run.branch, `factory/${RUN_ID}`);
+  assert.equal(dl.run.pr, null);
+  assert.match(dl.run.prWarning, /not GitHub/);
+});
+
+test("closed is a terminal state and a closed run never reads as stalled", (t) => {
+  assert.ok(TERMINAL_STATES.includes("closed"));
+  const orchDir = makeOrchDir(t, {}, { state: "closed", updatedAt: "2026-01-01T01:00:00.000Z" });
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.equal(detail.run.state, "closed");
+  assert.equal(detail.run.stalled, false);
+  assert.equal(detail.retry.eligible, false);
+});
+
+test("deriveChain orders root -> tip from parentRun back-links, from any member", () => {
+  const nodes = [
+    { id: "feature-root", parentRun: null, createdAt: "2026-01-01T00:00:00Z" },
+    { id: "feature-mid", parentRun: "feature-root", createdAt: "2026-01-02T00:00:00Z" },
+    { id: "bug-tip", parentRun: "feature-mid", createdAt: "2026-01-03T00:00:00Z" },
+    { id: "feature-unrelated", parentRun: null, createdAt: "2026-01-04T00:00:00Z" },
+  ];
+  const ids = (from) => deriveChain(nodes, from).map((n) => n.id);
+  assert.deepEqual(ids("feature-root"), ["feature-root", "feature-mid", "bug-tip"]);
+  assert.deepEqual(ids("feature-mid"), ["feature-root", "feature-mid", "bug-tip"]);
+  assert.deepEqual(ids("bug-tip"), ["feature-root", "feature-mid", "bug-tip"]);
+  assert.deepEqual(ids("feature-unrelated"), ["feature-unrelated"]);
+  assert.deepEqual(deriveChain(nodes, "feature-nope"), []);
+});
+
+test("deriveChain survives the single-childRun overwrite (branching) and cycles", () => {
+  // Two children of one root (the overwrite bug's shape): both appear, ordered
+  // by createdAt. A parentRun cycle must not hang the walk.
+  const branching = [
+    { id: "feature-root", parentRun: null, createdAt: "2026-01-01T00:00:00Z" },
+    { id: "feature-b", parentRun: "feature-root", createdAt: "2026-01-03T00:00:00Z" },
+    { id: "feature-a", parentRun: "feature-root", createdAt: "2026-01-02T00:00:00Z" },
+  ];
+  assert.deepEqual(deriveChain(branching, "feature-b").map((n) => n.id), ["feature-root", "feature-a", "feature-b"]);
+  const cyclic = [
+    { id: "feature-x", parentRun: "feature-y", createdAt: "2026-01-01T00:00:00Z" },
+    { id: "feature-y", parentRun: "feature-x", createdAt: "2026-01-02T00:00:00Z" },
+  ];
+  const chain = deriveChain(cyclic, "feature-x").map((n) => n.id);
+  assert.ok(chain.includes("feature-x"));
+  // A dangling parentRun (run dir deleted) roots the chain at the survivor.
+  const dangling = [{ id: "feature-kid", parentRun: "feature-gone", createdAt: "2026-01-01T00:00:00Z" }];
+  assert.deepEqual(deriveChain(dangling, "feature-kid").map((n) => n.id), ["feature-kid"]);
+});
+
+test("getRunDetail derives the chain across run dirs with per-entry state/prompt/pr", (t) => {
+  const orchDir = makeOrchDir(t, {}, {
+    state: "awaiting-merge",
+    pr: { number: 3, url: "https://github.com/o/r/pull/3", createdAt: "2026-01-01T00:30:00.000Z" },
+  });
+  // A follow-up child run dir alongside the root.
+  const childDir = path.join(orchDir, "runs", "bug-followup");
+  fs.mkdirSync(childDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(childDir, "run.json"),
+    JSON.stringify({
+      id: "bug-followup",
+      workflow: "bug-fix",
+      rig: "no-such-rig",
+      prompt: "tighten the copy\nsecond line ignored in chain",
+      state: "running:implement",
+      parentRun: RUN_ID,
+      branch: `factory/${RUN_ID}`,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:10:00.000Z",
+      history: [],
+    })
+  );
+  const detail = getRunDetail(orchDir, RUN_ID);
+  assert.deepEqual(detail.chain.map((n) => n.id), [RUN_ID, "bug-followup"]);
+  assert.equal(detail.chain[0].pr.number, 3);
+  assert.equal(detail.chain[1].state, "running:implement");
+  assert.equal(detail.chain[1].prompt, "tighten the copy");
+  // The child's detail shows the same chain.
+  assert.deepEqual(getRunDetail(orchDir, "bug-followup").chain.map((n) => n.id), [RUN_ID, "bug-followup"]);
 });

@@ -2,6 +2,10 @@
  * Derive a rig's GitHub web URL (https://github.com/<owner>/<repo>) from its
  * checkout's `origin` remote, so the frontend can link commits/PRs. Read-only;
  * returns null on any failure (missing rig/dir, no remote, non-GitHub remote).
+ *
+ * Also the pure `gh` CLI contract for review-policy PRs (argv builders +
+ * JSON/output parsers), shared by the engine (bin/factory-run, via
+ * require(esm) like retry.mjs) and covered by github.test.mjs.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -48,6 +52,58 @@ export function rigCheckoutPath(orchDir, rigName) {
     return path.join(expandHome(String(rigs.factoryApps.basePath)), m[1]);
   }
   return null;
+}
+
+// ---------- gh CLI contract (pure: argv in, parsed JSON/stdout out) ----------
+
+/** argv for `gh <...>`: open PRs whose head is `branch` (idempotence probe). */
+export function prListCommand(branch) {
+  return ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"];
+}
+
+/** Parse `gh pr list --json number,url` output into [{number, url}]. Garbage
+ *  (non-array, malformed entries) degrades to [] — never throws. */
+export function parsePrList(parsed) {
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter((p) => p && typeof p === "object" && Number.isInteger(p.number) && typeof p.url === "string")
+    .map((p) => ({ number: p.number, url: p.url }));
+}
+
+/** argv for `gh <...>`: create a PR from `branch` into `base`. Pushes nothing —
+ *  the run branch is already published by the engine's pushRunBranch. */
+export function prCreateCommand({ branch, base, title, body }) {
+  return ["pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body];
+}
+
+/** PR {number, url} from `gh pr create` stdout (the PR URL is its last
+ *  meaningful line), or null when no PR URL is present. */
+export function parsePrCreateUrl(output) {
+  const m = String(output || "").match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)/);
+  return m ? { number: parseInt(m[1], 10), url: m[0] } : null;
+}
+
+/** argv for `gh <...>`: one PR's live merge status. */
+export function prStatusCommand(number) {
+  return ["pr", "view", String(number), "--json", "state,mergedAt,mergeCommit"];
+}
+
+/** Parse `gh pr view --json state,mergedAt,mergeCommit` output into
+ *  { state: "open"|"merged"|"closed", mergedAt, mergeCommit } (mergeCommit is
+ *  the merge commit sha or null). Null on anything unrecognizable. */
+export function parsePrStatus(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+  const states = { OPEN: "open", MERGED: "merged", CLOSED: "closed" };
+  const state = states[String(parsed.state || "").toUpperCase()];
+  if (!state) return null;
+  return {
+    state,
+    mergedAt: typeof parsed.mergedAt === "string" && parsed.mergedAt ? parsed.mergedAt : null,
+    mergeCommit:
+      parsed.mergeCommit && typeof parsed.mergeCommit === "object" && typeof parsed.mergeCommit.oid === "string"
+        ? parsed.mergeCommit.oid
+        : null,
+  };
 }
 
 const repoUrlCache = new Map();
