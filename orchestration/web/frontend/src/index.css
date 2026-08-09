@@ -626,6 +626,31 @@ textarea {
   color: var(--text-dim);
 }
 
+/* Markdown tables reuse the console table look but wrap cell text at word
+   boundaries (the .markdown overflow-wrap: anywhere would let columns collapse
+   to slivers); genuinely wide tables scroll inside .table-scroll instead of
+   widening the modal. */
+.markdown .table-scroll {
+  margin: 8px 0;
+}
+
+.markdown th,
+.markdown td {
+  white-space: normal;
+  overflow-wrap: normal;
+}
+
+/* GFM task-list items: checkbox replaces the bullet. */
+.markdown li.md-task {
+  list-style: none;
+  margin-left: -20px;
+}
+
+.markdown li.md-task input[type="checkbox"] {
+  margin-right: 7px;
+  vertical-align: middle;
+}
+
 .plan-view .plan-doc {
   max-height: 60vh;
   overflow-y: auto;

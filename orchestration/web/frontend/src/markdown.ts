@@ -32,6 +32,13 @@ export interface PlanParse {
   blocks: PlanBlock[];
 }
 
+export interface ParsePlanOptions {
+  /** Strict (default) enforces the plan profile: raw HTML and tables are
+   *  render-breaking violations. Lenient (generic file viewing) renders
+   *  them instead — only a lexer failure yields `ok: false`. */
+  strict?: boolean;
+}
+
 function walkTokens(tokens: Token[] | undefined, visit: (t: Token) => void) {
   for (const token of tokens ?? []) {
     visit(token);
@@ -44,9 +51,10 @@ function walkTokens(tokens: Token[] | undefined, visit: (t: Token) => void) {
 }
 
 /** Lex plan markdown and extract the render/edit block tree. `ok: false`
- *  (lexer failure or a render-breaking profile violation — raw HTML, tables)
- *  means the caller must fall back to the raw text view. Never throws. */
-export function parsePlan(markdown: string): PlanParse {
+ *  (lexer failure or, in strict mode, a render-breaking profile violation —
+ *  raw HTML, tables) means the caller must fall back to the raw text view.
+ *  Never throws. */
+export function parsePlan(markdown: string, { strict = true }: ParsePlanOptions = {}): PlanParse {
   let tokens: Token[];
   try {
     tokens = new Lexer({ gfm: true }).lex(markdown);
@@ -55,10 +63,12 @@ export function parsePlan(markdown: string): PlanParse {
   }
 
   const problems: string[] = [];
-  walkTokens(tokens, (t) => {
-    if (t.type === "html") problems.push("raw HTML in the plan");
-    if (t.type === "table") problems.push("table syntax in the plan");
-  });
+  if (strict) {
+    walkTokens(tokens, (t) => {
+      if (t.type === "html") problems.push("raw HTML in the plan");
+      if (t.type === "table") problems.push("table syntax in the plan");
+    });
+  }
 
   const blocks: PlanBlock[] = [];
   let section: string | null = null;

@@ -248,7 +248,9 @@ function MarkdownFilePreview({ target, onClose }: { target: PreviewTarget; onClo
     };
   }, [target.rootKey, target.path]);
 
-  return <MarkdownModal title={target.path} markdown={text} error={error} onClose={onClose} />;
+  // Lenient mode: research/spec files render tables, task lists, and literal
+  // HTML instead of tripping the plan profile's raw fallback.
+  return <MarkdownModal title={target.path} markdown={text} error={error} onClose={onClose} strict={false} />;
 }
 
 /** Inline preview: auth-fetch the blob, then object-URL it into a <video> or
