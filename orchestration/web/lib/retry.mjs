@@ -17,8 +17,11 @@
 // "killed" is the discussion step's don't-build ending: terminal and a
 // SUCCESS (early kill = money saved), never rendered as a failure.
 // "awaiting-merge" is a merge-policy "review" run that finished green: terminal
-// (the engine is done; the founder merges factory/<id> by hand), also a success.
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge"];
+// (the engine is done; the founder merges the run's PR on GitHub), also a success.
+// "closed" is an awaiting-merge run whose PR was closed without merging (via
+// `factory-run sync`): terminal and settled — the worktree is torn down but the
+// branch stays in git, so a follow-up run can restart the chain later.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge", "closed"];
 
 // A non-terminal, non-awaiting run with no state update for this long counts
 // as stuck. A legitimately long agent step also trips this, which is why

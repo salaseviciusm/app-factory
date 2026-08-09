@@ -37,6 +37,14 @@
  *   factory-run deploy <run_id>          (release a held deploy: policy.deploy "hold")
  *   factory-run cancel <run_id>          (terminates the executor's process group,
  *                                         then finalizes run.json; worktree kept)
+ *   factory-run sync <run_id>            (refresh an awaiting-merge run's GitHub PR:
+ *                                         merged -> done, closed -> closed [worktree
+ *                                         torn down, branch kept], open -> unchanged.
+ *                                         The only sanctioned exit from awaiting-merge)
+ *   factory-run followup <run_id> --workflow <feature-dev|bug-fix> --prompt "<text>" [--auto]
+ *                                        (chained run on a green terminal parent:
+ *                                         continues the parent's branch and worktree
+ *                                         so pushes update the same PR)
  *   factory-run cleanup [<run_id>] [--dry-run] [--json] [--remove-unmerged-worktrees]
  *   factory-run cleanup <run_id> --discard  (force-remove one terminal run's
  *                                         worktree AND branch, dirty/unmerged included)
@@ -102,6 +110,18 @@ const {
   formatQuiet,
   suggestedAction: watchdogSuggestedAction,
 } = require(path.join(ORCH_DIR, "web", "lib", "watchdog.mjs"));
+// GitHub pure core (origin-remote normalization + the gh CLI contract for
+// review-policy PRs: argv builders, JSON parsers) — same web-lib pattern;
+// deep coverage lives in github.test.mjs.
+const {
+  githubWebUrl,
+  prListCommand,
+  parsePrList,
+  prCreateCommand,
+  parsePrCreateUrl,
+  prStatusCommand,
+  parsePrStatus,
+} = require(path.join(ORCH_DIR, "web", "lib", "github.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -1195,27 +1215,38 @@ function recordCommits(run) {
   } catch {}
 }
 
+/** The run's git branch: the persisted run.branch (follow-up runs inherit the
+ *  chain root's branch so one PR accumulates the whole conversation), with the
+ *  legacy default factory/<id> for runs that predate the field. */
+function runBranch(run) {
+  return run.branch || `factory/${run.id}`;
+}
+
 /** The exact publish invocation (pure, exercised by selftest):
  *  --force-with-lease because deploy recovery rebases the branch (rewriting
  *  every sha), -u so the first push creates the upstream the agents' plain
- *  `git push` relies on. */
-function pushRunBranchCommand(runId) {
-  return `git push --force-with-lease -u origin factory/${runId}`;
+ *  `git push` relies on. Accepts a run id or a full factory/<id> branch name;
+ *  the factory/ prefix is hard-coded in the command literal so the D26
+ *  push-source-scan keeps proving every engine push targets a run branch. */
+function pushRunBranchCommand(branch) {
+  const ref = String(branch).replace(/^factory\//, "");
+  return `git push --force-with-lease -u origin factory/${ref}`;
 }
 
-/** Best-effort publish of factory/<id> to origin so the web console's commit
+/** Best-effort publish of the run branch to origin so the web console's commit
  *  links resolve while the run is still going. Never fails the step or run:
  *  a rig without a reachable remote logs a loud engine.log line and keeps
  *  working offline. Skipped for read-only workflows (worktree:false) that
  *  never create the run branch. */
 function pushRunBranch(run) {
   const runDir = runDirOf(run.id);
-  if (git(run.worktree, ["rev-parse", "--verify", "--quiet", `refs/heads/factory/${run.id}`]).status !== 0) return;
-  const r = runCommand(pushRunBranchCommand(run.id), run.worktree, path.join(runDir, "push.log"), 2);
+  const branch = runBranch(run);
+  if (git(run.worktree, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status !== 0) return;
+  const r = runCommand(pushRunBranchCommand(branch), run.worktree, path.join(runDir, "push.log"), 2);
   if (r.ok) {
-    log(runDir, `pushed factory/${run.id} to origin`);
+    log(runDir, `pushed ${branch} to origin`);
   } else {
-    log(runDir, `push FAILED for factory/${run.id}: ${r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (commits stay local; see push.log)`);
+    log(runDir, `push FAILED for ${branch}: ${r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (commits stay local; see push.log)`);
   }
 }
 
@@ -1752,7 +1783,7 @@ function writeConflictContext(run, fromSha, toSha, logFile) {
     [
       "# Rebase conflict: base branch advanced during this run",
       "",
-      `Run branch \`factory/${run.id}\` is being rebased onto \`${run.baseBranch}\` (\`${toSha.slice(0, 12)}\`); the rebase stopped on conflicts.`,
+      `Run branch \`${runBranch(run)}\` is being rebased onto \`${run.baseBranch}\` (\`${toSha.slice(0, 12)}\`); the rebase stopped on conflicts.`,
       "",
       "## Conflicting files",
       "",
@@ -1805,7 +1836,7 @@ function mergeRunBranch(run, rig) {
     return { ok: false, recover: "escalate", summary: pre.reason };
   }
   if (pre.action !== "merge") {
-    log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing factory/${run.id} in the worktree`);
+    log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing ${runBranch(run)} in the worktree`);
     const rb = runCommand(`git rebase ${JSON.stringify(run.baseBranch)}`, run.worktree, logFile, 10);
     let conflicted = false;
     if (!rb.ok) {
@@ -1848,7 +1879,7 @@ function mergeRunBranch(run, rig) {
   const prefix = (rig.deploy || {}).type === "harness-merge" ? "self-improvement" : "factory-run";
   const mergeSubject = `${prefix}: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})`;
   const r = runCommand(
-    `git merge --no-ff factory/${run.id} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
+    `git merge --no-ff ${runBranch(run)} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
     rig.path,
     logFile,
     5
@@ -2037,6 +2068,147 @@ function classifyDeployMerge({ merge, mergedSha }) {
   return { action: mergedSha ? "already-merged" : "merge" };
 }
 
+// ---------- review-policy PRs (gh CLI; the branch is already pushed) ----------
+//
+// A green run on a merge-review rig parks in awaiting-merge; without a PR the
+// founder has nowhere to review, discuss, or merge it. The deploy step's
+// review path opens (or reuses) a GitHub PR from the run's branch into the rig
+// default branch. `gh pr create` pushes nothing (D26 intact: the branch was
+// already published by pushRunBranch); a missing gh CLI or a non-GitHub origin
+// (quickfire apps) degrades to a recorded warning, never a failed run.
+
+/** Pure decision core for review-policy PR creation (exercised by selftest).
+ *  Returns {action: "skip"|"reuse"|"create", reason, warn} — `warn` marks the
+ *  degraded skips that must land in run.json as a visible warning. */
+function classifyPrCreation({ merge, githubOrigin, ghAvailable, recordedPr, openPr }) {
+  if (merge !== "review") return { action: "skip", reason: `policy.merge is '${merge}' — PRs are review-policy only`, warn: false };
+  if (!githubOrigin) return { action: "skip", reason: "origin remote is not GitHub — no PR; merge the branch locally", warn: true };
+  if (!ghAvailable) return { action: "skip", reason: "gh CLI unavailable or unauthenticated — no PR; merge the branch locally", warn: true };
+  if (recordedPr) return { action: "reuse", reason: `PR #${recordedPr.number} already recorded on this run`, warn: false };
+  if (openPr) return { action: "reuse", reason: `open PR #${openPr.number} already exists for this branch`, warn: false };
+  return { action: "create", reason: "review policy, GitHub origin, no PR yet", warn: false };
+}
+
+/** The rig checkout's GitHub web URL from its origin remote, or null. */
+function rigGithubOrigin(rig) {
+  const remote = git(rig.path, ["remote", "get-url", "origin"]);
+  return remote.status === 0 ? githubWebUrl(remote.stdout.trim()) : null;
+}
+
+/** Whether the gh CLI is present AND authenticated (auth status is the probe
+ *  that fails when a token expired — exactly what would break pr create). */
+function ghAvailable() {
+  if (spawnSync("which", ["gh"], { encoding: "utf8" }).status !== 0) return false;
+  return spawnSync("gh", ["auth", "status"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 }).status === 0;
+}
+
+/** Run one gh command (default cwd: the run worktree; sync passes the rig
+ *  checkout since the worktree may already be gone), output captured to pr.log. */
+function ghRun(run, args, timeoutMinutes = 2, cwd = null) {
+  const logFile = path.join(runDirOf(run.id), "pr.log");
+  const res = spawnSync("gh", args, {
+    cwd: cwd || run.worktree,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMinutes * 60 * 1000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const output = (res.stdout || "") + (res.stderr || "");
+  fs.appendFileSync(logFile, `\n$ gh ${args.join(" ")}\n${output}\n(exit ${res.status})\n`);
+  return { ok: res.status === 0, stdout: res.stdout || "", output };
+}
+
+/** Idempotently ensure the run's branch has an open GitHub PR into the rig
+ *  default branch, persisting run.pr = {number, url, createdAt} and the
+ *  pull_request_pr telemetry artifact. Never throws and never fails the run:
+ *  every degraded path records run.prWarning and returns null. */
+function ensurePrForRun(run, rig) {
+  const runDir = runDirOf(run.id);
+  const branch = runBranch(run);
+  const probe = classifyPrCreation({
+    merge: (rig.policy || POLICY_DEFAULTS).merge,
+    githubOrigin: rigGithubOrigin(rig),
+    ghAvailable: ghAvailable(),
+    recordedPr: run.pr && run.pr.number ? run.pr : null,
+    openPr: null,
+  });
+  if (probe.action === "skip") {
+    log(runDir, `pr: skipped (${probe.reason})`);
+    if (probe.warn && run.prWarning !== probe.reason) {
+      run.prWarning = probe.reason;
+      saveRun(run);
+    }
+    return null;
+  }
+  if (probe.action === "reuse") {
+    log(runDir, `pr: ${probe.reason}`);
+    return run.pr;
+  }
+  try {
+    // Publish the newest commits first so the PR (new or found) is current.
+    pushRunBranch(run);
+    // gh --json emits pure JSON on stdout (banners go to stderr): parse direct.
+    const list = ghRun(run, prListCommand(branch));
+    let listJson = null;
+    try {
+      listJson = JSON.parse(list.stdout);
+    } catch {}
+    const open = list.ok ? parsePrList(listJson) : [];
+    let pr = open[0] || null;
+    if (!pr) {
+      const title = (() => {
+        try {
+          return fs.readFileSync(path.join(runDir, "plan.md"), "utf8").split("\n")[0].replace(/^#\s*(Plan:\s*)?/, "").trim() || run.prompt.split("\n")[0].slice(0, 72);
+        } catch {
+          return run.prompt.split("\n")[0].slice(0, 72);
+        }
+      })();
+      const body = [
+        `Factory run \`${run.id}\` (${run.workflow} on ${run.rig}).`,
+        "",
+        "## Prompt",
+        "",
+        run.prompt.slice(0, 4000),
+        "",
+        `Console: ${consoleRunUrl(run.id)}`,
+        "",
+        `Merging this PR completes the run: \`factory-run sync ${run.id}\` (or the console's Sync button) flips it to done. ` +
+          `Follow-up work continues on this branch via \`factory-run followup ${run.id} --workflow <wf> --prompt "..."\`.`,
+      ].join("\n");
+      const created = ghRun(run, prCreateCommand({ branch, base: run.baseBranch, title: `${title} (run ${run.id})`, body }), 5);
+      if (!created.ok) {
+        const warning = `PR creation failed: ${created.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (see pr.log)`;
+        log(runDir, `pr: ${warning}`);
+        run.prWarning = warning;
+        saveRun(run);
+        return null;
+      }
+      pr = parsePrCreateUrl(created.output);
+      if (!pr) {
+        const warning = "PR creation returned no PR URL (see pr.log)";
+        log(runDir, `pr: ${warning}`);
+        run.prWarning = warning;
+        saveRun(run);
+        return null;
+      }
+    }
+    run.pr = { number: pr.number, url: pr.url, createdAt: nowIso() };
+    delete run.prWarning;
+    saveRun(run);
+    try {
+      tArtifact(run.id, "deploy", "pull_request_pr", pr.url);
+    } catch {}
+    log(runDir, `pr: ${open[0] ? "reusing open" : "opened"} PR #${pr.number} (${pr.url})`);
+    return run.pr;
+  } catch (err) {
+    const warning = `PR creation errored: ${String(err.message || err).slice(0, 300)}`;
+    log(runDir, `pr: ${warning}`);
+    run.prWarning = warning;
+    saveRun(run);
+    return null;
+  }
+}
+
 /** Pure core of the notify step's message choice. A workflow may set
  *  `summaryFile` on its notify step (e.g. factory-retro's retro-summary.md):
  *  when the run-dir file exists with content, its text replaces the default
@@ -2070,11 +2242,16 @@ function deployStep(run, rig) {
     try {
       tArtifact(run.id, "deploy", deploy.type === "harness-merge" ? "harness_merge_commit" : "merge_commit", m.sha);
     } catch {}
-    mergeNote = deploy.type === "harness-merge" ? null : `merged factory/${run.id} into ${rig.defaultBranch} (${m.sha}, local only)`;
+    mergeNote = deploy.type === "harness-merge" ? null : `merged ${runBranch(run)} into ${rig.defaultBranch} (${m.sha}, local only)`;
   } else if (mergePhase.action === "already-merged") {
     mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}, local only); retrying publish`;
   } else {
-    mergeNote = deploy.type === "none" ? null : `branch factory/${run.id} left for founder merge (policy.merge review)`;
+    // Review policy: the branch stays for the founder — open (or reuse) the
+    // GitHub PR they review and merge. Idempotent; degrades to a recorded
+    // warning on non-GitHub rigs or a missing gh CLI, never a failed run.
+    const pr = ensurePrForRun(run, rig);
+    const prNote = pr ? `PR #${pr.number} awaits review (${pr.url})` : `branch ${runBranch(run)} left for founder merge (policy.merge review)`;
+    mergeNote = deploy.type === "none" && !pr ? null : prNote;
   }
   // Publish phase. "hold" parks the publish for `factory-run deploy <id>`.
   if (policy.deploy === "hold" && deploy.type !== "none") {
@@ -2415,6 +2592,29 @@ function easProbes(rig) {
   return probes;
 }
 
+/** gh probe for review-policy rigs with a GitHub origin: those runs end at a
+ *  PR, so a missing/unauthenticated gh must fail before any token is spent.
+ *  Rigs that merge automatically, or whose origin is not GitHub (quickfire
+ *  apps), pass trivially — there the engine degrades to a recorded warning at
+ *  deploy time instead of a PR. */
+function ghProbes(rig) {
+  if ((rig.policy || POLICY_DEFAULTS).merge !== "review") return [];
+  const name = `${rig.name}:gh-pr`;
+  const origin = rigGithubOrigin(rig);
+  if (!origin) {
+    return [{ name, ok: true, detail: "origin is not GitHub — PR creation degrades to a recorded warning" }];
+  }
+  const version = preflightSpawn("gh", ["--version"], rig.path, 30000);
+  if (version.status !== 0) {
+    return [{ name, ok: false, detail: `gh CLI unavailable (${origin} needs it for review-policy PRs): ${version.output.slice(0, 200)}` }];
+  }
+  const auth = preflightSpawn("gh", ["auth", "status"], rig.path, 30000);
+  if (auth.status !== 0) {
+    return [{ name, ok: false, detail: `gh auth status failed — run \`gh auth login\`: ${auth.output.slice(0, 200)}` }];
+  }
+  return [{ name, ok: true, detail: `${version.stdout.trim().split("\n")[0]} authenticated; origin ${origin}` }];
+}
+
 /** Per-rig policy probe: any policy problem collected by resolveRig fails the
  *  run before a worktree or agent step exists, naming the rig and key. */
 function policyProbe(rig) {
@@ -2438,6 +2638,7 @@ function runPreflight(rigNames) {
       continue;
     }
     probes.push(policyProbe(rig));
+    probes.push(...ghProbes(rig));
     probes.push(...easProbes(rig));
   }
   const failed = probes.filter((p) => !p.ok);
@@ -2506,12 +2707,29 @@ function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged },
  *  refuses unmerged branches). Returns {id, action, reason, freedBytes}. */
 function cleanupRun(run, opts = {}) {
   const worktree = path.join(WORKTREES_DIR, run.id);
-  const branch = `factory/${run.id}`;
+  const branch = runBranch(run);
   let rig;
   try {
     rig = resolveRig(run.rig);
   } catch (err) {
     return { id: run.id, action: "skip", reason: String(err.message || err), freedBytes: 0 };
+  }
+  // Chain guard: follow-up runs share the root's branch and worktree, so
+  // neither may be reclaimed (or discarded) out from under a live chain
+  // member — worktree ownership sits with the chain tip.
+  const liveSharer = listRunIds().find((otherId) => {
+    if (otherId === run.id) return false;
+    let other;
+    try {
+      other = loadRun(otherId);
+    } catch {
+      return false;
+    }
+    if (TERMINAL_STATES.includes(other.state)) return false;
+    return runBranch(other) === branch || other.worktree === worktree;
+  });
+  if (liveSharer) {
+    return { id: run.id, action: "skip", reason: `branch/worktree shared with live run ${liveSharer}`, freedBytes: 0 };
   }
   const worktreeExists = fs.existsSync(worktree);
   const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
@@ -2766,8 +2984,16 @@ function execRun(id) {
     } else if (!fs.existsSync(run.worktree)) {
       setState(run, "setup", "creating worktree");
       fs.mkdirSync(WORKTREES_DIR, { recursive: true });
-      sh(`git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b factory/${id} ${rig.defaultBranch}`);
-      log(runDir, `worktree created at ${run.worktree} (branch factory/${id})`);
+      // Follow-up runs (and restarts of a closed chain) continue an existing
+      // branch: check it out instead of minting a new one off the base.
+      const branch = runBranch(run);
+      const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
+      sh(
+        branchExists
+          ? `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} ${branch}`
+          : `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b ${branch} ${rig.defaultBranch}`
+      );
+      log(runDir, `worktree created at ${run.worktree} (branch ${branch}${branchExists ? ", pre-existing" : ""})`);
       // Publish the branch (and set its upstream) before the first agent step
       // so the agents' per-commit plain `git push` works and the web console's
       // commit links resolve as the run progresses.
@@ -2904,14 +3130,20 @@ function execRun(id) {
           if (run.mergedSha) {
             lines.push(`Rig: ${run.rig} · merged into ${run.baseBranch} (${run.mergedSha}) — local merge only, push when ready.`);
           } else {
-            lines.push(`Rig: ${run.rig} · branch \`factory/${id}\` · worktree kept for merge review`);
+            lines.push(`Rig: ${run.rig} · branch \`${runBranch(run)}\` · worktree kept for merge review`);
           }
           lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
           if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
             lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
           }
           if (!run.mergedSha) {
-            lines.push(`Merge when happy: \`git -C ${rig.path} merge factory/${id}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
+            if (run.pr) {
+              lines.push(`Review & merge the PR: ${run.pr.url} — then \`factory-run sync ${id}\` (or the console's Sync button) marks the run done.`);
+              lines.push(`Follow-up on the same PR: \`factory-run followup ${id} --workflow feature-dev --prompt "..."\` (or the run page's composer).`);
+            } else {
+              lines.push(`Merge when happy: \`git -C ${rig.path} merge ${runBranch(run)}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
+              if (run.prWarning) lines.push(`:warning: No PR: ${run.prWarning}`);
+            }
           }
           if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
           const usage = usageLine(id);
@@ -3066,7 +3298,13 @@ function execRun(id) {
     // false) have no branch to merge, and workflows without a deploy step
     // were never going to merge (greenTerminalState).
     if (greenTerminalState(workflow, rig.policy, run.mergedSha) === "awaiting-merge") {
-      setState(run, "awaiting-merge", `branch factory/${id} awaits founder merge into ${run.baseBranch} (local merge — the engine never pushes ${run.baseBranch})`);
+      setState(
+        run,
+        "awaiting-merge",
+        run.pr
+          ? `PR #${run.pr.number} (${run.pr.url}) awaits founder merge into ${run.baseBranch}; \`factory-run sync ${id}\` after merging`
+          : `branch ${runBranch(run)} awaits founder merge into ${run.baseBranch} (local merge — the engine never pushes ${run.baseBranch})`
+      );
     } else {
       setState(run, "done", null);
     }
@@ -3093,7 +3331,22 @@ function execRun(id) {
 
 // ---------- commands ----------
 
-function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview }) {
+/** Branch, worktree, and base branch a new run works on (pure, exercised by
+ *  selftest). Fresh runs mint factory/<id> and their own worktree; a follow-up
+ *  (`baseRun` = the parent run.json) inherits the chain root's branch and
+ *  worktree so its pushes update the one open PR. */
+function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_DIR) {
+  if (!baseRun) {
+    return { branch: `factory/${id}`, worktree: path.join(worktreesDir, id), baseBranch: defaultBranch };
+  }
+  return {
+    branch: runBranch(baseRun),
+    worktree: baseRun.worktree,
+    baseBranch: baseRun.baseBranch || defaultBranch,
+  };
+}
+
+function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview, baseRun }) {
   const rig = resolveRig(rigName);
   const wf = loadWorkflow(wfName);
   // Fail before the run dir or worktree exists on a broken step reference.
@@ -3104,6 +3357,7 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
   const id = uniqueRunId(base, (candidate) => fs.existsSync(runDirOf(candidate)));
   const runDir = runDirOf(id);
   fs.mkdirSync(runDir, { recursive: true });
+  const setup = inheritedRunSetup(baseRun || null, id, rig.defaultBranch);
   const run = {
     id,
     workflow: wfName,
@@ -3114,8 +3368,9 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
     // null defers to it (resolvePreviewMode).
     previewMode: preview === true || preview === false ? preview : null,
     parentRun: parentRun || null,
-    baseBranch: rig.defaultBranch,
-    worktree: path.join(WORKTREES_DIR, id),
+    baseBranch: setup.baseBranch,
+    branch: setup.branch,
+    worktree: setup.worktree,
     state: "queued",
     stepIndex: 0,
     artifactUrl: null,
@@ -3539,15 +3794,18 @@ function cmdResume(argv) {
   // First positional that is neither a flag nor --step's value.
   const id = resolveRunId(argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--step"));
   const run = loadRun(id);
-  // done/killed/awaiting-merge are final by meaning (awaiting-merge: the
-  // engine is done, only the founder's hand-merge remains). cancelled is
+  // done/killed/awaiting-merge/closed are final by meaning (awaiting-merge:
+  // the engine is done, only the founder's merge + sync remain; closed: the
+  // PR was closed — a follow-up run is the restart path). cancelled is
   // explicitly resumable: a kept cancelled run picks up from the step it was
   // interrupted at (cancel never advances stepIndex).
-  if (["done", "killed", "awaiting-merge"].includes(run.state)) {
+  if (["done", "killed", "awaiting-merge", "closed"].includes(run.state)) {
     console.error(
       run.state === "awaiting-merge"
-        ? `run ${id} is awaiting-merge; the engine is done — merge factory/${id} by hand (nothing to resume)`
-        : `run ${id} is ${run.state}; nothing to resume`
+        ? `run ${id} is awaiting-merge; the engine is done — merge the PR (or ${runBranch(run)}), then \`factory-run sync ${id}\``
+        : run.state === "closed"
+          ? `run ${id} is closed (PR closed without merging); restart with \`factory-run followup ${id} --workflow <wf> --prompt "..."\``
+          : `run ${id} is ${run.state}; nothing to resume`
     );
     process.exit(1);
   }
@@ -3802,7 +4060,9 @@ function cmdWatchdog(argv) {
  *  merge — machine-readable, so the standup never parses history strings. */
 function statusExtras(run) {
   const pendingMerge =
-    run.state === "awaiting-merge" ? { branch: `factory/${run.id}`, baseBranch: run.baseBranch || null } : null;
+    run.state === "awaiting-merge"
+      ? { branch: runBranch(run), baseBranch: run.baseBranch || null, pr: run.pr || null }
+      : null;
   let wf;
   try {
     wf = loadWorkflow(run.workflow);
@@ -3873,7 +4133,14 @@ function cmdStatus(argv) {
         console.log(`  recovery: ${r.recovery.iterations}/${RECOVERY_CAP} cycle(s)${detail ? ` — ${detail}` : ""}`);
       }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
-      if (r.state === "awaiting-merge") console.log(`  pending merge: factory/${r.id} into ${r.baseBranch} (local merge — the engine never pushes ${r.baseBranch})`);
+      if (r.pr) console.log(`  pr: #${r.pr.number} ${r.pr.url}${r.pr.state ? ` (${r.pr.state}, checked ${r.pr.checkedAt || "never"})` : ""}`);
+      if (r.state === "awaiting-merge") {
+        console.log(
+          r.pr
+            ? `  pending merge: PR #${r.pr.number} into ${r.baseBranch} — \`factory-run sync ${r.id}\` after merging`
+            : `  pending merge: ${runBranch(r)} into ${r.baseBranch} (local merge — the engine never pushes ${r.baseBranch})`
+        );
+      }
       if (r.deployHeld) console.log(`  deploy held: release with \`factory-run deploy ${r.id}\``);
       if (r.preview && r.preview.url) console.log(`  preview (${r.preview.kind}): ${r.preview.url}`);
       if (r.preview && r.preview.decision) {
@@ -3962,6 +4229,156 @@ function cmdCancel(id) {
       ? `cancelled ${id} (executor and in-flight step terminated; worktree kept — resume with \`factory-run resume ${id}\`, discard with \`factory-run cleanup ${id} --discard\`)`
       : `cancelled ${id} (no live executor found; worktree kept)`
   );
+}
+
+// ---------- sync (the only exit from awaiting-merge) + follow-up chains ----------
+//
+// awaiting-merge stays terminal and resume-proof; `factory-run sync` is the
+// single sanctioned exit: it reads the run's PR from GitHub and either flips
+// the run to done (merged), to closed (PR closed without merging — worktree
+// torn down, branch kept for a later follow-up), or leaves it untouched
+// (still open). `factory-run followup` chains a new run onto a green terminal
+// parent, continuing the same branch and worktree so one PR accumulates the
+// whole conversation.
+
+/** Pure decision core for `factory-run sync` (exercised by selftest).
+ *  `prStatus` omitted = pre-fetch guard ("check"); null = gh failed. */
+function classifySync({ state, pr, prStatus }) {
+  if (state !== "awaiting-merge") {
+    return { action: "refuse", reason: `run is '${state}' — sync is the exit from awaiting-merge only` };
+  }
+  if (!pr || !pr.number) {
+    return { action: "refuse", reason: "no PR recorded on this run (nothing to sync against)" };
+  }
+  if (prStatus === undefined) return { action: "check", reason: `query PR #${pr.number}` };
+  if (!prStatus) return { action: "refuse", reason: "PR status unavailable (gh failed or returned garbage — see pr.log)" };
+  if (prStatus.state === "merged") {
+    return { action: "done", reason: `PR #${pr.number} merged`, mergedSha: prStatus.mergeCommit || null };
+  }
+  if (prStatus.state === "closed") return { action: "closed", reason: `PR #${pr.number} closed without merging` };
+  return { action: "open", reason: `PR #${pr.number} still open` };
+}
+
+/** Tear down a run's worktree while keeping its branch (the closed-PR path).
+ *  Force removal is deliberate: the branch's commits are pushed, so worktree
+ *  scraps are disposable. Only ever touches engine-owned dirs under
+ *  WORKTREES_DIR — never a rig checkout. Never throws. */
+function teardownWorktree(run, rig) {
+  const worktree = run.worktree;
+  if (!worktree || path.dirname(worktree) !== WORKTREES_DIR) {
+    return { removed: false, reason: "worktree is not engine-owned" };
+  }
+  if (!fs.existsSync(worktree)) return { removed: false, reason: "worktree already gone" };
+  const rm = git(rig.path, ["worktree", "remove", "--force", worktree]);
+  git(rig.path, ["worktree", "prune"]);
+  if (rm.status !== 0) {
+    return { removed: false, reason: `git worktree remove failed: ${(rm.stderr || rm.stdout || "").trim().slice(0, 200)}` };
+  }
+  return { removed: true, reason: "worktree removed; branch kept" };
+}
+
+function cmdSync(argv) {
+  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+  const run = loadRun(id);
+  const runDir = runDirOf(id);
+  const pre = classifySync({ state: run.state, pr: run.pr || null });
+  if (pre.action === "refuse") {
+    console.error(`cannot sync ${id}: ${pre.reason}`);
+    process.exit(1);
+  }
+  const rig = resolveRig(run.rig);
+  // The worktree may already be gone (torn down, or reclaimed); the rig
+  // checkout always exists and shares the same origin.
+  const view = ghRun(run, prStatusCommand(run.pr.number), 2, rig.path);
+  let viewJson = null;
+  try {
+    viewJson = JSON.parse(view.stdout);
+  } catch {}
+  const status = view.ok ? parsePrStatus(viewJson) : null;
+  const outcome = classifySync({ state: run.state, pr: run.pr, prStatus: status });
+  if (outcome.action === "refuse") {
+    console.error(`cannot sync ${id}: ${outcome.reason}`);
+    process.exit(1);
+  }
+  run.pr = { ...run.pr, state: status.state, checkedAt: nowIso() };
+  if (outcome.action === "open") {
+    saveRun(run);
+    console.log(`${id}: ${outcome.reason} (${run.pr.url}) — state unchanged`);
+    return;
+  }
+  if (outcome.action === "done") {
+    if (outcome.mergedSha) run.mergedSha = outcome.mergedSha;
+    setState(run, "done", `${outcome.reason}${outcome.mergedSha ? ` (${outcome.mergedSha.slice(0, 12)})` : ""} — synced from GitHub`);
+    try {
+      if (outcome.mergedSha) tArtifact(id, "deploy", "merge_commit", outcome.mergedSha);
+    } catch {}
+    notify(run, `:tada: Run ${id}: PR #${run.pr.number} merged on GitHub — run is done. Cleanup reclaims the worktree/branch after the rig checkout pulls the merge.`);
+    log(runDir, `sync: ${outcome.reason} -> done`);
+    console.log(`${id}: ${outcome.reason} — run is done`);
+    return;
+  }
+  // PR closed without merging: tear down the workspace, keep the branch alive
+  // in git so a follow-up run (with the PR discussion as reference context)
+  // can restart the chain later.
+  const td = teardownWorktree(run, rig);
+  setState(run, "closed", `${outcome.reason} — ${td.reason}; branch ${runBranch(run)} kept. Restart with \`factory-run followup ${id} --workflow <wf> --prompt "..."\``);
+  notify(
+    run,
+    `:file_cabinet: Run ${id}: PR #${run.pr.number} was closed without merging. Worktree torn down; branch \`${runBranch(run)}\` kept in git.\n` +
+      `Pick it back up any time: \`factory-run followup ${id} --workflow feature-dev --prompt "<what to change>"\` (or the run page's composer).`
+  );
+  log(runDir, `sync: ${outcome.reason} -> closed (${td.reason})`);
+  console.log(`${id}: ${outcome.reason} — run closed (${td.reason})`);
+}
+
+const FOLLOWUP_WORKFLOWS = ["feature-dev", "bug-fix"];
+// Green terminal parents a follow-up may continue: awaiting-merge (PR open —
+// the chain keeps updating one PR), done (merged; the PR stays as reference
+// context), and closed (restart the conversation on the kept branch).
+const FOLLOWUP_PARENT_STATES = ["awaiting-merge", "done", "closed"];
+
+/** Pure eligibility core for `factory-run followup` (exercised by selftest). */
+function classifyFollowup({ parentState, parentWorktreeOwned, workflow, prompt }) {
+  if (!FOLLOWUP_PARENT_STATES.includes(parentState)) {
+    return {
+      ok: false,
+      reason: `parent run is '${parentState}' — follow-ups continue green terminal runs only (${FOLLOWUP_PARENT_STATES.join(", ")})`,
+    };
+  }
+  if (!FOLLOWUP_WORKFLOWS.includes(workflow)) {
+    return { ok: false, reason: `workflow '${workflow}' is not chainable — follow-ups support ${FOLLOWUP_WORKFLOWS.join(", ")}` };
+  }
+  if (!parentWorktreeOwned) {
+    return { ok: false, reason: "parent run has no engine-owned worktree/branch to continue (read-only workflow)" };
+  }
+  if (typeof prompt !== "string" || !prompt.trim()) return { ok: false, reason: "missing --prompt" };
+  return { ok: true, reason: "eligible" };
+}
+
+function cmdFollowup(argv) {
+  const id = resolveRunId(
+    argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--workflow" && argv[i - 1] !== "--prompt")
+  );
+  const parent = loadRun(id);
+  const wfName = argOf(argv, "--workflow") || "feature-dev";
+  const prompt = argOf(argv, "--prompt");
+  // Default non-auto: the follow-up's plan-discussion IS the conversation
+  // about the PR — skipping it needs an explicit --auto.
+  const auto = argv.includes("--auto");
+  const decision = classifyFollowup({
+    parentState: parent.state,
+    parentWorktreeOwned: Boolean(parent.worktree) && path.dirname(parent.worktree) === WORKTREES_DIR,
+    workflow: wfName,
+    prompt,
+  });
+  if (!decision.ok) {
+    console.error(`cannot follow up on ${id}: ${decision.reason}`);
+    process.exit(1);
+  }
+  const childId = createRun({ rig: parent.rig, workflow: wfName, prompt, auto, parentRun: parent.id, baseRun: parent });
+  parent.childRun = childId;
+  saveRun(parent);
+  console.log(childId);
 }
 
 /** `factory-run preview <id> [--build|--update]`: publish an on-demand preview
@@ -4340,6 +4757,7 @@ function cmdSelftest() {
   const resolveFailSrc = (fs.readFileSync(__filename, "utf8").match(/const fail = \(outcome[\s\S]*?return null;\s*\};/) || [""])[0];
   const pushChecks = [
     ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
+    ["full factory/<id> branch names normalize to the same command", pushRunBranchCommand("factory/bug-selftest") === pushCmd],
     ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
     ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")], // no-push-scan
     ["implement/fix prompts push per commit, stay on the branch", ["implementer", "bug-fixer"].every((n) => {
@@ -4368,6 +4786,72 @@ function cmdSelftest() {
   for (const [name, ok] of deployMergeChecks) {
     console.log(`deploy-merge ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`deploy-merge check failed: ${name}`);
+  }
+  // Review-policy PR creation (pure): PRs only on merge-review rigs with a
+  // GitHub origin and a working gh; recorded/open PRs are reused, never
+  // duplicated; degraded skips carry the warning flag so run.json says why
+  // no PR exists.
+  const pc = (over) =>
+    classifyPrCreation({ merge: "review", githubOrigin: "https://github.com/o/r", ghAvailable: true, recordedPr: null, openPr: null, ...over });
+  const prChecks = [
+    ["auto policy never opens a PR", pc({ merge: "auto" }).action === "skip" && pc({ merge: "auto" }).warn === false],
+    ["review policy with GitHub origin creates", pc({}).action === "create"],
+    ["non-GitHub origin skips with a warning", (() => { const d = pc({ githubOrigin: null }); return d.action === "skip" && d.warn === true; })()],
+    ["missing gh skips with a warning", (() => { const d = pc({ ghAvailable: false }); return d.action === "skip" && d.warn === true; })()],
+    ["recorded PR is reused, never recreated", (() => { const d = pc({ recordedPr: { number: 7 } }); return d.action === "reuse" && /#7/.test(d.reason); })()],
+    ["existing open PR is reused, never duplicated", (() => { const d = pc({ openPr: { number: 9 } }); return d.action === "reuse" && /#9/.test(d.reason); })()],
+    ["gh pr status argv matches the shared contract", JSON.stringify(prStatusCommand(3)) === JSON.stringify(["pr", "view", "3", "--json", "state,mergedAt,mergeCommit"])],
+  ];
+  for (const [name, ok] of prChecks) {
+    console.log(`pr-creation ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`pr-creation check failed: ${name}`);
+  }
+  // Sync decision core (pure): the only exit from awaiting-merge. Merged PRs
+  // finish the run, closed PRs park it in the restartable `closed` state,
+  // open PRs change nothing; every other state refuses.
+  const sy = (over) =>
+    classifySync({ state: "awaiting-merge", pr: { number: 4, url: "https://github.com/o/r/pull/4" }, prStatus: { state: "open", mergedAt: null, mergeCommit: null }, ...over });
+  const syncChecks = [
+    ["non-awaiting-merge runs refuse sync", sy({ state: "running:implement" }).action === "refuse" && sy({ state: "done" }).action === "refuse"],
+    ["missing PR record refuses sync", sy({ pr: null }).action === "refuse"],
+    ["pre-fetch guard says check", classifySync({ state: "awaiting-merge", pr: { number: 4 } }).action === "check"],
+    ["gh failure refuses without a state change", sy({ prStatus: null }).action === "refuse"],
+    ["merged PR finishes the run with the merge sha", (() => { const d = sy({ prStatus: { state: "merged", mergedAt: "2026-01-01T00:00:00Z", mergeCommit: "abc" } }); return d.action === "done" && d.mergedSha === "abc"; })()],
+    ["closed PR parks the run closed", sy({ prStatus: { state: "closed", mergedAt: null, mergeCommit: null } }).action === "closed"],
+    ["open PR changes nothing", sy({}).action === "open"],
+    ["closed is a terminal state", TERMINAL_STATES.includes("closed")],
+    ["closed run refuses another sync", sy({ state: "closed" }).action === "refuse"],
+  ];
+  for (const [name, ok] of syncChecks) {
+    console.log(`sync ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`sync check failed: ${name}`);
+  }
+  // Follow-up chains (pure): eligibility + branch/worktree inheritance. A
+  // follow-up continues the chain root's branch and worktree so its pushes
+  // update the one open PR; fresh runs still mint factory/<id>.
+  const fu = (over) =>
+    classifyFollowup({ parentState: "awaiting-merge", parentWorktreeOwned: true, workflow: "feature-dev", prompt: "more", ...over });
+  const parentRunFx = { id: "feature-root", branch: "factory/feature-root", worktree: path.join(WORKTREES_DIR, "feature-root"), baseBranch: "main" };
+  const grandchildSetup = inheritedRunSetup({ ...parentRunFx, id: "feature-child", branch: "factory/feature-root" }, "feature-grandchild", "main");
+  const followupChecks = [
+    ["awaiting-merge parent is chainable", fu({}).ok === true],
+    ["merged (done) parent is chainable — the PR is reference context", fu({ parentState: "done" }).ok === true],
+    ["closed parent restarts the chain", fu({ parentState: "closed" }).ok === true],
+    ["failed parent refuses", fu({ parentState: "failed" }).ok === false],
+    ["live parent refuses", fu({ parentState: "running:implement" }).ok === false],
+    ["killed parent refuses", fu({ parentState: "killed" }).ok === false],
+    ["non-chainable workflow refuses", fu({ workflow: "self-review" }).ok === false && fu({ workflow: "new-app" }).ok === false],
+    ["bug-fix follow-ups allowed", fu({ workflow: "bug-fix" }).ok === true],
+    ["read-only parent (no owned worktree) refuses", fu({ parentWorktreeOwned: false }).ok === false],
+    ["empty prompt refuses", fu({ prompt: "  " }).ok === false],
+    ["fresh run mints factory/<id> and its own worktree", (() => { const s = inheritedRunSetup(null, "feature-x", "main"); return s.branch === "factory/feature-x" && s.worktree === path.join(WORKTREES_DIR, "feature-x") && s.baseBranch === "main"; })()],
+    ["follow-up inherits the parent's branch, worktree, and base", (() => { const s = inheritedRunSetup(parentRunFx, "feature-child", "main"); return s.branch === "factory/feature-root" && s.worktree === parentRunFx.worktree && s.baseBranch === "main"; })()],
+    ["a chain of follow-ups keeps the root branch", grandchildSetup.branch === "factory/feature-root" && grandchildSetup.worktree === parentRunFx.worktree],
+    ["legacy parent without run.branch still chains on factory/<parent-id>", inheritedRunSetup({ id: "feature-old", worktree: "/w/feature-old", baseBranch: "main" }, "feature-child", "main").branch === "factory/feature-old"],
+  ];
+  for (const [name, ok] of followupChecks) {
+    console.log(`followup ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`followup check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
   const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
@@ -4569,6 +5053,7 @@ function cmdSelftest() {
     ["awaiting-approval at a commands step is a check gate", (() => { const g = sx({ stepIndex: 3, state: "awaiting-approval" }).gate; return g !== null && g.kind === "check-gate" && g.pendingReplies === null; })()],
     ["completed run clamps to the last step", sx({ stepIndex: 11, state: "done" }).currentStep.id === "notify"],
     ["awaiting-merge run reports a machine-readable pendingMerge", (() => { const p = sx({ stepIndex: 11, state: "awaiting-merge" }).pendingMerge; return p !== null && p.branch === "factory/selftest-0000" && p.baseBranch === "main"; })()],
+    ["pendingMerge honors an inherited run.branch and carries the PR", (() => { const p = sx({ stepIndex: 11, state: "awaiting-merge", branch: "factory/feature-root", pr: { number: 5, url: "https://github.com/o/r/pull/5" } }).pendingMerge; return p !== null && p.branch === "factory/feature-root" && p.pr && p.pr.number === 5; })()],
     ["non-awaiting-merge run has no pendingMerge", sx({}).pendingMerge === null],
     ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null, pendingMerge: null })],
   ];
@@ -4874,6 +5359,8 @@ try {
   else if (cmd === "reply") cmdReply(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
+  else if (cmd === "sync") cmdSync(rest);
+  else if (cmd === "followup") cmdFollowup(rest);
   else if (cmd === "preview") cmdPreviewTrigger(rest);
   else if (cmd === "preview-exec") execPreview(rest[0], rest.slice(1));
   else if (cmd === "preview-mode") cmdPreviewMode(rest);
@@ -4886,7 +5373,7 @@ try {
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|sync|followup|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
