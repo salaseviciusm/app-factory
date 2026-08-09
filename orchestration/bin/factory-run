@@ -386,8 +386,16 @@ function runCommand(cmd, cwd, logFile, timeoutMinutes = 30) {
 // merge → "review" (never auto-merge by surprise; the run parks in state
 // awaiting-merge), absent deploy → "auto" (publishing a preview update is
 // additive and today's behaviour for every rig), absent preview → "off".
-const POLICY_DEFAULTS = { merge: "review", deploy: "auto", preview: "off" };
-const POLICY_VALUES = { merge: ["auto", "review"], deploy: ["auto", "hold"], preview: ["on", "off"] };
+// Absent push → "auto": D26 reserved policy.push as the opt-in for publishing
+// the merged default branch; the founder made it the default (2026-08-09) so
+// origin is always the truth and a merged PR never diverges from a local merge.
+const POLICY_DEFAULTS = { merge: "review", deploy: "auto", preview: "off", push: "auto" };
+const POLICY_VALUES = {
+  merge: ["auto", "review"],
+  deploy: ["auto", "hold"],
+  preview: ["on", "off"],
+  push: ["auto", "off"],
+};
 
 /** Resolve and validate a rig's policy block (pure, exercised by selftest).
  *  Returns { policy, problems }: `policy` is always fully resolved (invalid or
@@ -1780,9 +1788,10 @@ function rebaseInProgress(worktree) {
   });
 }
 
-/** Merge the validated run branch into the rig's default branch — local only,
- *  for every rig: the engine never pushes the default branch (see D26; the
- *  run branch factory/<id> is pushed throughout the run). Extracted from
+/** Merge the validated run branch into the rig's default branch and publish it
+ *  to origin unless policy.push is "off" (D26 reserved policy.push; the
+ *  founder made pushing the default 2026-08-09 — a local-only merge diverges
+ *  from any PR merged on GitHub). Extracted from
  *  the harness-merge deploy so every deploy type merges identically when
  *  policy.merge is "auto". Base drift is handled exactly as before:
  *  classifyRecovery decides merge/reverify/resolve/escalate, rebases are
@@ -1858,7 +1867,33 @@ function mergeRunBranch(run, rig) {
     return { ok: false, summary: `merge into ${rig.defaultBranch} failed (aborted cleanly): ${r.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
   }
   const sha = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --short HEAD`).trim();
-  return { ok: true, sha };
+  return { ok: true, sha, pushed: pushBaseBranch(run, rig, logFile) };
+}
+
+/** Publish the merged default branch to origin. Never fails the merge or the
+ *  run: the commit already landed locally, so an unreachable remote or a
+ *  rejected non-fast-forward logs loudly and leaves the founder to push by
+ *  hand. Plain push (no lease, no force) — the base branch is never rewritten
+ *  by the engine, so a rejection means someone else moved origin and that
+ *  needs a human, not a force. */
+function pushBaseBranch(run, rig, logFile) {
+  const runDir = runDirOf(run.id);
+  const b = rig.defaultBranch;
+  if (rig.policy.push === "off") {
+    log(runDir, `base push: policy.push=off — ${b} merged locally only`);
+    return false;
+  }
+  if (git(rig.path, ["remote", "get-url", "origin"]).status !== 0) {
+    log(runDir, `base push: no origin remote — ${b} merged locally only`);
+    return false;
+  }
+  const r = runCommand(`git push origin ${b}`, rig.path, logFile, 2);
+  if (r.ok) {
+    log(runDir, `base push: pushed ${b} to origin`);
+    return true;
+  }
+  log(runDir, `base push FAILED for ${b}: ${r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (merge stays local; see deploy.log)`);
+  return false;
 }
 
 /** Render `url` as a scannable QR png in the run dir. Null qrPath on failure. */
@@ -2070,9 +2105,14 @@ function deployStep(run, rig) {
     try {
       tArtifact(run.id, "deploy", deploy.type === "harness-merge" ? "harness_merge_commit" : "merge_commit", m.sha);
     } catch {}
-    mergeNote = deploy.type === "harness-merge" ? null : `merged factory/${run.id} into ${rig.defaultBranch} (${m.sha}, local only)`;
+    run.basePushed = m.pushed;
+    saveRun(run);
+    mergeNote =
+      deploy.type === "harness-merge"
+        ? null
+        : `merged factory/${run.id} into ${rig.defaultBranch} (${m.sha}, ${m.pushed ? "pushed to origin" : "LOCAL ONLY — push by hand"})`;
   } else if (mergePhase.action === "already-merged") {
-    mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}, local only); retrying publish`;
+    mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}); retrying publish`;
   } else {
     mergeNote = deploy.type === "none" ? null : `branch factory/${run.id} left for founder merge (policy.merge review)`;
   }
@@ -2463,6 +2503,58 @@ function git(repoPath, args) {
   });
 }
 
+/**
+ *  Bring the rig's local default branch in sync with origin before a run
+ *  branches off it. PRs merged on GitHub only exist on the remote, so a stale
+ *  local main would make every new worktree start from yesterday's code.
+ *  Fetch, then fast-forward the local branch — never force, never touch a
+ *  dirty checkout, never rewrite a diverged local branch. Returns the ref the
+ *  worktree should actually be created from, so a run still starts from the
+ *  true remote state even when the local branch could not be moved.
+ */
+function syncBaseBranch(rig, runDir) {
+  const b = rig.defaultBranch;
+  const upstream = `origin/${b}`;
+  const note = (msg) => log(runDir, `base sync: ${msg}`);
+  if (git(rig.path, ["remote", "get-url", "origin"]).status !== 0) {
+    note(`no origin remote — branching off local ${b}`);
+    return b;
+  }
+  const fetched = git(rig.path, ["fetch", "--prune", "origin", b]);
+  if (fetched.status !== 0) {
+    note(`fetch failed (${(fetched.stderr || "").trim().slice(0, 200)}) — branching off local ${b}`);
+    return b;
+  }
+  const sha = (ref) => git(rig.path, ["rev-parse", ref]).stdout.trim();
+  if (sha(b) === sha(upstream)) {
+    note(`${b} already matches ${upstream} (${sha(b).slice(0, 8)})`);
+    return b;
+  }
+  // Local-only commits on the base branch: fast-forwarding is impossible and
+  // resetting would drop them, so keep the local branch as the base and say so.
+  if (git(rig.path, ["merge-base", "--is-ancestor", b, upstream]).status !== 0) {
+    note(`local ${b} has commits not on ${upstream} — branching off local ${b}, sync it by hand`);
+    return b;
+  }
+  const head = git(rig.path, ["symbolic-ref", "--quiet", "--short", "HEAD"]).stdout.trim();
+  let ff;
+  if (head === b) {
+    if (git(rig.path, ["status", "--porcelain"]).stdout.trim()) {
+      note(`${rig.path} is dirty — leaving local ${b} behind, branching off ${upstream}`);
+      return upstream;
+    }
+    ff = git(rig.path, ["merge", "--ff-only", upstream]);
+  } else {
+    ff = git(rig.path, ["fetch", "origin", `${b}:${b}`]);
+  }
+  if (ff.status !== 0) {
+    note(`fast-forward of ${b} failed (${(ff.stderr || "").trim().slice(0, 200)}) — branching off ${upstream}`);
+    return upstream;
+  }
+  note(`fast-forwarded ${b} to ${upstream} (${sha(b).slice(0, 8)})`);
+  return b;
+}
+
 function dirSizeBytes(p) {
   try {
     return (parseInt(sh(`du -sk ${JSON.stringify(p)}`), 10) || 0) * 1024;
@@ -2762,11 +2854,17 @@ function execRun(id) {
     // set "worktree": false and run agent steps against the live checkout.
     if (workflow.worktree === false) {
       run.worktree = rig.path;
+      // Read-only workflows still read the live checkout, so it has to reflect
+      // what is on origin — otherwise a self-review reports on stale code.
+      setState(run, "setup", "syncing base branch");
+      syncBaseBranch(rig, runDir);
       saveRun(run);
     } else if (!fs.existsSync(run.worktree)) {
+      setState(run, "setup", "syncing base branch");
+      const baseRef = syncBaseBranch(rig, runDir);
       setState(run, "setup", "creating worktree");
       fs.mkdirSync(WORKTREES_DIR, { recursive: true });
-      sh(`git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b factory/${id} ${rig.defaultBranch}`);
+      sh(`git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b factory/${id} ${baseRef}`);
       log(runDir, `worktree created at ${run.worktree} (branch factory/${id})`);
       // Publish the branch (and set its upstream) before the first agent step
       // so the agents' per-commit plain `git push` works and the web console's
@@ -4190,7 +4288,7 @@ function cmdSelftest() {
   // Per-rig policy resolution (pure, plus the live rigs.json wiring).
   const pol = (raw) => resolveRigPolicy("selftest-rig", raw);
   const policyChecks = [
-    ["absent policy resolves to safe defaults", JSON.stringify(pol(undefined).policy) === JSON.stringify({ merge: "review", deploy: "auto", preview: "off" })],
+    ["absent policy resolves to safe defaults", JSON.stringify(pol(undefined).policy) === JSON.stringify({ merge: "review", deploy: "auto", preview: "off", push: "auto" })],
     ["absent policy has no problems", pol(undefined).problems.length === 0],
     ["explicit auto/auto accepted", (() => { const r = pol({ merge: "auto", deploy: "auto" }); return r.problems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
     ["hold and preview values accepted", (() => { const r = pol({ deploy: "hold", preview: "on" }); return r.problems.length === 0 && r.policy.deploy === "hold" && r.policy.preview === "on"; })()],
@@ -4209,20 +4307,34 @@ function cmdSelftest() {
         return false;
       }
     })()],
-    // The engine never pushes the rig's default branch (D26): auto-merge is
-    // local-only for every rig. The engine DOES push the run's own
-    // factory/<id> branch (pushRunBranchCommand — console commit links,
-    // agents' upstream), so the scan targets command literals, not call
-    // sites (a call site split across lines must not dodge it): every
-    // non-comment `git push` string in the source must name factory/.
-    // The scan's own lines, and selftest lines that quote the literal for
-    // other checks, carry the no-push-scan marker and are excluded.
-    ["every git push in the engine targets factory/<id>, never the base branch", (() => {
+    // D26 said the engine never pushes the rig's default branch; the founder
+    // reversed that on 2026-08-09 (policy.push, default "auto") so origin is
+    // always the truth. The engine now performs exactly two pushes and no
+    // others: the run's own factory/<id> branch (pushRunBranchCommand —
+    // console commit links, agents' upstream) and the merged base branch
+    // (pushBaseBranch). The scan targets command literals, not call sites (a
+    // call site split across lines must not dodge it). The scan's own lines,
+    // and selftest lines that quote a literal for other checks, carry the
+    // no-push-scan marker and are excluded.
+    ["every git push in the engine is the run branch or the merged base branch", (() => { // no-push-scan
       const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
       const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
-      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l)); // no-push-scan
+      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l) || /git +push origin \$\{b\}`/.test(l)); // no-push-scan
     })()],
-    ["engine's only push command is the run branch push", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
+    ["engine's run-branch push command is unchanged", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
+    // The base branch is never rewritten by the engine, so its push must stay
+    // a plain push: a rejection means someone else moved origin and that needs
+    // a human, not a force.
+    ["base branch push never forces", (() => {
+      const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
+      return lines.some((l) => /git +push origin \$\{b\}`/.test(l)) && !lines.some((l) => /git +push[^"'`]*(--force|-f )[^"'`]*origin \$\{b\}/.test(l)); // no-push-scan
+    })()],
+    ["policy.push defaults to auto", resolveRigPolicy("r", undefined).policy.push === "auto"],
+    ["policy.push off is honored", resolveRigPolicy("r", { push: "off" }).policy.push === "off"],
+    ["invalid policy.push is a problem and falls back to auto", (() => {
+      const r = resolveRigPolicy("r", { push: "yes" });
+      return r.problems.length === 1 && /policy\.push/.test(r.problems[0]) && r.policy.push === "auto";
+    })()],
     // greenTerminalState: awaiting-merge only when a merge was actually in
     // play (worktree + deploy step + review policy + nothing merged).
     ["review-policy worktree run with a deploy step and no merge parks awaiting-merge",

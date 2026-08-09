@@ -485,3 +485,40 @@ move classifier, and marketing recognition invites a review-driven expectation g
 was unbuildable — its designated hero clip shows the app naming what the user's feet
 did, which no user-facing screen does. Every calendar in that set also assumed a
 store launch against a repo at 0.1.0 with no listing, no paywall and no IAP.
+
+## D29 — origin is the truth: runs sync the base branch before branching, and merges push (2026-08-09)
+
+**Context:** the founder merges PRs on GitHub, but the engine only ever touched
+git locally. `factory-run` created every run's worktree from the **local**
+default branch with no fetch, so a PR merged on GitHub was invisible to every
+subsequent run; and D26 made auto-merge local-only, so `running-with-pace` and
+`skip-hero` were sitting 3 unpushed merge commits ahead of origin. Both halves
+of the divergence were silent.
+**Decision:**
+- **Base sync before every run** (`syncBaseBranch`): at run setup, before
+  `git worktree add` — and also for read-only `worktree:false` workflows, which
+  read the live checkout — the engine fetches origin and fast-forwards the local
+  default branch. It never forces and never resets: a dirty checkout is left
+  alone (the worktree is branched off `origin/<base>` so the run still starts
+  from the remote truth), and a local branch holding commits not on origin keeps
+  its own history and logs "sync it by hand". Every outcome is a `base sync:`
+  line in the run log.
+- **`policy.push`** — the opt-in D26 reserved — exists, with values
+  `"auto"|"off"` and **default `"auto"`** (founder, 2026-08-09), reversing
+  D26's "the engine never pushes the rig's default branch". After a successful
+  merge the engine plain-pushes the default branch to origin. Never a force:
+  the engine never rewrites the base branch, so a rejection means someone else
+  moved origin and that needs a human. A failed push never fails the run — the
+  merge is already durable locally — but the Slack merge note says
+  "LOCAL ONLY — push by hand" instead of "pushed to origin", and `run.basePushed`
+  records it.
+- The selftest guard that pinned "every push targets `factory/<id>`" now pins
+  the two — and only two — pushes the engine performs, plus that the base-branch
+  push never forces.
+**Why:** the factory's whole state model assumes the local checkout is the
+current state of the app. Once the founder started merging PRs on GitHub that
+stopped being true in both directions, and nothing in the system noticed. Making
+origin authoritative on the way in (fetch) and on the way out (push) costs one
+fetch per run and removes an entire class of "the agent worked on stale code"
+and "the merge only exists on your laptop" failures. The unpushed commits on
+both app rigs were pushed by hand on 2026-08-09.

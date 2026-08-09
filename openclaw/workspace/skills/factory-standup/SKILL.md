@@ -26,8 +26,9 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
      GREEN — the rig's merge policy is "review", so the founder merges by hand.
      List each in "Needs founder" with the branch from the run's machine-readable
      `pendingMerge` object (`{branch, baseBranch}`), e.g. "merge `factory/<id>`
-     into main when happy (local merge — the engine never pushes the base
-     branch)". Never report awaiting-merge as stalled or failed.
+     into main when happy". A founder merge should be pushed to origin like any
+     other (D29) — the engine pushes its own merges. Never report
+     awaiting-merge as stalled or failed.
    - **Held deploys** = every run with `deployHeld: true` (the rig's deploy policy
      is "hold"). List in "Needs founder": release with `factory-run deploy <id>`
      or the console's Release-deploy button.
