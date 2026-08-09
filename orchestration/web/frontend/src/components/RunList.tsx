@@ -28,8 +28,15 @@ function RunCard({ run: r, selected, onSelect }: { run: RunSummary; selected: bo
       </div>
       <div className="run-card-flags">
         {r.state === "awaiting-merge" && (
-          <Badge kind="merge" title={`Run finished green — merge factory/${r.id} when happy (local merge only)`}>
-            merge factory/{r.id} when happy
+          <Badge
+            kind="merge"
+            title={
+              r.pr
+                ? `Run finished green — review & merge PR #${r.pr.number}, then Sync marks it done`
+                : `Run finished green — merge ${r.branch} when happy (local merge only)`
+            }
+          >
+            {r.pr ? `merge PR #${r.pr.number}` : `merge ${r.branch} when happy`}
           </Badge>
         )}
         {r.deployHeld && <Badge kind="warn" title="Deploy held by rig policy — release it from the run page">deploy held</Badge>}
@@ -42,6 +49,32 @@ function RunCard({ run: r, selected, onSelect }: { run: RunSummary; selected: bo
   );
 }
 
+/** Order a section's runs by lineage: chain members sit directly under their
+ *  root (depth-first, keeping the incoming newest-first order among siblings)
+ *  and are flagged `chained` for the indent. A run whose parent lives in
+ *  another section still indents — the lineage is real either way. */
+function groupByLineage(runs: RunSummary[]): { run: RunSummary; chained: boolean }[] {
+  const ids = new Set(runs.map((r) => r.id));
+  const children = new Map<string, RunSummary[]>();
+  const roots: RunSummary[] = [];
+  for (const r of runs) {
+    if (r.parentRun && ids.has(r.parentRun)) {
+      const list = children.get(r.parentRun) ?? [];
+      list.push(r);
+      children.set(r.parentRun, list);
+    } else {
+      roots.push(r);
+    }
+  }
+  const out: { run: RunSummary; chained: boolean }[] = [];
+  const visit = (r: RunSummary) => {
+    out.push({ run: r, chained: Boolean(r.parentRun) });
+    for (const c of children.get(r.id) ?? []) visit(c);
+  };
+  for (const r of roots) visit(r);
+  return out;
+}
+
 export function RunList({ runs, selectedId, onSelect }: Props) {
   if (runs.length === 0) {
     return <div className="empty-state">No runs yet. Start one from “New run”.</div>;
@@ -49,7 +82,7 @@ export function RunList({ runs, selectedId, onSelect }: Props) {
   return (
     <div className="run-sections">
       {RUN_SECTIONS.map(({ key, label }) => {
-        const sectionRuns = runs.filter((r) => runSection(r.state) === key);
+        const sectionRuns = groupByLineage(runs.filter((r) => runSection(r.state) === key));
         if (sectionRuns.length === 0) return null;
         return (
           <section key={key} className="run-section">
@@ -57,8 +90,8 @@ export function RunList({ runs, selectedId, onSelect }: Props) {
               {label} <span className="run-section-count">{sectionRuns.length}</span>
             </h3>
             <ul className="run-list">
-              {sectionRuns.map((r) => (
-                <li key={r.id}>
+              {sectionRuns.map(({ run: r, chained }) => (
+                <li key={r.id} className={chained ? "run-chained" : ""}>
                   <RunCard run={r} selected={selectedId === r.id} onSelect={onSelect} />
                 </li>
               ))}

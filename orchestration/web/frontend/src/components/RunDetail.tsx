@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type {
+  ChainEntry,
   CheckGate,
   RetryClassification,
   RetryEntry,
   RunDetail as RunDetailData,
   RunPreview,
+  RunSummary,
   StepDocAttempts,
   StepDocKind,
   StepRow,
@@ -24,6 +26,7 @@ import {
   fmtTokens,
   fmtWhen,
   isTerminal,
+  prLabel,
   stateKind,
   stateLabel,
   stepStatusKind,
@@ -88,7 +91,10 @@ export function RunDetail({ runId, onBack }: { runId: string; onBack: () => void
         {error && <div className="error-box">refresh failed: {error}</div>}
       </div>
 
-      {run.state === "awaiting-merge" && <MergeBanner run={run} />}
+      {run.state === "awaiting-merge" && <PrPanel run={run} refresh={refresh} />}
+      {run.state === "closed" && <ClosedPanel run={run} />}
+      {run.state === "done" && (run.pr || data.chain.length > 1) && <DoneFollowupPanel run={run} />}
+      {data.chain.length > 1 && <ChainSection chain={data.chain} currentId={run.id} />}
       {run.deployHeld && <HeldDeployPanel runId={run.id} refresh={refresh} />}
       {run.state === "awaiting-approval" &&
         (workflow?.steps[run.stepIndex ?? -1]?.type === "commands" ? (
@@ -170,19 +176,209 @@ function QrImage({ runId, name, alt }: { runId: string; name: "qr.png" | "previe
   return <img className="qr-image" src={src} alt={alt} />;
 }
 
-/** The run finished green under merge policy "review": the founder merges by hand. */
-function MergeBanner({ run }: { run: { id: string } }) {
+/** Follow-up composer: starts a chained run continuing this run's branch (one
+ *  PR per chain). Runs non-auto, so the child's plan discussion is where the
+ *  change gets talked through before implementation. */
+function FollowupComposer({ runId, hint }: { runId: string; hint: string }) {
+  const [open, setOpen] = useState(false);
+  const [workflow, setWorkflow] = useState<"feature-dev" | "bug-fix">("feature-dev");
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.followup(runId, workflow, prompt.trim());
+      window.location.hash = `#/run/${r.runId}`;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <div className="gate-actions">
+        <button className="btn btn-steer" onClick={() => setOpen(true)}>
+          ＋ Follow-up run…
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="gate-form">
+      <p className="run-links">{hint}</p>
+      <div className="gate-actions">
+        <label>
+          Workflow:{" "}
+          <select value={workflow} onChange={(e) => setWorkflow(e.target.value as "feature-dev" | "bug-fix")}>
+            <option value="feature-dev">feature-dev</option>
+            <option value="bug-fix">bug-fix</option>
+          </select>
+        </label>
+      </div>
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={4}
+        placeholder="What should the follow-up change? (the plan discussion refines it before anything is built)"
+        autoFocus
+      />
+      <div className="gate-actions">
+        <button className="btn btn-approve" disabled={busy || !prompt.trim()} onClick={() => void start()}>
+          Start follow-up
+        </button>
+        <button className="btn btn-ghost" disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+      {error && <div className="error-box">{error}</div>}
+    </div>
+  );
+}
+
+/** The run finished green under merge policy "review": PR link + GitHub sync
+ *  when a PR exists, the manual local-merge recipe when it doesn't (non-GitHub
+ *  origin / missing gh — run.prWarning says why). */
+function PrPanel({ run, refresh }: { run: RunSummary; refresh: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const sync = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.sync(run.id);
+      setNotice(r.message || "Synced with GitHub.");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="panel gate-panel">
       <h3>🔀 Awaiting your merge</h3>
+      {run.pr ? (
+        <>
+          <p>This run finished green and opened a pull request for your review:</p>
+          <p>
+            <a href={run.pr.url} target="_blank" rel="noreferrer" className="artifact-link">
+              ⬆ {prLabel(run.pr)} — review &amp; merge on GitHub
+            </a>
+          </p>
+          {run.pr.checkedAt && (
+            <p className="run-links">Last synced {fmtWhen(run.pr.checkedAt)}{run.pr.state ? ` — ${run.pr.state}` : ""}.</p>
+          )}
+          <div className="gate-actions">
+            <button className="btn btn-approve" disabled={busy} onClick={() => void sync()}>
+              ⟳ Sync with GitHub
+            </button>
+          </div>
+          <p className="run-links">
+            Merged → the run completes. Closed without merging → the run closes (worktree removed, branch{" "}
+            <code>{run.branch}</code> kept) and a follow-up can restart it later.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            This run finished green. No PR exists{run.prWarning ? ` — ${run.prWarning}` : ""}. Merge branch{" "}
+            <code>{run.branch}</code> when happy:
+          </p>
+          <pre className="doc-view">git merge {run.branch}</pre>
+          <p>
+            The merge is local — the engine never pushes the base branch. After you merge, the next cleanup
+            reclaims the worktree and branch.
+          </p>
+        </>
+      )}
+      {notice && <div className="notice-box">{notice}</div>}
+      {error && <div className="error-box">{error}</div>}
+      <FollowupComposer
+        runId={run.id}
+        hint="Starts a chained run on this same branch — its pushes update this PR, and its plan discussion is where you talk the change through."
+      />
+    </section>
+  );
+}
+
+/** PR closed without merging: the chain is parked — worktree gone, branch
+ *  kept — and a follow-up run restarts it with the PR discussion as context. */
+function ClosedPanel({ run }: { run: RunSummary }) {
+  return (
+    <section className="panel gate-panel">
+      <h3>🗃 PR closed — chain parked</h3>
       <p>
-        This run finished green. Merge branch <code>factory/{run.id}</code> when happy:
+        {run.pr ? (
+          <>
+            Pull request{" "}
+            <a href={run.pr.url} target="_blank" rel="noreferrer">
+              #{run.pr.number}
+            </a>{" "}
+            was closed without merging.
+          </>
+        ) : (
+          "The PR was closed without merging."
+        )}{" "}
+        The worktree was torn down; branch <code>{run.branch}</code> is kept in git, so a follow-up run can pick
+        the work back up any time.
       </p>
-      <pre className="doc-view">git merge factory/{run.id}</pre>
-      <p>
-        The merge is local — the engine never pushes the base branch. After you merge, the next cleanup
-        reclaims the worktree and branch.
-      </p>
+      <FollowupComposer runId={run.id} hint="Restarts the chain on the kept branch; a new PR opens when it goes green." />
+    </section>
+  );
+}
+
+/** A merged (done) run stays a valid chain parent — the PR is reference
+ *  context for whatever comes next on this branch. */
+function DoneFollowupPanel({ run }: { run: RunSummary }) {
+  return (
+    <section className="panel">
+      <h3>Follow-up</h3>
+      {run.pr && (
+        <p>
+          <a href={run.pr.url} target="_blank" rel="noreferrer" className="artifact-link">
+            ⬆ {prLabel(run.pr)}
+          </a>
+        </p>
+      )}
+      <FollowupComposer
+        runId={run.id}
+        hint="Continues the merged branch — the old PR stays as reference context; a new PR opens when the follow-up goes green."
+      />
+    </section>
+  );
+}
+
+/** Every run in the follow-up chain, root → tip: state badge, kicking-off
+ *  prompt, link — plus the chain's PR (one per chain by construction). */
+function ChainSection({ chain, currentId }: { chain: ChainEntry[]; currentId: string }) {
+  const prs = chain.map((c) => c.pr).filter((p): p is NonNullable<typeof p> => p !== null);
+  const pr = prs.length ? prs[prs.length - 1] : null;
+  return (
+    <section className="panel">
+      <h3>Run chain</h3>
+      {pr && (
+        <p>
+          <a href={pr.url} target="_blank" rel="noreferrer" className="artifact-link">
+            ⬆ {prLabel(pr)}
+          </a>
+        </p>
+      )}
+      <ol className="chain-list">
+        {chain.map((c) => (
+          <li key={c.id} className={c.id === currentId ? "chain-current" : ""}>
+            <Badge kind={stateKind(c.state)}>{stateLabel(c.state)}</Badge>{" "}
+            {c.id === currentId ? <strong>{c.id}</strong> : <a href={`#/run/${c.id}`}>{c.id}</a>}
+            <span className="chain-prompt">{c.prompt || "(no prompt)"}</span>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

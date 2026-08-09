@@ -27,6 +27,27 @@ export interface RunPreview {
   decision?: ReleaseDecision;
 }
 
+/** The run's GitHub PR (review-policy rigs): recorded at deploy time, its
+ *  live state/checkedAt refreshed by `factory-run sync`. */
+export interface RunPr {
+  number: number;
+  url: string;
+  createdAt: string;
+  state?: "open" | "merged" | "closed";
+  checkedAt?: string;
+}
+
+/** One run in a follow-up chain (root → tip), as derived by the server. */
+export interface ChainEntry {
+  id: string;
+  parentRun: string | null;
+  workflow: string;
+  state: string;
+  prompt: string;
+  pr: RunPr | null;
+  createdAt: string | null;
+}
+
 export interface RunSummary {
   id: string;
   workflow: string;
@@ -39,6 +60,11 @@ export interface RunSummary {
   stepIndex: number | null;
   artifactUrl: string | null;
   preview: RunPreview | null;
+  /** The git branch this run works on (follow-ups inherit the chain root's). */
+  branch: string;
+  pr: RunPr | null;
+  /** Why no PR exists (non-GitHub origin, missing gh), or null. */
+  prWarning: string | null;
   deployHeld: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -168,6 +194,8 @@ export interface CheckGate {
 export interface RunDetail {
   run: RunSummary;
   repoUrl: string | null;
+  /** Follow-up lineage (root → tip); a single-run chain renders as none. */
+  chain: ChainEntry[];
   history: HistoryEntry[];
   steps: StepRow[];
   artifacts: ArtifactRow[];

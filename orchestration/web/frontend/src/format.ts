@@ -45,8 +45,10 @@ export function usageLine(u: Usage | null): string | null {
 // "killed" is a discussion step's don't-build ending: terminal and a success
 // (early kill = money saved), styled like done — never like failed.
 // "awaiting-merge" is a merge-policy "review" run that finished green: terminal
-// (the founder merges factory/<id> by hand), styled as its own pending-action kind.
-export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge"];
+// (the founder merges the run's PR), styled as its own pending-action kind.
+// "closed" is an awaiting-merge run whose PR was closed without merging:
+// settled (worktree gone, branch kept), restartable via a follow-up run.
+export const TERMINAL_STATES = ["done", "failed", "rejected", "cancelled", "killed", "awaiting-merge", "closed"];
 
 export function isTerminal(state: string): boolean {
   return TERMINAL_STATES.includes(state);
@@ -59,6 +61,7 @@ export function stateKind(state: string): string {
   if (state === "failed") return "fail";
   if (state === "rejected") return "warn";
   if (state === "cancelled") return "muted";
+  if (state === "closed") return "muted";
   if (state === "awaiting-approval") return "gate";
   if (state === "awaiting-merge") return "merge";
   if (state.startsWith("running:") || state === "deploying" || state === "setup" || state === "queued" || state === "recovering") return "active";
@@ -98,7 +101,14 @@ export function stepStatusKind(status: string): string {
 export function stateLabel(state: string): string {
   if (state.startsWith("running:")) return `running ${state.slice(8)}`;
   if (state === "awaiting-merge") return "awaiting merge";
+  if (state === "closed") return "closed (PR)";
   return state;
+}
+
+/** Compact PR label for badges/links, e.g. "PR #12 (open)". */
+export function prLabel(pr: { number: number; state?: string } | null): string | null {
+  if (!pr) return null;
+  return `PR #${pr.number}${pr.state ? ` (${pr.state})` : ""}`;
 }
 
 export type NodeStatus = "done" | "fail" | "active" | "gate" | "pending";
