@@ -12,11 +12,13 @@
       "notifyChannelName": "factory-pace",
       "setup": [
         "npm install",
+        "cd pace-node-js-server && npm install",
         "cd pace-react-native && npm install"
       ],
       "checks": [
         "npm run type-check",
-        "npm run lint"
+        "npm run lint",
+        "cd pace-node-js-server && npm run build"
       ],
       "tests": [
         "npm run test:unit"
