@@ -6,10 +6,17 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-08-07 18:00 (EOD sync — every in-flight item reconciled against
-> `factory-run list`/`status --json`, telemetry.db, per-run engine.logs, git log +
-> branch/worktree/merge-base state in all three rigs, and the subagent run table;
-> corrections in the 2026-08-07 EOD block near the end of this file)
+> Last updated: 2026-08-10 21:31 (EOD sync — host was asleep 07:25–21:26, so the day
+> was dark; in-flight items re-reconciled against GitHub PR state rather than the
+> engine, which was found stale on 4 of 6 `awaiting-merge` entries. Corrections in the
+> 2026-08-10 block at the end of this file.)
+>
+> Prior: 2026-08-09 18:00 (EOD sync — every in-flight item reconciled against
+> `factory-run list`/`status --json`, per-run engine.logs, `git log` /
+> `branch -vv` / `worktree list` / `merge-base` in all three rigs, the GitHub PR
+> list per rig, and the `subagent_runs` table; corrections in the 2026-08-09 EOD
+> block at the end of this file. Note: 2026-08-08 was a zero-activity day
+> factory-wide, so the 08-07 blocks below cover two elapsed days.)
 
 ## Orchestration layer (new 2026-08-03)
 
@@ -101,6 +108,17 @@ Next milestone: **factory fully online** (founder confirmed standup visible in S
   ($31.70 sunk, 90m step timeout) — resolve or kill it rather than leaving it failed.
   Shipped today: two-preview split, save-video fix, pose stabilizer, share-sheet
   recording export (`4e2a40f`) — all merged to skip-hero main by 09:32.
+
+- **running-with-pace (Pace)** — **ACTIVE (added 2026-08-09 EOD; flagged as missing at
+  the 08-07 standup and at the 08-07 EOD and not fixed until now).** Registered rig,
+  merge policy `review`. The founder's own product, driven largely by him directly;
+  the factory contributes feature/bug runs off `factory/*` branches that land as
+  GitHub PRs. **8 engine runs to date, $143.41** (corrected 08-10; the "five runs,
+  ~$104" written here on 08-09 undercounted). Four have landed on `main` — PRs
+  #40/#41/#42 (squash, 08-09) plus `bug-app-startup-very-slow` (`86ffe89`, 08-07).
+  **Only 2 remain open**: PR #45 (`bug-run-progress-does-not`) and
+  `feature-two-cold-start-stalls`, which has no PR at all. Working tree may carry
+  founder-side edits — do not assume a clean rig when starting runs here.
 
 - **pullup** — **BACKLOGGED (founder steer, 2026-08-06, D27).** Sidelined entirely,
   not killed: its spec gate is withdrawn rather than pending. Stages 1–2 + 2D & 3D
@@ -619,3 +637,81 @@ was the largest overnight consumer. Fix at the next standup or now.
 6. **Shirtless-footage reach risk** — vest or skeleton-replay export. Needs a call.
 7. Still open from 08-05: branch protection on `main` (item 3 keeps making this more
    relevant) and local-vs-rented VM timing.
+
+## Today — 2026-08-10 (NO STANDUP POSTED; cutoff cron fired 21:26, ~10.5h late)
+
+**The factory was dark all day and the standup never ran.** Recorded by the
+`factory-standup-cutoff` cron at 21:26 BST. Nothing was dispatched — there was no
+posted proposal to proceed with, and 21:26 is not the hour to start a day's work.
+
+Verified:
+- `#factory-standup` has **zero messages dated 2026-08-10**. Last channel message is
+  the founder's 2026-08-09 19:06 thread on `self-weekly-self-review-find`. Last
+  standup posted: Sunday 09 Aug 08:04.
+- `factory-run status --json`: **zero runs created or updated today.** Last engine
+  activity is `bug-run-progress-does-not` reaching `awaiting-merge` at
+  2026-08-09 18:57 UTC.
+- `find ~/src/{app-factory,skip-hero,running-with-pace} -newermt 2026-08-10` →
+  **no files written today** in any rig.
+- No founder message today, so the cutoff has nothing to re-plan against.
+
+**~~Root cause candidate — the standup cron is unreliable, third occurrence.~~
+CORRECTED at the 21:31 EOD sync — the crons were fine; the host was asleep.**
+`pmset -g log`: the MacBook entered **'Low Power Sleep' at 2026-08-10 07:25:06 BST at
+1% battery** (TCPKeepAlive inactive) and did not wake until **21:26:20 on AC power**.
+The factory was dark for 14 hours because the machine was off, not because the
+scheduler is broken. `openclaw cron list` confirms it: `factory-daily-standup`,
+`factory-standup-cutoff` and `factory-eod-sync` all show `Last: ~21:24` with status
+`ok` — three different schedules (08:00, 11:00, 18:00) firing within two minutes of
+each other is wake-catch-up, not three independent failures. The 08-09 and 08-06 cron
+failures were real but are a **separate, lower-severity** issue; today is not a third
+occurrence of them. Real harness gap: **the factory has no power/availability
+guarantee** — an unplugged laptop at 1% silently costs a full working day, and the
+catch-up burst then fires a standup at an hour when it is useless.
+
+**Open items — RE-VERIFIED 2026-08-10 21:31 against GitHub, not the engine.
+The engine's `awaiting-merge` list is STALE: 4 of its 6 entries are already merged.**
+Verified with `gh pr list`, `gh pr view --json mergeCommit`, and `git log origin/main`
+after `git fetch --prune`:
+- **Genuinely open — 2, not 6:**
+  - `bug-run-progress-does-not` (pace, $9.53) — **PR #45 genuinely OPEN**, unmerged.
+    Real founder-merge item.
+  - `feature-two-cold-start-stalls` (pace, $7.73) — 1 commit (`a142b20`) on
+    `factory/feature-two-cold-start-stalls`, **no PR was ever opened**. This is not
+    awaiting the founder, it is **stuck**: work finished 08-07 and never surfaced.
+- **Already merged — engine state wrong, no founder action needed:**
+  - `feature-pace-social-page-signed` → PR #40 squash-merged 08-09 12:09 (`8024ff2`).
+  - `feature-move-territory-calculation` → PR #41 squash-merged 08-09 12:35 (`161fb44`).
+  - `feature-reduce-event-storage-phone` → PR #42 squash-merged 08-09 14:16 (`d49527a`).
+  - `bug-app-startup-very-slow` → merged 08-07 via merge commit `86ffe89`.
+  Squash-merge is why the engine missed these: the branch tip is never an ancestor of
+  `main`, so any ancestor-based merge check reads a squashed PR as unmerged. The
+  engine's `sync` verb (D29) needs to reconcile on **PR state**, not commit ancestry.
+- `bug-century-club-goal-shows` (pace, failed, $0.00): its branch sits **exactly at
+  `main` with 0 commits** — the run died in setup and produced nothing. The branch and
+  worktree are empty artifacts and can be deleted; do not read this as merged work.
+- **3 failed runs** unresolved: `bug-century-club-goal-shows` (pace, setup failed on
+  `pace-node-js-server && npm install`), `feature-f1-surface-footwork-readout`
+  (skip-hero, step 1/11, $4.00), `feature-msdpir37` (skip-hero, superseded).
+- `self-weekly-self-review-find` **rejected** at step 1/3 — `analyze` wrote a clean 9KB
+  `improvement-plan.md`, then `plan-gate` failed on the Slack send. The plan exists and
+  has never been read by the founder.
+  (Confirmed on disk: `orchestration/runs/self-weekly-self-review-find/improvement-plan.md`.)
+- Zero gates open. Zero runs executing.
+- **Unpushed local commits (found at this sync, not previously tracked):**
+  `app-factory` main is **ahead 3** of `origin/main` (`85f51c2`, `9f9bb5c`, `d656c21` —
+  the 08-09 web-console markdown work) and `skip-hero` main is **ahead 2**
+  (`df06271`, `77920c0` — stabilizer provenance). All merged locally on 08-09 and
+  never pushed; if this laptop is the only copy, that work is one disk failure from
+  gone. `skip-hero` also has an untracked `marketing/` directory and a modified
+  `.gitignore`.
+
+### EOD sync note — 2026-08-10 21:31
+
+This block was opened by the `factory-standup-cutoff` cron at 21:26 and then
+**verified and corrected** by the `factory-eod-sync` run at 21:31. Two of its original
+claims were wrong (cron root cause; 6 awaiting-merge) and are struck through /
+restated above. Its factual claims about the day being dark — no Slack messages, no
+runs, no files written — were re-checked and **hold**. Pace totals also corrected:
+**8 engine runs, $143.41** to date, not "five runs, ~$104" as written in the
+running-with-pace bullet above.

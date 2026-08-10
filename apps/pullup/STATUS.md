@@ -8,8 +8,14 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-08-07 18:00 (EOD sync). Still correct, still dormant, nothing
-  to change. No pullup runs in `factory-run list` or `telemetry.db` (ever); no subagent
+- **Last verified:** 2026-08-10 21:31 (EOD sync). Still correct, still dormant, nothing
+  to change. No pullup run has ever existed in `factory-run status --json` (all 8 pace
+  runs, plus app-factory and skip-hero runs, accounted for; none touch pullup). No file
+  under `apps/pullup/` has been modified since 08-07 — the only file written anywhere in
+  the three rigs on 08-10 was `STATE.md` itself. Dormant 7 days, correctly so under D27.
+  _(Prior verification: 2026-08-07 18:00, same conclusion, with the detail below.)_
+
+- **Prior verification detail (2026-08-07 18:00):** No pullup runs in `factory-run list` or `telemetry.db` (ever); no subagent
   has been spawned since 2026-08-05 12:12; the only commit to touch `apps/pullup/` since
   `1e98a1d` (2026-08-04) is `f361b41` — the 08-06 EOD sync editing this very file, not
   product work. Artifacts intact on disk and in git. Dormant 4 days, correctly so under
