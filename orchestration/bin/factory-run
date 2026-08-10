@@ -4615,7 +4615,11 @@ function cmdSelftest() {
     ["invalid value falls back to the safe default", pol({ merge: "yes" }).policy.merge === "review"],
     ["unknown key rejected naming rig and key", pol({ merg: "auto" }).problems.some((p) => p.includes("rig selftest-rig: unknown policy key 'merg'"))],
     ["non-object policy rejected", pol("auto").problems.length === 1],
-    ["skip-hero is merge-auto deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    // Product rigs review-gate their merges (founder decision 2026-08-11): a run
+    // is only "done" once its PR lands on origin's default branch. Auto-merge is
+    // reserved for the app-factory harness rig.
+    ["skip-hero is merge-review deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
+    ["running-with-pace defaults to merge-review", (() => { const r = resolveRig("running-with-pace"); return r.policyProblems.length === 0 && r.policy.merge === "review"; })()],
     ["app-factory is merge-auto deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
     ["running-with-pace defaults to merge-review", resolveRig("running-with-pace").policy.merge === "review"],
     ["awaiting-merge is a terminal state", TERMINAL_STATES.includes("awaiting-merge")],

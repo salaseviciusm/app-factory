@@ -63,7 +63,7 @@
       "defaultBranch": "main",
       "notifyChannelName": "factory-skiphero",
       "policy": {
-        "merge": "auto",
+        "merge": "review",
         "deploy": "auto"
       },
       "setup": [
