@@ -581,3 +581,63 @@ surface reports it as shipped. Review-gating the harness rig gives its changes
 the same rigor as product changes (reversing D19's auto-merge convenience),
 and making GitHub the single source of merge truth removes the class of
 "engine thinks X, origin knows Y" bugs instead of patching each one.
+
+## D32 — founder gates never expire; a run parked on a human waits indefinitely (2026-08-11)
+
+**Context:** three runs have now been killed by the 240-minute idle timeout on
+a founder gate — `feature-f1-surface-footwork-readout` on the 7th ($4.00),
+`feature-jittery-compass-driven-map` today at 08:42 BST ($2.17, a correct plan
+with no open questions), and the near-miss of `feature-android-pose-parity-spike`,
+which sat 9h32m at a check gate and only survived because the 11:00 cutoff
+reached it first. The engine posts a gate to Slack once and then counts down in
+silence. Trying to rescue today's death exposed a second defect: `factory-run
+retry` cannot recover a timed-out discussion gate at all — the idle clock is
+measured from the *original* gate post, so a retry re-posted the gate and failed
+it again 2ms later.
+**Decision (founder, 11:03 BST):** silent hours must not kill a workflow. Founder
+gates — plan discussion, check gate, review, any approval — have **no idle
+timeout**. A parked run stays `awaiting-approval` until the founder approves,
+rejects or cancels it. The 240-minute guillotine is removed rather than
+lengthened. Reminders replace it and become load-bearing: the gate's channel is
+re-pinged on a recurring cadence with the run, step, approve command and how long
+it has been waiting — age, not time-to-death. `factory-run status`/`list` surface
+every open gate with its age so the standup can carry them. The resume-clock bug
+is still fixed, with a regression test, so no resumed gate inherits a stale
+timestamp. Constraint: a parked run must not hold an executor slot or be reaped by
+the stale-run watchdog — indefinite parking makes both load-bearing.
+**Explicitly not decided:** auto-approval. The founder veto and the loud failure
+both stay. Genuine agent-step timeouts (the 90m implement cap) are untouched —
+this is only about waiting on a human.
+**Why:** a timeout on a human is a bet that the founder is at his desk. He is
+not, and the factory runs overnight. The engine was spending real money to
+produce correct plans and then throwing them away for the crime of being
+finished at 03:42. Waiting is free; the work is not.
+Delivered by run `bug-gates-die-silently-idle` (app-factory), re-scoped by
+steering at 11:07.
+
+## D33 — a fixture with no golden is not a re-baseline (2026-08-11)
+
+**Context:** skip-hero's `golden:check` fails on any fixture with no committed
+golden — `FAIL no golden at examples/<name>.recording.golden.json` — and the only
+remedy was `golden:update`, which rewrites *every* committed baseline and is
+founder-gated. So a run that merely **added** a fixture had to park on a founder
+gate. `feature-skip-hero-s-pose` waited 23:14–00:36 for this;
+`feature-android-pose-parity-spike` waited 9h32m. Neither was asking to change an
+existing baseline. The founder called it out directly: "the golden baseline still
+has errors that it could not find the appropriate file."
+**Decision:** separate the two acts. Writing a golden for a fixture that has none
+records what the pipeline does; rewriting a committed golden asserts the previous
+claim was wrong. Only the second is founder business. `npm run golden:bootstrap`
+writes missing goldens only, never touches an existing one, and **refuses** to
+bootstrap a fixture that fails the median-hip confidence gate — blessing one would
+freeze a regressed capture path into the suite (ADR 0026). `--update` is unchanged
+and remains the only path that rewrites a committed baseline.
+**Why:** the founder gate existed to protect a claim about correct behaviour. A
+fixture with no golden carries no such claim, so gating it bought nothing and cost
+ten hours of run time across two runs. The protection that matters — never
+silently rewrite a baseline — is untouched, and a bootstrapped golden still lands
+in the PR diff for review.
+**Open, deliberately:** the skip-hero rig still runs `golden:check` as its
+founder-gated check, so a fixture-adding run will still park until `rigs.json` is
+pointed at `golden:bootstrap`. That one-line change is the consequential half and
+is the founder's call. Local half delivered as skip-hero PR #4.

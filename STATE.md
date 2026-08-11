@@ -853,3 +853,64 @@ question in the factory.
 review), `feature-jittery-compass-driven-map-2` (running-with-pace, planning),
 `bug-gates-die-silently-idle` (app-factory, planning). No new specialists. Engine
 (`factory-run status --json`) remains the authority over this narrative.
+
+## 2026-08-11 11:03 — founder reply to the standup (post-cutoff), all four items actioned
+
+The founder replied at 11:03, three minutes after the cutoff message. Four items,
+mapped to the standup's proposal/needs-founder list.
+
+**1. "Yes approve it" — compass plan.** The run it referred to
+(`feature-jittery-compass-driven-map`) died on the idle timeout at 08:42 and was
+already restarted at the cutoff as `feature-jittery-compass-driven-map-2`, which is
+still in `plan` (step 0/11) and has not posted its gate yet. The approval is
+therefore held as a *standing* one: cron job `approve-compass-2-plan-gate`
+(331c9f92, every 5m, main session) approves or replies to that run's plan gate the
+moment it opens, then deletes itself and posts one line to #factory-standup. No
+other run is covered by it.
+
+**2. Golden baseline "could not find the appropriate file" — solved locally.**
+Confirmed the exact error from `feature-android-pose-parity-spike/checks.log`:
+`FAIL no golden at examples/IMG_0446.mediapipe.recording.golden.json` ×4. Root
+cause and fix recorded as **D33**. Delivered by hand rather than as a run (~40
+lines against a ~$15 bug-fix run): **skip-hero PR #4**, branch
+`factory/golden-bootstrap-new-fixtures`, commit `a501a70`. Adds
+`npm run golden:bootstrap` — writes goldens for missing fixtures only, never
+touches an existing one, refuses a fixture below the median-hip confidence gate.
+Verified end to end with two synthetic fixtures (one healthy, one below the gate):
+reproduces the original failure, bootstraps only the healthy one, leaves all seven
+existing goldens byte-identical, and a following `golden:check` passes. `typecheck`
+and `lint` clean; `format:check` flags only pre-existing untracked files.
+**Still open (founder's call, in the PR):** pointing the skip-hero rig's
+founder-gated check at `golden:bootstrap` so runs self-serve new fixtures.
+
+**3. "Push this all up" — done, and nothing is left unpushed.** `app-factory` main
+went up at the cutoff (`1f99a02..db4de5b`). Re-verified after: app-factory,
+skip-hero and running-with-pace all report zero unpushed commits (pace is 5
+*behind*, which is a pull, not a push). skip-hero PR #4 pushed above.
+Two things are still unbacked and cannot simply be pushed:
+- The agent workspace (`~/.openclaw/workspace`) had **no commits at all** since
+  2026-08-02. Given a local history now — `96e3c67`, persona + `memory/`.
+  It has **no remote**, and `app-factory` is a **public** repo, so USER.md,
+  IDENTITY.md and `memory/` cannot go there without a founder decision on where
+  they should live. AGENTS.md and `skills/` are symlinks into app-factory and are
+  already versioned.
+- The 448MB skip-hero footage library remains the single-copy risk logged
+  yesterday. Unchanged.
+
+**4. "Silent hours should NOT kill the workflow" — recorded as D32 and steered in.**
+`bug-gates-die-silently-idle` was still at step 0/7 (`find`), so the new scope was
+injected by `factory-run steer` at 11:07 and applies from its next agentic step.
+Scope changed from *warn before the guillotine* to *remove the guillotine*: founder
+gates get no idle timeout at all, reminders become the mechanism rather than a
+courtesy, `status`/`list` report gate **age** instead of time-to-timeout, and the
+run must verify that an indefinitely parked run holds no executor slot and is not
+reaped by the stale-run watchdog. The resume-clock fix and its regression test
+stay. Still explicitly not auto-approval.
+
+**In flight:** `feature-android-pose-parity-spike` (skip-hero, review),
+`feature-jittery-compass-driven-map-2` (running-with-pace, plan),
+`bug-gates-die-silently-idle` (app-factory, find, re-scoped). Plus skip-hero PR #4
+awaiting review.
+
+**Still unanswered, fourth day:** skip-hero has no ship date, no v1 scope line, no
+store-submission target.
