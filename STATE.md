@@ -796,3 +796,60 @@ added the fixture (session `d5d61aa1`) but a golden is only ever written by
 - Decide whether the `1db6fa50` bundle should also land as a fixture. Ask C of the
   brief said both sessions; the run landed only `d5d61aa1` and deliberately left this
   as a founder call. Its `.MOV` is now available either way.
+
+---
+
+## 2026-08-11 — 11:00 standup cutoff (no founder reply; posted proposal proceeded)
+
+Standup posted 08:02 BST. No founder message in `#factory-standup` after
+2026-08-09 18:06, so the 11:00 cutoff fired and the posted proposal was executed as
+written. Founder can still redirect any of it.
+
+**Done at the cutoff:**
+
+- **`app-factory` main pushed** — `1f99a02..db4de5b`, 4 commits including D31 itself.
+  The unpushed-commit exposure logged at the 08-10 EOD sync is closed for this repo.
+  The 448MB footage library remains unbacked-up.
+- **PR #52 merged** (magnetometer + follow-mode map rotation, running-with-pace),
+  squash, checks green, `mergeStateStatus: CLEAN`. `factory-run sync
+  feature-introduce-magnetometer` → `done`. Local branch delete deferred: the worktree
+  was still mounted at merge time.
+- **`feature-android-pose-parity-spike` check gate approved** — was parked at
+  `awaiting-approval` (step 3/11, `npm run golden:check`) for 9h32m. Resumed on its
+  own executor at 10:02Z, now at `review` (step 4/11). $13.22 spent so far.
+
+**Item 1 of the proposal was already dead when the cutoff ran.**
+`feature-jittery-compass-driven-map` hit the 240-minute plan-discussion idle timeout at
+**07:42:27Z (08:42 BST)** — the exact failure the morning's introspection line
+predicted, ~18 minutes after the standup was posted. $2.17 and the plan lost.
+
+Restarted as **`feature-jittery-compass-driven-map-2`**, fresh run rather than a
+resume, because the original's worktree/base was the magnetometer branch which is now
+squash-merged into main (D31 leaves no base-drift recovery path — a stale-base resume
+would have produced an empty or conflicting diff). The prior `plan.md` is referenced
+in the new prompt for reuse.
+
+**New harness defect found while trying to rescue it (unprompted, worth recording):**
+`factory-run retry` **cannot rescue a timed-out discussion gate.** The retry requeued
+the run, re-posted the gate at turn 1/8 at 10:03:00.523Z, then failed it again at
+10:03:00.525Z — **2ms later** — with the same idle-timeout reason. The idle clock is
+measured from the *original* gate post (03:42Z), not from the resume, so any
+discussion-timeout run is permanently unrecoverable by retry.
+
+**Introspection item approved by silence** — started
+**`bug-gates-die-silently-idle`** (app-factory, bug-fix, ~$8 estimated). Scope: re-ping
+the gate's channel at 50% and 80% of the idle budget with run/step/approve-command/
+time-to-timeout; reset the idle budget on resume (the defect above, with a regression
+test); surface open gates + time-to-timeout in `factory-run status`/`list` so the
+standup can list them. Explicitly not auto-approval — the loud failure and the founder
+veto both stay.
+
+**Carried forward, fourth day, still unanswered:** skip-hero has no ship date, no v1
+scope line, no store-submission target. The pose work, the Android parity spike and the
+marketing research all serve a launch nobody has scheduled. This is now the oldest open
+question in the factory.
+
+**In flight after the cutoff:** `feature-android-pose-parity-spike` (skip-hero,
+review), `feature-jittery-compass-driven-map-2` (running-with-pace, planning),
+`bug-gates-die-silently-idle` (app-factory, planning). No new specialists. Engine
+(`factory-run status --json`) remains the authority over this narrative.
