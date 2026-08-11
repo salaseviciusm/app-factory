@@ -2068,6 +2068,23 @@ function classifyDeployMerge({ merge, mergedSha }) {
   return { action: mergedSha ? "already-merged" : "merge" };
 }
 
+/** Pure decision core for the deploy step's branch-readiness gate (exercised
+ *  by selftest). Two invariants are assumed everywhere downstream and checked
+ *  nowhere else: the run branch is ≥1 commit ahead of the rig default branch,
+ *  and the worktree is clean. An implement agent that never committed passes
+ *  checks/review/tests (they validate worktree files, not commits) and EAS
+ *  (it bundles the working directory), shipping a green run with nothing
+ *  mergeable — so the deploy step fails loudly here first. mergedSha
+ *  short-circuits ok: an already-merged deploy retry has base..HEAD == 0 by
+ *  construction (the merge landed on base), and re-checking would break
+ *  publish retries. */
+function classifyBranchReadiness({ aheadCount, dirty, mergedSha, base }) {
+  if (mergedSha) return { ok: true, reason: `merge already landed (${mergedSha}); publish retry` };
+  if (dirty) return { ok: false, reason: "worktree has uncommitted changes — the implementation was never fully committed" };
+  if (aheadCount === 0) return { ok: false, reason: `run branch has no commits ahead of ${base} — nothing to merge, review, or ship` };
+  return { ok: true, reason: `${aheadCount} commit(s) ahead of ${base}, worktree clean` };
+}
+
 // ---------- review-policy PRs (gh CLI; the branch is already pushed) ----------
 //
 // A green run on a merge-review rig parks in awaiting-merge; without a PR the
@@ -2087,6 +2104,18 @@ function classifyPrCreation({ merge, githubOrigin, ghAvailable, recordedPr, open
   if (recordedPr) return { action: "reuse", reason: `PR #${recordedPr.number} already recorded on this run`, warn: false };
   if (openPr) return { action: "reuse", reason: `open PR #${openPr.number} already exists for this branch`, warn: false };
   return { action: "create", reason: "review policy, GitHub origin, no PR yet", warn: false };
+}
+
+/** Pure classifier for a failed `gh pr create` (exercised by selftest).
+ *  "No commits between base and branch" means the branch holds no work at
+ *  all — a run-level failure, never a warning footnote. Every other failure
+ *  (auth, network, rate limits) keeps the deliberate degrade-to-warning
+ *  behavior: the branch is fine, only PR creation is unavailable. */
+function classifyPrCreateFailure(output) {
+  if (/no commits between/i.test(output || "")) {
+    return { fatal: true, reason: "gh reports no commits between the base and run branches — the branch holds no work to review" };
+  }
+  return { fatal: false, reason: null };
 }
 
 /** The rig checkout's GitHub web URL from its origin remote, or null. */
@@ -2120,8 +2149,11 @@ function ghRun(run, args, timeoutMinutes = 2, cwd = null) {
 
 /** Idempotently ensure the run's branch has an open GitHub PR into the rig
  *  default branch, persisting run.pr = {number, url, createdAt} and the
- *  pull_request_pr telemetry artifact. Never throws and never fails the run:
- *  every degraded path records run.prWarning and returns null. */
+ *  pull_request_pr telemetry artifact. Never throws; degraded paths (missing
+ *  gh, non-GitHub origin, auth/network failures) record run.prWarning and
+ *  return null — except an empty-diff create failure ("No commits between"),
+ *  which returns {failed: reason} so the deploy step fails the run: that
+ *  branch holds no work at all (see classifyPrCreateFailure). */
 function ensurePrForRun(run, rig) {
   const runDir = runDirOf(run.id);
   const branch = runBranch(run);
@@ -2179,6 +2211,8 @@ function ensurePrForRun(run, rig) {
       if (!created.ok) {
         const warning = `PR creation failed: ${created.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (see pr.log)`;
         log(runDir, `pr: ${warning}`);
+        const failure = classifyPrCreateFailure(created.output);
+        if (failure.fatal) return { failed: `${failure.reason} (see pr.log)` };
         run.prWarning = warning;
         saveRun(run);
         return null;
@@ -2227,6 +2261,27 @@ function deployStep(run, rig) {
   if (!["none", "harness-merge", "eas-update"].includes(deploy.type)) {
     return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
   }
+  // Branch-readiness gate: refuse to merge, open a PR, or publish unless the
+  // branch actually carries committed work (see classifyBranchReadiness).
+  // A probe error fails too — this gate never silently passes.
+  const status = git(run.worktree, ["status", "--porcelain"]);
+  if (status.status !== 0) {
+    return { ok: false, summary: `branch-readiness probe failed: git status in ${run.worktree}: ${(status.stderr || status.stdout || "").trim().slice(0, 200)}` };
+  }
+  const revList = git(run.worktree, ["rev-list", "--count", `${run.baseBranch}..HEAD`]);
+  const aheadCount = revList.status === 0 ? parseInt(revList.stdout.trim(), 10) : NaN;
+  if (!Number.isFinite(aheadCount)) {
+    return { ok: false, summary: `branch-readiness probe failed: git rev-list --count ${run.baseBranch}..HEAD: ${(revList.stderr || revList.stdout || "").trim().slice(0, 200)}` };
+  }
+  const readiness = classifyBranchReadiness({
+    aheadCount,
+    dirty: status.stdout.trim() !== "",
+    mergedSha: run.mergedSha,
+    base: run.baseBranch,
+  });
+  if (!readiness.ok) {
+    return { ok: false, summary: `run ${run.id} is not ready to deploy: ${readiness.reason} (branch ${runBranch(run)})` };
+  }
   // Merge phase, identical for every deploy type. Order matters for eas rigs:
   // merge first, publish second — the published bundle must equal what landed
   // on the default branch. merge "review" leaves the branch for the founder
@@ -2248,8 +2303,13 @@ function deployStep(run, rig) {
   } else {
     // Review policy: the branch stays for the founder — open (or reuse) the
     // GitHub PR they review and merge. Idempotent; degrades to a recorded
-    // warning on non-GitHub rigs or a missing gh CLI, never a failed run.
+    // warning on non-GitHub rigs or a missing gh CLI, never a failed run —
+    // except an empty-diff create failure, which means the branch holds no
+    // work and must fail the run, not shrink to a footnote.
     const pr = ensurePrForRun(run, rig);
+    if (pr && pr.failed) {
+      return { ok: false, summary: `run ${run.id} has nothing to review: ${pr.failed} (branch ${runBranch(run)})` };
+    }
     const prNote = pr ? `PR #${pr.number} awaits review (${pr.url})` : `branch ${runBranch(run)} left for founder merge (policy.merge review)`;
     mergeNote = deploy.type === "none" && !pr ? null : prNote;
   }
@@ -4809,6 +4869,26 @@ function cmdSelftest() {
   for (const [name, ok] of prChecks) {
     console.log(`pr-creation ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`pr-creation check failed: ${name}`);
+  }
+  // Branch-readiness gate (pure): the deploy step refuses to merge, open a
+  // PR, or publish when the implementation was never committed — a dirty
+  // worktree or a branch with zero commits ahead of base fails the run
+  // loudly instead of shipping a green run with nothing mergeable. A landed
+  // merge (run.mergedSha) short-circuits ok so publish retries keep working
+  // (base..HEAD == 0 by construction after the merge).
+  const br = (over) => classifyBranchReadiness({ aheadCount: 2, dirty: false, mergedSha: null, base: "main", ...over });
+  const readinessChecks = [
+    ["clean branch ahead of base passes", br({}).ok === true],
+    ["dirty worktree fails", (() => { const d = br({ dirty: true }); return d.ok === false && /uncommitted/.test(d.reason); })()],
+    ["zero commits ahead fails naming the base", (() => { const d = br({ aheadCount: 0 }); return d.ok === false && /no commits ahead of main/.test(d.reason); })()],
+    ["landed merge short-circuits ok for publish retries", br({ aheadCount: 0, mergedSha: "abc1234" }).ok === true],
+    ["landed merge outranks the dirty probe on retry", br({ dirty: true, mergedSha: "abc1234" }).ok === true],
+    ["empty-diff gh create failure is fatal", classifyPrCreateFailure("GraphQL: No commits between main and factory/x (createPullRequest)").fatal === true],
+    ["other gh create failures stay degraded warnings", classifyPrCreateFailure("HTTP 401: Bad credentials").fatal === false],
+  ];
+  for (const [name, ok] of readinessChecks) {
+    console.log(`branch-readiness ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`branch-readiness check failed: ${name}`);
   }
   // Sync decision core (pure): the only exit from awaiting-merge. Merged PRs
   // finish the run, closed PRs park it in the restartable `closed` state,
