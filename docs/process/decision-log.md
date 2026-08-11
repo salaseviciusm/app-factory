@@ -537,3 +537,47 @@ knowing when it changed, which is a bug class the codebase then owns permanently
 Copying is normally cheap next to the work already being done, so the exceptions must be
 deliberate and stated rather than incidental. Rationale written against a specific
 consumer rots and invites a future agent to "clean up" a load-bearing copy.
+
+## D31 — policy.merge "auto" removed: every rig is PR-gated; cleanup's merge truth is gh (2026-08-11)
+
+**Context:** the founder found app-factory's local `main` sitting 2 commits
+ahead of `origin/main` for six days. Root cause: `policy.merge: "auto"` (D26)
+merged the run branch into the rig's **local** default branch, and — by D26's
+own never-push-the-default-branch invariant — nothing ever pushed it. Every
+downstream surface (state `done`, the completion notify, end-of-run cleanup)
+treated the run as finished, so the divergence was silent. The only rig on
+auto was app-factory itself: the rig that rewrites the harness was the one
+place review was skipped. Two co-located defects made the PR flow worse:
+`classifySync` hard-refused awaiting-merge runs with no recorded PR (legacy
+runs were stuck forever, sync being their only exit), and `cleanupRun` decided
+"merged" from local branch ancestry — structurally always false for
+squash-merged PRs, which is why cleanups kept needing `--discard`.
+**Decision (supersedes D26's merge half; its deploy/preview halves and the
+push invariant stand):**
+- `policy.merge` has exactly one value, `"review"`. The key survives so a
+  stale `"merge": "auto"` fails preflight/exec loudly, naming the rig and key
+  and explaining the removal. Auto-merge's whole execution path is deleted:
+  `mergeRunBranch`, the base-drift recovery loop (`classifyRecovery`, the
+  synthetic `resolve-conflicts` step, `conflict-resolver.md`), the deploy-step
+  merge phase, and the retry classifier's recovery-cap tier. A run branch is
+  now either PR-merged-and-synced or still open — no third state.
+- app-factory's deploy retypes `harness-merge` → `harness-restart`: the deploy
+  step ends at an open PR like every rig, and the gateway/web-console restart
+  moves to `factory-run sync`'s done path, gated on the rig checkout
+  containing the merge commit after a `git fetch origin` (degrade to an
+  actionable "pull, then restart manually" — never push, never pull).
+- Cleanup's merge truth is gh (extending D29): a run with a recorded PR is
+  reclaimable when GitHub says the PR merged (fetch first; `git branch -D` is
+  correct and required for squash merges — the branch is provably merged on
+  origin); runs without a PR keep the conservative local ancestor check and
+  `-d`. `classifySync` degrades PR-less legacy runs to an actionable
+  "unsyncable" message, and `factory-run sync --all` sweeps every
+  awaiting-merge run without aborting on one failure.
+- The founder rejected the `policy.push` alternative (engine pushing the
+  merged default branch): the engine's only push stays `factory/<id>`, and the
+  selftest push-source scan continues to pin exactly that.
+**Why:** a merge that exists only on one machine is a lie the moment any
+surface reports it as shipped. Review-gating the harness rig gives its changes
+the same rigor as product changes (reversing D19's auto-merge convenience),
+and making GitHub the single source of merge truth removes the class of
+"engine thinks X, origin knows Y" bugs instead of patching each one.

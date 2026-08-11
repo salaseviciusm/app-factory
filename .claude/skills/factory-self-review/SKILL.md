@@ -6,9 +6,11 @@ description: Kick off the App Factory self-evaluation loop, which analyzes run t
 # Factory self-review run
 
 Workflow: analyze telemetry → founder plan gate → spawn a feature-dev run on the
-`app-factory` rig that implements, validates, and deploys the improvement
-(harness-merge: merges to local main and restarts the OpenClaw gateway).
-Runs on the live checkout (read-only analyze step, no worktree).
+`app-factory` rig that implements, validates, and opens a PR for the
+improvement (the run parks `awaiting-merge`; after the founder merges the PR,
+`factory-run sync <run_id>` restarts the OpenClaw gateway/web console so the
+improvement goes live). Runs on the live checkout (read-only analyze step, no
+worktree).
 
 ## Start
 
@@ -35,6 +37,7 @@ review findings and artifacts from `orchestration/telemetry.db`.
 
 - A weekly cron already runs this (Sundays 17:00); manual runs are for on-demand
   analysis.
-- Before approving a plan, ensure the app-factory checkout has no uncommitted
-  changes to files the improvement will touch — the spawned run's harness-merge
-  deploy merges into local main.
+- The spawned run ends at an open PR (state `awaiting-merge`). Merge it on
+  GitHub, then `factory-run sync <child_run_id>` — that is what restarts the
+  gateway/web console (after verifying the local checkout contains the merge;
+  pull first if it doesn't).

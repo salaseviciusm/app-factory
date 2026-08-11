@@ -130,7 +130,7 @@ deterministic stages (ingest, auto-edit, render, post) and only two slots.
   `feature-dev` run on the `app-factory` rig.
 
 **Gap 2 — there is no `publish` step type.** `deployStep` supports `eas-update`,
-`harness-merge`, and `none` only.
+`harness-restart`, and `none` only.
 
 - **Cheapest viable fix:** publishing is `bin/content-pipeline publish` called from an
   agent step, same as above.
