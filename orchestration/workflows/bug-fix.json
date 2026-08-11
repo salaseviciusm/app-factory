@@ -7,7 +7,7 @@
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
     { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },
     { "id": "tests", "type": "commands", "source": "tests", "onFail": "implement", "maxLoops": 2 },
-    { "id": "deploy", "type": "deploy", "onRecover": "checks" },
+    { "id": "deploy", "type": "deploy" },
     { "id": "notify", "type": "notify" }
   ]
 }

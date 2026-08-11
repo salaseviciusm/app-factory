@@ -8,7 +8,7 @@
     { "id": "brand", "type": "agent", "prompt": "new-app-brand", "timeoutMinutes": 30 },
     { "id": "stamp", "type": "agent", "prompt": "new-app-stamp", "timeoutMinutes": 45 },
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "stamp", "maxLoops": 2 },
-    { "id": "deploy", "type": "deploy", "onRecover": "checks" },
+    { "id": "deploy", "type": "deploy" },
     { "id": "spawn", "type": "spawn", "workflow": "feature-dev", "rigFrom": "app.json", "promptFrom": "first-feature.md" }
   ]
 }

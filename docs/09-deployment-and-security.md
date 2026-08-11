@@ -59,7 +59,7 @@ Checked 2026-08-05 across all rigs:
 | `skip-hero` | Expo (`apps/mobile/eas.json`) | EAS cloud → `eas-update` preview | No |
 | `planex-quoter` | Node/TS monorepo | n/a | No |
 | `fin-news` | Node/TS service | n/a | No |
-| `app-factory` | Node/TS + shell | `harness-merge` | No |
+| `app-factory` | Node/TS + shell | `harness-restart` | No |
 | `factory:<app>` (quickfire) | template, `npm run check` | none | No |
 
 The only macOS-only activity remaining is **running a simulator for manual QA** —

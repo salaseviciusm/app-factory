@@ -566,15 +566,20 @@ the live checkout):
 [spawn] launches a FULL feature-dev graph execution (child run) on the
     app-factory rig with the approved plan as its feature request:
     implement -> checks (engine syntax + selftest + script lint) ->
-    cross-model review -> harness-merge deploy
+    cross-model review -> deploy (opens the PR) -> awaiting-merge
 ```
 
-**Harness-merge deploy** (rig `app-factory`, tier production): merges the
-validated `factory/<run_id>` branch into main and restarts the OpenClaw gateway,
-so skills and engine reload immediately - the improvement is live. Rollback is
-`git revert -m 1 <merge_sha>` + gateway restart. The spawned child run skips its
-own plan gate (the founder approved the improvement plan already); all validation
-still applies.
+**Harness-restart deploy** (rig `app-factory`, tier production): the run is
+PR-gated like every rig — the deploy step opens a GitHub PR from the validated
+`factory/<run_id>` branch and the run parks `awaiting-merge`. After the founder
+merges the PR, `factory-run sync <run_id>` flips the run done AND restarts the
+OpenClaw gateway (plus the web console when the merge touched it), gated on the
+rig checkout actually containing the merge commit (fetched first; if the local
+main hasn't pulled the merge, sync degrades to an actionable message — the
+engine never pushes or pulls the default branch). Rollback is `git revert
+<merge_sha>` + gateway restart. The spawned child run skips its own plan gate
+(the founder approved the improvement plan already); all validation still
+applies.
 
 **Cadence:** weekly cron (`factory-weekly-self-review`, Sundays 17:00) plus
 on-demand via the `factory-self-review` skill ("review how the factory is doing").
@@ -608,7 +613,7 @@ exercises those exact contracts before any token is spent.
   `easPublishArgs()` helper that the real deploy step sends with), and
   `npx eas update:list --branch <branch> --limit 1 --non-interactive --json`
   (exit 0 and JSON-parseable output). Rigs with deploy type `none` or
-  `harness-merge` get no EAS probes.
+  `harness-restart` get no EAS probes.
 
 **Automatic run-start invocation:** the executor runs the rig's preflight at
 the top of every run — before worktree setup, so resumes re-verify too. A
@@ -649,69 +654,57 @@ Every run creates `orchestration/worktrees/<id>` plus a `factory/<id>` branch
 in its rig repo, and each worktree carries full rig setup (~1–2 GB). Cleanup
 reclaims both, two ways:
 
-- **At run completion:** after a run reaches `done`, the executor calls
-  cleanup for that run (wrapped so a cleanup failure can never change the
-  terminal state). On harness-merge rigs the deploy step already merged the
-  branch, so the worktree and branch are reclaimed immediately; on
-  manual-merge rigs the branch is unmerged at completion, so cleanup skips and
-  the "worktree kept for merge review" flow is preserved.
+- **At run completion:** after a run reaches a green terminal state, the
+  executor calls cleanup for that run (wrapped so a cleanup failure can never
+  change the terminal state). Every rig is PR-gated, so the branch is unmerged
+  at completion — cleanup skips and the "worktree kept for merge review" flow
+  is preserved; the reclaim happens on the next cleanup after the PR merges.
 - **On demand:** `factory-run cleanup [--dry-run] [--json]
   [--remove-unmerged-worktrees]` sweeps every run plus an orphan scan of the
   worktrees dir, printing per-item action/skip reason and a freed-bytes total.
 
 Safety rules: a run is only cleaned when terminal (`done`/`failed`/
-`rejected`/`cancelled`), its worktree has no uncommitted changes, and
-`factory/<id>` is an ancestor of the rig's default branch — checked against
-the run's own rig repo (multi-rig correct). Deletion is never forced: `git
-worktree remove` without `--force` and `git branch -d` (never `-D`). Clean
-worktrees on unmerged branches are only removed with
-`--remove-unmerged-worktrees`, and the branch is always kept. The orphan scan
+`rejected`/`cancelled`/…), its worktree has no uncommitted changes, and its
+branch is merged — checked against the run's own rig repo (multi-rig
+correct). Merge truth for runs with a recorded PR is GitHub's (`gh pr view`,
+after a `git fetch origin`): a squash/rebase-merged PR never makes
+`factory/<id>` a local ancestor of the default branch, so the provably-merged
+branch is deleted with `git branch -D`; runs without a PR keep the
+conservative local ancestor check and `git branch -d`. Worktree removal is
+never forced (`git worktree remove` without `--force`), an unmerged-PR run is
+always skipped, clean worktrees on unmerged branches are only removed with
+`--remove-unmerged-worktrees` (branch always kept), and the orphan scan
 deletes a worktree directory only when its `.git` gitdir pointer is missing or
 dangling; a valid worktree of any rig repo is never classified as an orphan
 (without a `run.json` it is reported, not touched).
 
-## 12e. Deploy-step merge-conflict recovery (implemented 2026-08-04)
+## 12e. PR-gated merges everywhere; the sync-time harness restart (2026-08-11; supersedes deploy-step merge-conflict recovery)
 
-Runs execute in parallel, so by the time a run reaches its harness-merge
-deploy another run may have landed on the base branch. The deploy step never
-attempts a stale-base merge: it first compares the base branch head with the
-run branch's merge-base, and on drift rebases the run branch onto the base
-**inside the worktree**, then loops the pipeline back to the deploy step's
-`onRecover` target (`"checks"` in feature-dev/bug-fix) so the gates re-run
-against the new base before any merge. Rigs with `eas-update` or `none`
-deploys are unchanged (their merge is manual/absent).
+Until 2026-08-11 this section described the deploy-time auto-merge
+(`policy.merge: "auto"`) and its base-drift rebase/conflict-resolution
+recovery loop. Both are gone (decision D31): the auto path merged into the
+rig's **local** default branch and nothing ever pushed, so "done, merged to
+main" runs silently left local main ahead of origin. Every rig is now
+PR-gated:
 
-- **Clean rebase** (no textual conflicts): only the deterministic gates
-  re-run — `checks` and `tests` — while the agentic `review` step is skipped
-  (recorded as an ok step row with a "review skipped" summary), per founder
-  steering: no code changed, so the review verdict stands and no tokens are
-  burned. The skip is dropped the moment any other agent step runs again
-  (e.g. a checks failure looping back to `implement`).
-- **Conflicted rebase**: the engine writes `conflict.md` into the run dir
-  (conflicting files/hunks + the base-side commits since the branch point)
-  and spawns the engine-synthetic `resolve-conflicts` agent step (prompt
-  `conflict-resolver.md`) through the normal agent-step machinery, so its
-  rendered prompt / raw output / telemetry / attempt numbering come for
-  free. The agent resolves each conflict preserving both sides' intent and
-  completes the rebase; it may never `--skip` or drop commits. The engine
-  verifies completion (no in-flight rebase, clean tree, HEAD contains the
-  rebase target) before looping back through the **full** gate set,
-  review included.
-- **Escalation**: on any judgement call (semantic conflicts, contradictory
-  intent, potential work loss, a commit that could only be dropped) the agent
-  aborts the rebase and writes `escalation.md`; the engine Slack-notifies its
-  content, sets the run `failed`, and leaves the worktree/branch intact —
-  `factory-run resume` restarts it. The same posture applies when the cap is
-  reached.
-- **Bounded + persistent**: recovery state lives in `run.json`
-  (`recovery.iterations` plus one attempt entry per cycle: timestamp,
-  drifted-from/to SHAs, conflicted/clean, outcome), so engine restarts and
-  resumes cannot reset the counter. The loop is capped at 5 cycles; each
-  cycle also appears in the run history (state `recovering`) and telemetry
-  records the deploy row with status `recover` (not `fail`, keeping failure
-  stats honest). `factory-run status <id>` prints the cycle count, and the
-  web console shows the recovery panel (cycles, conflict/escalation docs,
-  resolve-conflicts prompt/output viewers).
+- A green run's deploy step opens (or idempotently reuses) a GitHub PR from
+  `factory/<id>` and the run parks `awaiting-merge`. Merging is GitHub's job —
+  concurrent-run base drift and conflicts are handled by the PR (GitHub
+  reports mergeability; the founder or a follow-up run resolves conflicts),
+  so the engine carries no deploy-time rebase machinery.
+- `factory-run sync <id>` (or the console's Sync button) is the only exit
+  from `awaiting-merge`; `factory-run sync --all` sweeps every awaiting-merge
+  run, one line per run, without aborting on a single failure. Runs recorded
+  before PR gating (no `run.pr`) get an actionable "unsyncable" message
+  naming the branch and the manual resolution instead of a bare refusal.
+- On `harness-restart` rigs (app-factory), sync's `done` path also restarts
+  the OpenClaw gateway — and rebuilds/restarts the web console when the merge
+  touched it — gated on the rig checkout containing the merge commit after a
+  `git fetch origin`. A checkout that hasn't pulled the merge degrades to a
+  "pull, then restart manually" message; the engine never pushes or pulls a
+  default branch.
+- Legacy `run.recovery` bookkeeping in old run.json files is still displayed
+  by `factory-run status` (marked legacy) but is never written again.
 - **Rewind on resume**: `factory-run resume <id> --step <step-id>` restarts a
   non-terminal run from any earlier (or the current) step; a later-than-current
   or unknown step id is rejected. `--back` rewinds one step. Plain `resume`
@@ -732,7 +725,7 @@ identically.
   which one will run. Tier **resume** — first retry at the current step —
   plain-resumes the run. Tier **triage** — a retry was already tried at this
   step, or the failure is one a resume cannot fix (preflight failure,
-  recovery-cap escalation, `escalation.md` present, missing worktree) —
+  `escalation.md` present, missing worktree) —
   dispatches a fire-and-forget OpenClaw session (`openclaw agent --agent main
   --session-id factory-triage-<run_id> -m <evidence brief>`, stdin detached)
   whose `factory-triage` skill gathers evidence and either applies a

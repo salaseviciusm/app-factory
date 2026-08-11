@@ -9,9 +9,9 @@
  *   "resume" — first retry at the current step; a plain `factory-run resume`
  *              is the cheapest thing that can work.
  *   "triage" — a plain resume was already tried at this step, or the failure
- *              is one a resume cannot fix (preflight failure, recovery-cap
- *              escalation, escalation.md present, missing worktree); the run
- *              is handed to the OpenClaw chief of staff to investigate.
+ *              is one a resume cannot fix (preflight failure, escalation.md
+ *              present, missing worktree); the run is handed to the OpenClaw
+ *              chief of staff to investigate.
  */
 
 // "killed" is the discussion step's don't-build ending: terminal and a
@@ -56,12 +56,10 @@ export function lastFailureDetail(history) {
 }
 
 // Failure summaries a plain resume would only replay: the executor re-runs
-// preflight on resume (same verdict), and a recovery-cap escalation means the
-// base branch keeps outrunning this run — both need investigation, not a
-// restart. Prefixes come from the engine's own setState summaries.
+// preflight on resume (same verdict), so the failure needs investigation, not
+// a restart. Prefixes come from the engine's own setState summaries.
 const RESUME_CANNOT_FIX = [
   { re: /^preflight failed/, why: "preflight failed — a plain resume re-runs preflight and fails the same way" },
-  { re: /^deploy recovery escalation/, why: "deploy recovery hit its cap — the base branch keeps advancing past this run" },
 ];
 
 /**

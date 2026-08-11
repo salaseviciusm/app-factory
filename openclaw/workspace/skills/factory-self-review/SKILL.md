@@ -1,6 +1,6 @@
 ---
 name: factory-self-review
-description: Run the factory's self-evaluation loop - analyze telemetry from past orchestrated runs (step outcomes, review findings, artifacts), produce an improvement plan for the harness, discuss it with the founder in Slack, and on approval spawn a feature-dev run on the app-factory rig that implements, validates, and merges the improvement live. Use when the founder asks to improve the factory, review how runs went, or when the weekly self-review cron fires.
+description: Run the factory's self-evaluation loop - analyze telemetry from past orchestrated runs (step outcomes, review findings, artifacts), produce an improvement plan for the harness, discuss it with the founder in Slack, and on approval spawn a feature-dev run on the app-factory rig that implements, validates, and opens a PR for the improvement. Use when the founder asks to improve the factory, review how runs went, or when the weekly self-review cron fires.
 user-invocable: true
 ---
 
@@ -40,15 +40,20 @@ the plan file (`orchestration/runs/<run_id>/improvement-plan.md`) and the report
 On approval the run SPAWNS a full feature-dev graph execution (child run) on the
 `app-factory` rig with the plan as its feature request. The child run implements,
 passes deterministic checks (engine syntax + selftest + script lint), passes
-cross-model review, and then **harness-merge deploys**: merges to main and
-restarts the gateway. The factory is live-updated.
+cross-model review, and then **opens a PR** and parks `awaiting-merge` — like
+every rig. After the founder merges the PR on GitHub, `factory-run sync
+<child_run_id>` flips the run done and restarts the gateway (plus the web
+console when the merge touched it). The factory is live-updated at sync, not
+at deploy.
 
 ## Cautions
 
 - The spawned child run is auto-approved by design (the founder already approved
   the plan at the self-review gate). Its validation loop still applies.
-- Harness-merge requires app-factory main to be committed clean enough to merge;
-  if the merge fails it aborts safely and the run fails with the reason.
-- Rollback of a bad self-improvement: `git -C ~/src/app-factory revert -m 1 <merge_sha>`
+- The sync-time restart requires the app-factory checkout to contain the merged
+  commit: sync fetches origin first, and if local main hasn't pulled the merge
+  it degrades to a "pull, then restart manually" message — it never pushes or
+  pulls the default branch itself.
+- Rollback of a bad self-improvement: `git -C ~/src/app-factory revert <merge_sha>`
   then `openclaw gateway restart` (the merge commit sha is in the run's Slack post).
 - Quick health queries anytime: `factory-run report --days 30` (add `--json` for data).

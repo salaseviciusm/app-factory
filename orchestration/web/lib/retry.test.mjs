@@ -74,7 +74,6 @@ test("a prior resume at a DIFFERENT step still gets a plain resume", () => {
 
 test("straight-to-triage causes skip the resume tier on the first retry", () => {
   assert.equal(classify({}, { lastFailure: "preflight failed: notify contract broken" }).tier, "triage");
-  assert.equal(classify({}, { lastFailure: "deploy recovery escalation: recovery cap reached (5/5 cycles)" }).tier, "triage");
   assert.equal(classify({}, { escalationPresent: true }).tier, "triage");
   assert.equal(classify({}, { worktreeMissing: true }).tier, "triage");
   // An ordinary step failure is not one of them.

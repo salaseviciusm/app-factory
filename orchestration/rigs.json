@@ -37,7 +37,7 @@
       "defaultBranch": "main",
       "notifyChannelName": "factory-app-factory",
       "policy": {
-        "merge": "auto",
+        "merge": "review",
         "deploy": "auto"
       },
       "setup": [],
@@ -54,7 +54,7 @@
       ],
       "appDir": ".",
       "deploy": {
-        "type": "harness-merge"
+        "type": "harness-restart"
       }
     },
     "skip-hero": {
