@@ -6,7 +6,41 @@
  * file contents and timestamps, and the web test suite exercises it directly.
  */
 
-export const DISCUSSION_DEFAULTS = { maxTurns: 8, idleTimeoutMinutes: 240 };
+export const DISCUSSION_DEFAULTS = { maxTurns: 8 };
+
+/** Founder-gate reminder cadence (founder direction 2026-08-11: gates never
+ *  die on silence — a parked run waits indefinitely, so recurring reminders
+ *  are the only pressure): first re-ping 4 hours after the last activity,
+ *  then daily. */
+export const GATE_REMINDERS = { firstAfterMinutes: 240, repeatEveryMinutes: 1440 };
+
+/** How many reminders are due for a gate quiet since `sinceAt`: 0 before the
+ *  first threshold, then one more per repeat interval. Callers compare against
+ *  the count already sent for this `sinceAt` epoch — new founder activity
+ *  moves `sinceAt`, which re-arms the cadence from zero. Unparseable
+ *  timestamps mean no reminders, never a throw. */
+export function remindersDue({ sinceAt, now, firstAfterMinutes = GATE_REMINDERS.firstAfterMinutes, repeatEveryMinutes = GATE_REMINDERS.repeatEveryMinutes }) {
+  const since = Date.parse(sinceAt || "");
+  const t = Date.parse(now || "");
+  if (!Number.isFinite(since) || !Number.isFinite(t)) return 0;
+  const elapsed = t - since;
+  const first = firstAfterMinutes * 60 * 1000;
+  if (elapsed < first) return 0;
+  return 1 + Math.floor((elapsed - first) / (repeatEveryMinutes * 60 * 1000));
+}
+
+/** The newer of a gate's on-disk activity time and its persisted clock floor,
+ *  as an ISO string (null when neither parses). The floor is stamped at every
+ *  entry into the discussion step, so a resumed gate's age is measured from
+ *  the resume — a stale turn-file mtime can never poison the clock. */
+export function effectiveSince(activityAt, floorAt) {
+  const a = Date.parse(activityAt || "");
+  const f = Date.parse(floorAt || "");
+  if (!Number.isFinite(a) && !Number.isFinite(f)) return null;
+  if (!Number.isFinite(a)) return new Date(f).toISOString();
+  if (!Number.isFinite(f)) return new Date(a).toISOString();
+  return new Date(Math.max(a, f)).toISOString();
+}
 
 /** Parse discussion-replies.jsonl lines into [{at, text}]. A reply line is a
  *  JSON object with a non-empty string `text`; `at` is kept when it is a
@@ -89,20 +123,19 @@ export function lastActivityAt(turns, replies) {
 /**
  * Resolve the discussion outcome, or null to keep waiting. Priority order:
  * the founder's decision always wins (approve → go-ahead, reject →
- * dont-build), then the loud bounds — a pending reply that would need a turn
- * past maxTurns is turn-cap, silence past idleTimeoutMinutes is idle-timeout.
- * The turn cap alone never resolves: after the last allowed turn the founder
- * can still approve or reject; only a reply demanding another turn trips it.
- * Neither bound ever yields go-ahead.
+ * dont-build), then the one loud bound — a pending reply that would need a
+ * turn past maxTurns is turn-cap. The turn cap alone never resolves: after
+ * the last allowed turn the founder can still approve or reject; only a reply
+ * demanding another turn trips it. The bound never yields go-ahead.
+ *
+ * There is deliberately no clock input: silence never resolves a founder
+ * gate (founder direction 2026-08-11 — no idle timeout, no auto-approval,
+ * no expiry). A parked discussion waits indefinitely; remindersDue drives
+ * the recurring re-pings instead.
  */
-export function resolveOutcome({ decision, pendingReplies = 0, turnsUsed, maxTurns, lastActivityAt, now, idleTimeoutMinutes }) {
+export function resolveOutcome({ decision, pendingReplies = 0, turnsUsed, maxTurns }) {
   if (decision && decision.decision === "approve") return { outcome: "go-ahead" };
   if (decision && decision.decision === "reject") return { outcome: "dont-build", feedback: decision.feedback || null };
   if (pendingReplies > 0 && turnsUsed >= maxTurns) return { outcome: "turn-cap" };
-  const last = Date.parse(lastActivityAt || "");
-  const t = Date.parse(now || "");
-  if (Number.isFinite(last) && Number.isFinite(t) && t - last > idleTimeoutMinutes * 60 * 1000) {
-    return { outcome: "idle-timeout" };
-  }
   return null;
 }

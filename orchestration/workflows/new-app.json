@@ -4,7 +4,7 @@
   "steps": [
     { "id": "refine", "type": "agent", "prompt": "new-app-refine", "agent": "product-lead", "timeoutMinutes": 30 },
     { "id": "market-check", "type": "agent", "prompt": "new-app-market-check", "agent": "product-lead", "timeoutMinutes": 30 },
-    { "id": "spec-discussion", "type": "discussion", "prompt": "new-app-spec-discussion", "agent": "product-lead", "maxTurns": 8, "idleTimeoutMinutes": 240, "timeoutMinutes": 20 },
+    { "id": "spec-discussion", "type": "discussion", "prompt": "new-app-spec-discussion", "agent": "product-lead", "maxTurns": 8, "timeoutMinutes": 20 },
     { "id": "brand", "type": "agent", "prompt": "new-app-brand", "timeoutMinutes": 30 },
     { "id": "stamp", "type": "agent", "prompt": "new-app-stamp", "timeoutMinutes": 45 },
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "stamp", "maxLoops": 2 },

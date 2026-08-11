@@ -3,7 +3,7 @@
   "description": "Feature development: dissect prompt, refine the plan with the founder in a multi-turn Slack discussion (replaces the one-shot approve/reject gate), implement, validate (agentic + deterministic), test, optionally publish an installable preview behind a founder approval gate (per-run preview mode; the release-decision agent picks eas build vs update from the diff), then merge/deploy per the rig's policy.",
   "steps": [
     { "id": "plan", "type": "agent", "prompt": "planner", "timeoutMinutes": 15, "onFail": "plan", "maxLoops": 2 },
-    { "id": "plan-discussion", "type": "discussion", "prompt": "plan-discussion", "skipWhen": "auto", "maxTurns": 8, "idleTimeoutMinutes": 240, "timeoutMinutes": 20 },
+    { "id": "plan-discussion", "type": "discussion", "prompt": "plan-discussion", "skipWhen": "auto", "maxTurns": 8, "timeoutMinutes": 20 },
     { "id": "implement", "type": "agent", "prompt": "implementer", "timeoutMinutes": 90 },
     { "id": "checks", "type": "commands", "source": "checks", "onFail": "implement", "maxLoops": 3 },
     { "id": "review", "type": "agent", "prompt": "reviewer", "model": "sonnet", "timeoutMinutes": 20, "onFail": "implement", "maxLoops": 3 },

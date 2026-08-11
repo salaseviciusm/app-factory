@@ -90,6 +90,8 @@ const {
   pendingReplies: countPendingReplies,
   lastActivityAt: discussionLastActivity,
   resolveOutcome,
+  remindersDue,
+  effectiveSince,
 } = require(path.join(ORCH_DIR, "web", "lib", "discussion.mjs"));
 // Plan-profile lint core (strict plan markdown contract) — same web-lib
 // require(esm) pattern; bin/plan-lint wraps it for agents' self-checks.
@@ -508,7 +510,9 @@ function validateWorkflowAgentSteps(wfName, wf) {
         }
       }
       if (s.type === "discussion") {
-        for (const cap of ["maxTurns", "idleTimeoutMinutes"]) {
+        // idleTimeoutMinutes is gone (founder gates wait indefinitely); a
+        // stale key in an old workflow is simply ignored.
+        for (const cap of ["maxTurns"]) {
           const v = s[cap];
           if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v) || v < 1)) {
             problems.push(`workflow ${wfName}: discussion step '${s.id}' ${cap} '${v}' must be a number >= 1`);
@@ -1028,19 +1032,47 @@ function protectedViolations(files, patterns) {
   return files.filter((f) => regexps.some((re) => re.test(f)));
 }
 
-// Check-gate wait bound: mirrors the plan gate's 12h (a regression judgment
-// that waits longer than that should fail loudly, never sit invisible).
-const CHECK_GATE_TIMEOUT_MS = 12 * 60 * 60 * 1000;
-
 /** Pure decision core for the check gate's wait loop (exercised by selftest).
  *  A founder decision always outranks pending replies; a reply steers the
- *  implementer; silence past the timeout ends the run. Null = keep waiting. */
-function resolveCheckGate({ decision, pendingReplies, waitedMs, timeoutMs = CHECK_GATE_TIMEOUT_MS }) {
+ *  implementer. There is deliberately no clock input: silence never resolves
+ *  a founder gate (founder direction 2026-08-11 — no idle timeout, no
+ *  auto-approval, no expiry). Null = keep waiting. */
+function resolveCheckGate({ decision, pendingReplies }) {
   if (decision && decision.decision === "approve") return { outcome: "approve" };
   if (decision && decision.decision === "reject") return { outcome: "reject", feedback: decision.feedback || null };
   if (pendingReplies > 0) return { outcome: "steer" };
-  if (waitedMs >= timeoutMs) return { outcome: "timeout" };
   return null;
+}
+
+// ---------- founder-gate reminders ----------
+//
+// Founder direction 2026-08-11: a run parked on ANY founder gate (plan or
+// preview gate, check gate, discussion) waits indefinitely — silent hours
+// must never kill a workflow. With no expiry, the recurring reminders below
+// are the whole pressure mechanism: re-ping the rig's channel 4 hours after
+// the last activity, then daily (GATE_REMINDERS in discussion.mjs), naming
+// the run, the step, the commands, and how long the gate has been waiting.
+// Never a countdown — there is no deadline to count down to.
+//
+// A parked run costs nothing but its own sleeping executor process (one per
+// run, detached — there is no shared slot pool, so it never blocks other
+// runs), and the stale-run watchdog is alert-only (classifyWatchdog reports;
+// remediation stays a founder action), so indefinite parking is safe.
+
+/** Send the newest due reminder for a parked founder gate, if any. `sent` is
+ *  how many reminders this `sinceAt` epoch already got; returns the updated
+ *  count. A failed send is logged by notify() and the count still advances —
+ *  reminders are best-effort (the gate itself was already posted under the
+ *  invisible-gate rule) and the next cadence tick re-pings anyway. */
+function gateReminderPing(run, { kind, sinceAt, sent, commands }) {
+  const due = remindersDue({ sinceAt, now: nowIso() });
+  if (due <= sent) return sent;
+  const waitingFor = formatQuiet(Date.now() - Date.parse(sinceAt));
+  notify(
+    run,
+    `:hourglass: Run ${run.id} (${run.workflow} on ${run.rig}) — ${kind} is still awaiting founder review (waiting ${waitingFor}; the run is parked and will wait indefinitely).\n${commands}`
+  );
+  return due;
 }
 
 /** Load a check-gate renderer module by validated name (same path-traversal
@@ -1307,9 +1339,12 @@ function waitForGate(run, step) {
     };
   }
   const decisionPath = path.join(runDir, "gate-decision.json");
-  const timeoutMs = 12 * 60 * 60 * 1000;
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
+  // No deadline: a founder gate waits indefinitely for approve/reject/cancel
+  // (see the founder-gate reminders block). The gate re-posts on every entry
+  // into this step, so in-memory reminder state survives resumes correctly.
+  const openedAt = nowIso();
+  let reminded = 0;
+  while (true) {
     if (fs.existsSync(decisionPath)) {
       const d = readJson(decisionPath, {});
       // Consume the decision so it can never leak into a later gate of this run.
@@ -1319,16 +1354,22 @@ function waitForGate(run, step) {
     }
     const cancelled = loadRun(run.id).state === "cancelled";
     if (cancelled) return { ok: false, summary: "cancelled by founder", terminal: true, halt: "cancelled" };
+    reminded = gateReminderPing(run, {
+      kind: `the *${isPreviewGate ? "preview" : "plan"} gate*`,
+      sinceAt: openedAt,
+      sent: reminded,
+      commands: `Approve: \`factory-run approve ${run.id}\` / reject: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`,
+    });
     execSync("sleep 15");
   }
-  return { ok: false, summary: `${isPreviewGate ? "preview" : "plan"} gate timed out after 12h`, terminal: true };
 }
 
 // ---------- check gate (founder-gated regression checks) ----------
 //
 // Reuses the plan gate's decision plumbing (gate-decision.json via
-// `factory-run approve/reject`), its 12h timeout, and its invisible-gate rule
-// (notify failure = loud terminal failure, never a silent wait). Adds a third
+// `factory-run approve/reject`), its indefinite founder wait with recurring
+// reminders, and its invisible-gate rule (notify failure = loud terminal
+// failure, never a silent wait). Adds a third
 // verb: `factory-run reply` steers the implementer — the text lands in
 // steering.md and the run loops back to the checks step's onFail target with
 // {{STEERING}} injected. Founder-driven loop-backs never consume maxLoops.
@@ -1443,8 +1484,8 @@ function waitForCheckGate(run, step, rig, check, failure) {
     mediaPath
   );
   if (!sent) {
-    // Founder never saw the gate; waiting 12h on an invisible gate is the
-    // smoke-run failure mode. Fail loud instead (mirrors the plan gate).
+    // Founder never saw the gate; waiting indefinitely on an invisible gate
+    // is the smoke-run failure mode. Fail loud instead (mirrors the plan gate).
     finishCheckGate(runDir, "notify-failed", null);
     return {
       ok: false,
@@ -1453,7 +1494,11 @@ function waitForCheckGate(run, step, rig, check, failure) {
       summary: "check gate notification failed to send (see notify FAILED in engine.log); fix the notify channel and resume",
     };
   }
-  const started = Date.now();
+  // No deadline: the check gate waits indefinitely for the founder (see the
+  // founder-gate reminders block). The gate re-posts on every entry into this
+  // step, so in-memory reminder state survives resumes correctly.
+  const openedAt = nowIso();
+  let reminded = 0;
   while (true) {
     if (loadRun(id).state === "cancelled") {
       finishCheckGate(runDir, "cancelled", null);
@@ -1464,7 +1509,6 @@ function waitForCheckGate(run, step, rig, check, failure) {
     const res = resolveCheckGate({
       decision,
       pendingReplies: replies.length - repliesBefore,
-      waitedMs: Date.now() - started,
     });
     if (res) {
       // A consumed decision must not leak into a later gate of this run.
@@ -1510,9 +1554,15 @@ function waitForCheckGate(run, step, rig, check, failure) {
           summary: `founder steering at check gate ('${check.cmd}'); looping to ${target}`,
         };
       }
-      finishCheckGate(runDir, "timeout", null);
-      return { ok: false, terminal: true, summary: "check gate timed out after 12h" };
     }
+    reminded = gateReminderPing(run, {
+      kind: `the *check gate* (\`${check.cmd}\`)`,
+      sinceAt: openedAt,
+      sent: reminded,
+      commands:
+        `Approve (re-baseline): \`factory-run approve ${id}\` / reject: \`factory-run reject ${id} "<why>"\` / ` +
+        `steer the implementer: \`factory-run reply ${id} "<instruction>"\` (or just tell the chief of staff).`,
+    });
     execSync("sleep 15");
   }
 }
@@ -1524,8 +1574,11 @@ function waitForCheckGate(run, step, rig, check, failure) {
 // and the web console pick turns up unchanged); founder turns arrive via
 // `factory-run reply` as JSON lines in discussion-replies.jsonl; resolution
 // reuses the gate's decision file verbatim (`approve` = go-ahead, `reject` =
-// don't-build → run state "killed", a success). Bounds are loud: turn cap and
-// idle timeout fail the run explicitly, never auto-approve.
+// don't-build → run state "killed", a success). The one bound is loud: a
+// reply needing a turn past the cap fails the run explicitly, never
+// auto-approves. Founder silence is not a bound — a parked discussion waits
+// indefinitely, with recurring reminders (see the founder-gate reminders
+// block); the founder direction of 2026-08-11 removed the idle timeout.
 
 /** Turns already on disk for a discussion step, oldest first: each attempt's
  *  output-envelope text plus its completion time (file mtime). Derived from
@@ -1559,9 +1612,18 @@ function runDiscussionStep(run, step) {
     return { ok: true, summary: "auto-approved (discussion skipped)" };
   }
   const maxTurns = step.maxTurns ?? DISCUSSION_DEFAULTS.maxTurns;
-  const idleTimeoutMinutes = step.idleTimeoutMinutes ?? DISCUSSION_DEFAULTS.idleTimeoutMinutes;
   const decisionPath = path.join(runDir, "gate-decision.json");
   const repliesPath = path.join(runDir, "discussion-replies.jsonl");
+  // Reminder/age clock floor, stamped at EVERY entry into this step (fresh
+  // start and resume alike). Turn times come from file mtimes
+  // (readDiscussionTurns), which a resume leaves stale — the floor is what
+  // keeps a resumed gate's age honest, so its reminder cadence and reported
+  // age start from the resume, never from a timestamp hours in the past.
+  // Persisted (not in-memory) so statusExtras reports the same age the
+  // executor uses.
+  const clockPath = path.join(runDir, "discussion-clock.json");
+  writeJson(clockPath, { startedAt: nowIso() });
+  const remindersPath = path.join(runDir, "discussion-reminders.json");
   const readReplies = () =>
     fs.existsSync(repliesPath) ? parseReplyLines(fs.readFileSync(repliesPath, "utf8").split("\n")) : [];
 
@@ -1633,6 +1695,24 @@ function runDiscussionStep(run, step) {
     const t = runTurn();
     if (!t.ok) return { ...t, telemetryDone: true };
   } else {
+    // A resumed gate must be visible: the founder may have been told the run
+    // failed, or simply lost the thread — a silently re-opened gate is the
+    // invisible-gate failure mode all over again. Re-post the last turn with
+    // the commands; like postTurn, an unsent re-post fails loudly.
+    const lastTurn = turns[turns.length - 1];
+    const sent = notify(
+      run,
+      `:speech_balloon: Run ${id} (${run.workflow} on ${run.rig}) — *${step.id}* re-opened at turn ${turns.length}/${maxTurns}, waiting for you:\n\n` +
+        (lastTurn.text || "").slice(0, 2800) +
+        `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
+        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
+    );
+    if (!sent) {
+      return {
+        ok: false,
+        summary: `discussion resume notification failed to send (see notify FAILED in engine.log); fix the notify channel and resume`,
+      };
+    }
     setState(run, "awaiting-approval", `discussion ${step.id}: resumed at turn ${turns.length}/${maxTurns}`);
   }
 
@@ -1654,9 +1734,6 @@ function runDiscussionStep(run, step) {
       pendingReplies: Math.max(0, replies.length - consumed),
       turnsUsed: turns.length,
       maxTurns,
-      lastActivityAt: discussionLastActivity(turns, replies),
-      now: nowIso(),
-      idleTimeoutMinutes,
     });
     if (res && res.outcome === "go-ahead") {
       finish("go-ahead", {});
@@ -1672,12 +1749,10 @@ function runDiscussionStep(run, step) {
       };
     }
     if (res) {
-      // turn-cap / idle-timeout: loud failure, never a go-ahead.
+      // turn-cap: loud failure, never a go-ahead. (The only non-decision
+      // outcome left — founder silence never resolves a gate.)
       finish(res.outcome, {});
-      const summary =
-        res.outcome === "turn-cap"
-          ? `discussion turn cap hit (${maxTurns} turns) without a founder decision — failing loudly, never auto-approving`
-          : `discussion idle timeout hit (${idleTimeoutMinutes} minutes with no founder activity) — failing loudly, never auto-approving`;
+      const summary = `discussion turn cap hit (${maxTurns} turns) without a founder decision — failing loudly, never auto-approving`;
       try {
         tStep(id, step.id, Math.max(turns.length, 1), "fail", summary, nowIso());
       } catch {}
@@ -1687,6 +1762,29 @@ function runDiscussionStep(run, step) {
       const t = runTurn();
       if (!t.ok) return { ...t, telemetryDone: true };
       continue;
+    }
+    // Recurring founder reminder, keyed to the newest of on-disk activity
+    // (turn/reply) and the resume clock floor: founder activity moves the
+    // epoch, which re-arms the cadence; the sent count is persisted per epoch
+    // so an executor restart never re-spams already-sent reminders. Turn
+    // times are re-read from disk so the epoch tracks reality, not the
+    // in-memory snapshot.
+    const since = effectiveSince(
+      discussionLastActivity(readDiscussionTurns(runDir, step.id), replies),
+      readJson(clockPath, {}).startedAt || null
+    );
+    if (since) {
+      const rem = readJson(remindersPath, {});
+      const sent = rem.since === since && Number.isFinite(rem.sent) ? rem.sent : 0;
+      const after = gateReminderPing(run, {
+        kind: `the *${step.id}* discussion (turn ${turns.length}/${maxTurns})`,
+        sinceAt: since,
+        sent,
+        commands:
+          `Reply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
+          `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`,
+      });
+      if (after !== sent) writeJson(remindersPath, { since, sent: after });
     }
     execSync("sleep 15");
   }
@@ -3876,13 +3974,26 @@ function cmdWatchdog(argv) {
   if (stale.length === 0) console.log("no stale runs");
 }
 
+/** Age fields for an open founder gate: `since` (ISO), `waitingMs`, and
+ *  `waitingFor` (human-compact). Gates have no deadline (founder direction
+ *  2026-08-11) — status reports how long a gate has been waiting, never a
+ *  time-to-timeout, so the standup can enumerate every open gate by age. */
+function gateAge(sinceIso) {
+  const t = Date.parse(sinceIso || "");
+  if (!Number.isFinite(t)) return { since: null, waitingMs: null, waitingFor: null };
+  const waitingMs = Math.max(0, Date.now() - t);
+  return { since: new Date(t).toISOString(), waitingMs, waitingFor: formatQuiet(waitingMs) };
+}
+
 /** Machine-readable step/gate facts for `status --json`, so consumers (the
  *  standup skill, the web console) never parse human-formatted `history`
  *  detail strings. `currentStep` mirrors what the human output prints (raw
  *  stepIndex over total, id/type from the workflow, index clamped for id
  *  lookup). For awaiting-approval runs, `gate` says which kind of founder
- *  gate is pending: a plan gate, a preview gate, or a discussion awaiting a
- *  reply (with pendingReplies/lastActivityAt from the discussion helpers).
+ *  gate is pending — a plan gate, a preview gate, a check gate, or a
+ *  discussion awaiting a reply (with pendingReplies/lastActivityAt from the
+ *  discussion helpers) — plus its age (gateAge; for discussions derived from
+ *  the same activity-vs-clock-floor rule the executor's reminders use).
  *  For awaiting-merge runs, `pendingMerge` names the branch the founder must
  *  merge — machine-readable, so the standup never parses history strings. */
 function statusExtras(run) {
@@ -3903,18 +4014,29 @@ function statusExtras(run) {
     const runDir = runDirOf(run.id);
     // A run dir can be absent (pruned, or a synthetic run in selftest); report
     // the gate kind rather than letting `status --json` die on one bad run.
-    if (!fs.existsSync(runDir)) return { currentStep, gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null }, pendingMerge };
+    if (!fs.existsSync(runDir)) {
+      return {
+        currentStep,
+        gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
+        pendingMerge,
+      };
+    }
     const turns = readDiscussionTurns(runDir, step.id);
     const repliesPath = path.join(runDir, "discussion-replies.jsonl");
     const replies = fs.existsSync(repliesPath)
       ? parseReplyLines(fs.readFileSync(repliesPath, "utf8").split("\n"))
       : [];
+    const lastActivity = discussionLastActivity(turns, replies);
+    // Same rule as the executor's reminders: age from the newest of activity
+    // and the resume clock floor, so status and reminders can never disagree.
+    const since = effectiveSince(lastActivity, readJson(path.join(runDir, "discussion-clock.json"), {}).startedAt || null);
     return {
       currentStep,
       gate: {
         kind: "discussion",
         pendingReplies: countPendingReplies(turns, replies),
-        lastActivityAt: discussionLastActivity(turns, replies),
+        lastActivityAt: lastActivity,
+        ...gateAge(since || run.updatedAt),
       },
       pendingMerge,
     };
@@ -3925,7 +4047,7 @@ function statusExtras(run) {
     const cg = readJson(path.join(runDirOf(run.id), "check-gate.json"), null);
     return {
       currentStep,
-      gate: { kind: "check-gate", check: cg ? cg.cmd : null, pendingReplies: null, lastActivityAt: run.updatedAt || null },
+      gate: { kind: "check-gate", check: cg ? cg.cmd : null, pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
       pendingMerge,
     };
   }
@@ -3933,7 +4055,11 @@ function statusExtras(run) {
   // mechanism, so pendingReplies is null; last activity is the state
   // transition that posted it.
   const kind = step.type === "gate" && step.skipWhen === "no-preview" ? "preview-gate" : "plan-gate";
-  return { currentStep, gate: { kind, pendingReplies: null, lastActivityAt: run.updatedAt || null }, pendingMerge };
+  return {
+    currentStep,
+    gate: { kind, pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
+    pendingMerge,
+  };
 }
 
 function cmdStatus(argv) {
@@ -3952,6 +4078,18 @@ function cmdStatus(argv) {
     console.log(`${r.id}  ${r.state.padEnd(20)} ${r.rig.padEnd(20)} step ${r.stepIndex}/${wf.steps.length} (${step.id})  ${r.prompt.slice(0, 60)}`);
     const usage = usageLine(r.id);
     if (usage) console.log(`  ${usage.replace(/:moneybag: /, "")}`);
+    if (r.state === "awaiting-approval") {
+      // Every open founder gate, with its age (gates never expire, so the
+      // standup enumerates them by how long they have been waiting).
+      const g = statusExtras(r).gate;
+      if (g) {
+        const canReply = g.kind === "discussion" || g.kind === "check-gate";
+        console.log(
+          `  gate: ${g.kind}${g.check ? ` (${g.check})` : ""} — awaiting founder for ${g.waitingFor || "unknown"} — ` +
+            `\`factory-run approve ${r.id}\` / \`factory-run reject ${r.id} "..."\`${canReply ? ` / \`factory-run reply ${r.id} "..."\`` : ""}`
+        );
+      }
+    }
     if (id) {
       for (const h of r.history.slice(-10)) console.log(`  ${h.at}  ${h.state}${h.detail ? ` — ${h.detail}` : ""}`);
       if (r.recovery) {
@@ -4905,11 +5043,11 @@ function cmdSelftest() {
     validateWorkflowAgentSteps("synthetic", { steps: [{ id: "s", type: "spawn", workflow: "feature-dev", ...over }] });
   const discussionStepChecks = [
     ["valid discussion step accepted", vDisc({}).length === 0],
-    ["numeric discussion bounds accepted", vDisc({ maxTurns: 8, idleTimeoutMinutes: 240 }).length === 0],
+    ["numeric discussion bound accepted", vDisc({ maxTurns: 8 }).length === 0],
     ["missing discussion prompt flagged", vDisc({ prompt: "no-such-prompt" }).some((p) => p === "workflow synthetic: missing prompt no-such-prompt")],
     ["missing discussion agent profile flagged", vDisc({ agent: "no-such-agent" }).some((p) => p.includes("missing agent profile no-such-agent"))],
     ["non-numeric maxTurns flagged", vDisc({ maxTurns: "8" }).some((p) => p.includes("maxTurns"))],
-    ["non-numeric idleTimeoutMinutes flagged", vDisc({ idleTimeoutMinutes: "4h" }).some((p) => p.includes("idleTimeoutMinutes"))],
+    ["stale idleTimeoutMinutes key ignored (idle timeout removed)", vDisc({ idleTimeoutMinutes: "4h" }).length === 0],
     ["zero maxTurns flagged", vDisc({ maxTurns: 0 }).some((p) => p.includes("maxTurns"))],
     ["valid spawn step accepted", vSpawn({ rigFrom: "app.json", promptFrom: "first-feature.md" }).length === 0],
     ["spawn unknown workflow flagged", vSpawn({ workflow: "no-such-workflow" }).some((p) => p.includes("references unknown workflow 'no-such-workflow'"))],
@@ -4930,9 +5068,6 @@ function cmdSelftest() {
       pendingReplies: 0,
       turnsUsed: 2,
       maxTurns: 8,
-      lastActivityAt: "2026-01-01T00:00:00.000Z",
-      now: "2026-01-01T01:00:00.000Z",
-      idleTimeoutMinutes: 240,
       ...over,
     });
   const discussionOutcomeChecks = [
@@ -4940,11 +5075,13 @@ function cmdSelftest() {
     ["reject resolves dont-build with feedback", (() => { const r = ro({ decision: { decision: "reject", feedback: "nope" } }); return r.outcome === "dont-build" && r.feedback === "nope"; })()],
     ["pending reply past the cap is turn-cap", ro({ pendingReplies: 1, turnsUsed: 8 }).outcome === "turn-cap"],
     ["cap without a pending reply keeps waiting", ro({ turnsUsed: 8 }) === null],
-    ["silence past the idle timeout is idle-timeout", ro({ now: "2026-01-01T04:01:00.000Z" }).outcome === "idle-timeout"],
     ["active discussion keeps waiting", ro({}) === null],
-    ["decision outranks the bounds", ro({ decision: { decision: "approve" }, pendingReplies: 3, turnsUsed: 8, now: "2026-02-01T00:00:00.000Z" }).outcome === "go-ahead"],
+    ["decision outranks the bounds", ro({ decision: { decision: "approve" }, pendingReplies: 3, turnsUsed: 8 }).outcome === "go-ahead"],
     ["garbage reply lines skipped", parseReplyLines(['{"at":"2026-01-01T00:00:00Z","text":"hi"}', "junk", "{}", '{"text":"  "}']).length === 1],
-    ["defaults are 8 turns / 240 idle minutes", DISCUSSION_DEFAULTS.maxTurns === 8 && DISCUSSION_DEFAULTS.idleTimeoutMinutes === 240],
+    ["defaults are 8 turns with no idle timeout", DISCUSSION_DEFAULTS.maxTurns === 8 && DISCUSSION_DEFAULTS.idleTimeoutMinutes === undefined],
+    ["no reminder due inside the first 4h window", remindersDue({ sinceAt: "2026-01-01T00:00:00.000Z", now: "2026-01-01T03:59:00.000Z" }) === 0],
+    ["first reminder due at 4h, second a day later", remindersDue({ sinceAt: "2026-01-01T00:00:00.000Z", now: "2026-01-01T04:00:00.000Z" }) === 1 && remindersDue({ sinceAt: "2026-01-01T00:00:00.000Z", now: "2026-01-02T04:00:00.000Z" }) === 2],
+    ["resume clock floor outranks a stale activity time", effectiveSince("2026-01-01T00:00:00.000Z", "2026-01-01T06:00:00.000Z") === "2026-01-01T06:00:00.000Z"],
     ["conversation interleaves founder replies", (() => {
       const c = assembleConversation(
         [{ attempt: 1, at: "2026-01-01T00:00:00Z", text: "opening" }, { attempt: 2, at: "2026-01-01T02:00:00Z", text: "answer" }],
@@ -4966,7 +5103,7 @@ function cmdSelftest() {
   const statusChecks = [
     ["currentStep carries index/total/id/type", (() => { const c = sx({ stepIndex: 2 }).currentStep; return c.index === 2 && c.total === 11 && c.id === "implement" && c.type === "agent"; })()],
     ["non-awaiting run has no gate", sx({}).gate === null],
-    ["awaiting-approval at a gate step is a plan gate", (() => { const g = sx({ workflow: "self-review", stepIndex: 1, state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z"; })()],
+    ["awaiting-approval at a gate step is a plan gate with an age, no deadline", (() => { const g = sx({ workflow: "self-review", stepIndex: 1, state: "awaiting-approval" }).gate; return g !== null && g.kind === "plan-gate" && g.pendingReplies === null && g.lastActivityAt === "2026-01-01T00:00:00.000Z" && g.since === "2026-01-01T00:00:00.000Z" && typeof g.waitingMs === "number" && typeof g.waitingFor === "string" && g.timeoutAt === undefined; })()],
     ["awaiting-approval at the preview gate is a preview gate", (() => { const g = sx({ stepIndex: 8, state: "awaiting-approval" }).gate; return g !== null && g.kind === "preview-gate"; })()],
     ["awaiting-approval at a discussion step is a discussion gate", (() => { const g = sx({ state: "awaiting-approval" }).gate; return g !== null && g.kind === "discussion"; })()],
     ["awaiting-approval at a commands step is a check gate", (() => { const g = sx({ stepIndex: 3, state: "awaiting-approval" }).gate; return g !== null && g.kind === "check-gate" && g.pendingReplies === null; })()],
@@ -5059,7 +5196,7 @@ function cmdSelftest() {
   const plainCheck = { cmd: "npm test", founderGated: false, renderer: null, protectedPaths: [], onApprove: null };
   const skipHeroChecks = (RIGS.rigs["skip-hero"].checks || []).map(normalizeCheck);
   const goldenCheck = skipHeroChecks.find((c) => c.cmd === "npm run golden:check");
-  const rcg = (over) => resolveCheckGate({ decision: null, pendingReplies: 0, waitedMs: 0, timeoutMs: 1000, ...over });
+  const rcg = (over) => resolveCheckGate({ decision: null, pendingReplies: 0, ...over });
   const checkGateChecks = [
     ["string check normalizes to a plain command", JSON.stringify(normalizeCheck("npm test")) === JSON.stringify(plainCheck)],
     ["object check normalizes to the same execution shape", JSON.stringify(normalizeCheck({ cmd: "npm test" })) === JSON.stringify(plainCheck)],
@@ -5076,8 +5213,7 @@ function cmdSelftest() {
     ["reject carries feedback", (() => { const r = rcg({ decision: { decision: "reject", feedback: "nope" } }); return r.outcome === "reject" && r.feedback === "nope"; })()],
     ["new reply steers the implementer", rcg({ pendingReplies: 1 }).outcome === "steer"],
     ["decision outranks pending replies", rcg({ decision: { decision: "approve" }, pendingReplies: 2 }).outcome === "approve"],
-    ["silence past the timeout ends the gate", rcg({ waitedMs: 1001 }).outcome === "timeout"],
-    ["quiet gate keeps waiting", rcg({}) === null],
+    ["quiet gate keeps waiting indefinitely (no timeout outcome)", rcg({}) === null],
     ["renderer skip-hero-golden loads and exports render()", (() => { try { return typeof loadRenderer("skip-hero-golden").render === "function"; } catch { return false; } })()],
     ["path-shaped renderer name rejected", throws(() => loadRenderer("../evil"), /invalid renderer name/)],
     ["missing renderer flagged", throws(() => loadRenderer("no-such-renderer"), /missing renderer no-such-renderer/)],

@@ -581,3 +581,39 @@ surface reports it as shipped. Review-gating the harness rig gives its changes
 the same rigor as product changes (reversing D19's auto-merge convenience),
 and making GitHub the single source of merge truth removes the class of
 "engine thinks X, origin knows Y" bugs instead of patching each one.
+
+## D32 — Founder gates never expire: idle timeouts removed, recurring reminders instead (2026-08-11)
+
+**Context:** two discussion gates died silently on the 240-minute idle timeout
+(`feature-f1-surface-footwork-readout`, $4.00; `feature-jittery-compass-driven-map`,
+$2.17) with zero Slack traffic between the gate post and the terminal failure, and a
+retry of the second re-failed **2ms** after resume because the idle clock was derived
+from the original turn file's mtime. The original fix brief proposed 50%/80% warnings
+before the guillotine; the founder overrode it mid-run (2026-08-11 11:03): gates must
+NEVER die on an idle timeout — silent hours must not kill a workflow.
+**Decision (supersedes D24's idle-timeout bound; its turn cap, decision plumbing, and
+`--auto` skip stand):**
+- No founder gate has an idle timeout: discussion (was 240m), plan/preview gate (was
+  12h), and check gate (was 12h) all wait indefinitely for approve/reject/reply/cancel.
+  No auto-approval, no auto-fail, no expiry. `resolveOutcome` and `resolveCheckGate`
+  take no clock inputs at all, so nothing time-based can resolve a gate.
+- Recurring reminders replace the countdown: 4 hours after the last activity, then
+  daily (`GATE_REMINDERS` in discussion.mjs), naming the run, step, commands, and the
+  gate's age — never a time-to-death, because there is none. Discussion reminders are
+  keyed to the newest of on-disk activity and a persisted resume clock floor
+  (`discussion-clock.json`) with the sent count persisted per epoch
+  (`discussion-reminders.json`), so founder activity re-arms the cadence and an
+  executor restart never re-spams.
+- A resume stamps a fresh clock floor and re-posts the gate to Slack (invisible-gate
+  rule applies), so a resumed gate is never poisoned by a stale turn-file mtime and
+  never sits invisible.
+- `factory-run status`/`list` print every open gate with its age (`gate.since`/
+  `waitingMs`/`waitingFor` in `--json`), so the standup enumerates parked gates.
+- Indefinite parking is safe by construction: each run's executor is its own detached
+  process (no shared slot pool — a parked run blocks nothing), and the stale-run
+  watchdog is alert-only (24h waiting threshold, 72h cooldown), so it reminds about a
+  parked gate but never reaps it. Genuine agent-step timeouts (e.g. the 90m implement
+  cap) are untouched — this is only about waiting on a human.
+**Why:** the founder keeps the veto either way; killing a run because the founder was
+asleep converts spent money into a corpse that retry then re-killed. Waiting costs one
+sleeping process; the reminders carry the urgency instead of a deadline.
