@@ -2138,7 +2138,7 @@ function deployStep(run, rig) {
   if (!["none", "harness-restart", "eas-update"].includes(deploy.type)) {
     return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
   }
-  // Branch-readiness gate: refuse to merge, open a PR, or publish unless the
+  // Branch-readiness gate: refuse to open a PR or publish unless the
   // branch actually carries committed work (see classifyBranchReadiness).
   // A probe error fails too — this gate never silently passes.
   const status = git(run.worktree, ["status", "--porcelain"]);
