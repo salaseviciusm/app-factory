@@ -513,3 +513,27 @@ happens — the engine's job ends at an open, reviewable PR, and re-entering the
 run lifecycle must go through one auditable verb rather than loosened terminal
 states. Keeping the branch when a PR closes preserves the option value of the
 work at near-zero cost (a worktree is GBs; a branch is a ref).
+
+## D30 — Immutability by default; mutation needs a named optimisation (2026-08-10)
+
+**Context:** a bug fix on `running-with-pace` (PR #45) copied the open segment's
+`line_path` per live-run snapshot. The founder challenged it as per-event allocation in
+a core library, added to patch around a React Native prop-diff detail the library knows
+nothing about, and proposed mutate-in-place plus a change-notification hook instead.
+Evidence contradicted the premise: the same function already `flatMap`s the whole run's
+points on every fix, so the copy was the cheapest allocation there, and the RN adapter
+needs a fresh array regardless — the hook would have added a second mechanism without
+removing the first.
+**Decision:** across the factory, immutability is the default. Mutation is permitted only
+for a specific, named optimisation, and must be limited in scope and abstracted so
+shared-mutable-state hazards do not leak to callers (founder-stated). Where mutation
+survives, document the reason at the mutation site in terms of the value contract, not in
+terms of whichever downstream consumer happened to break. Concretely on pace:
+`LiveRunSmoothingLayer.buildRun()` returns a snapshot that behaves as a value — the open
+segment's path is copied; closed segments are deliberately shared, because their stable
+identity is what stops settled sections being re-sent to the native map on every fix.
+**Why:** a mutable value handed across a boundary makes every consumer responsible for
+knowing when it changed, which is a bug class the codebase then owns permanently.
+Copying is normally cheap next to the work already being done, so the exceptions must be
+deliberate and stated rather than incidental. Rationale written against a specific
+consumer rots and invites a future agent to "clean up" a load-bearing copy.

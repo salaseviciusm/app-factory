@@ -715,3 +715,84 @@ restated above. Its factual claims about the day being dark — no Slack message
 runs, no files written — were re-checked and **hold**. Pace totals also corrected:
 **8 engine runs, $143.41** to date, not "five runs, ~$104" as written in the
 running-with-pace bullet above.
+
+## Today — 2026-08-11 (overnight, founder-driven)
+
+### Golden regressions do not run from raw footage — TODO, no code changed
+
+Founder's stated expectation: "it is supposed to be run on the raw footages — we run
+[them] through the pose + skip engine algorithm pipeline and compare to a known good
+output state." **The harness does not do this today.** `npm run golden:check`
+(`scripts/golden-check.ts`) discovers `examples/*.recording.json` — already-extracted
+pose frames — and replays only from there. `tools/pose-extract` (the Swift/Vision
+video → pose stage) is invoked by no check: not `golden:check`, not `npm run check`,
+only the manual `scripts/debug-video.sh`. So the golden suite covers detectors +
+stabilizer; **video → pose is untested by it.**
+
+Why this matters and is not academic: the `feature-skip-hero-s-pose` bug was exactly
+a pose-stage defect (Vision scoring an inverted image, hip p50 0.22 vs 0.73), and it
+was **invisible to every geometric check** because the geometry stayed correct while
+the confidences rotted. A regression suite that starts after pose extraction can go
+green straight through that entire class of bug.
+
+**Founder direction 2026-08-11 00:36: do not change regressions code now. Note for
+standup and later todos.** Two candidate shapes, unranked pending founder call:
+- Extend goldens to start from raw video. Real end-to-end coverage. Costs: ~450MB of
+  `.MOV` must be reachable in CI (git-lfs or external fixture store), `pose-extract`
+  must be built as part of the check, and Vision's determinism across macOS versions
+  is **unverified** — could be flaky.
+- Cheaper: a separate pose-stage check pinning video → `recording.json` on one or two
+  short clips, run nightly or manually rather than inside `npm run check`.
+
+Note the run itself partly closed this: it added `npm run orientation:check` and
+`npm run parity:check`, plus a median-hip ≥ 0.5 confidence gate on the goldens. Those
+are the first non-geometric axes in the suite. They are not yet wired into
+`npm run check`.
+
+### Raw footage library created
+
+`~/.openclaw/workspace/media/skip-hero-footage/` — 13 files, 448MB, `MANIFEST.json`
+carries provenance (Slack file id, channel, date, matching session bundle, whether a
+golden exists). Swept all seven factory Slack channels, not just `#factory-skiphero`.
+Founder's intent is explicitly broader than regressions: **collect these for future
+content generation too.**
+- 9 newly pulled from Slack; 4 already on disk were hardlinked (same inode, one copy,
+  both paths valid), saving ~300MB.
+- Verified, not assumed: byte sizes match Slack originals exactly; every file decodes
+  under `ffprobe` with a sane duration.
+- 4 `ScreenRecording_*` files are in-app captures, not camera footage — tagged
+  `app-screen-recording` in the manifest so they are never pulled into a fixture set
+  by mistake. Useful as UI content material.
+- `.movs` confirmed gitignored: skip-hero's `.gitignore:14` (`examples/*.mov`) covers
+  both cases on this filesystem. The **workspace repo had no `.gitignore` at all** and
+  would have swallowed 448MB into an 80KB `.git` — one added at
+  `~/.openclaw/workspace/.gitignore`.
+
+### Backup risk — carried forward, now larger
+
+`IMG_0446.MOV` (oldest fixture, has a committed golden) **exists nowhere in Slack** —
+it predates the channels or arrived out of band. It is a single local file. The whole
+448MB library is now in the same position, on top of the unpushed-commit exposure
+already logged at the 08-10 EOD sync. No durable backup exists for any of it.
+
+### `feature-skip-hero-s-pose` — check gate approved, run resumed
+
+Was parked at `awaiting-approval`, step 3/11, since 23:14. `golden:check` failed on
+`FAIL no golden at examples/device-2026-08-10-210231.recording.golden.json` — the run
+added the fixture (session `d5d61aa1`) but a golden is only ever written by
+`golden:update`, which is founder-gated. Approved per founder instruction 00:36 via
+`factory-run approve`, which ran the rig's sanctioned `onApprove` re-baseline.
+- Commit `2d40211` "harness: founder-approved golden re-baseline": **947 insertions,
+  zero deletions.** The new golden is 911 lines; the 6 existing goldens each gained
+  exactly 6 lines (the confidence-stats stamp). **No existing event timeline was
+  altered** — including the two protected pre-fix `device-2026-08-06-*` baselines.
+- Checks then passed; run advanced to `review` (step 4/11) at 23:38.
+
+**Still gated on the founder** (from the run's own `todo-summary.md`, unchanged by me):
+- Run the ADR 0026 hardware protocol on a physical iPhone — orientation resolves
+  `.right`, hip p50 ≈ 0.65+, parity passes on a fresh export. The run's fix to the
+  `VNImageRequestHandler` orientation is **inferred, not hardware-confirmed**, and
+  hardware confirmation is a required part of done.
+- Decide whether the `1db6fa50` bundle should also land as a fixture. Ask C of the
+  brief said both sessions; the run landed only `d5d61aa1` and deliberately left this
+  as a founder call. Its `.MOV` is now available either way.
