@@ -37,10 +37,14 @@
  *   factory-run deploy <run_id>          (release a held deploy: policy.deploy "hold")
  *   factory-run cancel <run_id>          (terminates the executor's process group,
  *                                         then finalizes run.json; worktree kept)
- *   factory-run sync <run_id>            (refresh an awaiting-merge run's GitHub PR:
- *                                         merged -> done, closed -> closed [worktree
- *                                         torn down, branch kept], open -> unchanged.
- *                                         The only sanctioned exit from awaiting-merge)
+ *   factory-run sync <run_id> | --all    (refresh awaiting-merge runs' GitHub PRs:
+ *                                         merged -> done [harness-restart rigs also
+ *                                         restart the gateway/web console once the
+ *                                         rig checkout contains the merge], closed ->
+ *                                         closed [worktree torn down, branch kept],
+ *                                         open -> unchanged. --all sweeps every
+ *                                         awaiting-merge run. The only sanctioned
+ *                                         exit from awaiting-merge)
  *   factory-run followup <run_id> --workflow <feature-dev|bug-fix> --prompt "<text>" [--auto]
  *                                        (chained run on a green terminal parent:
  *                                         continues the parent's branch and worktree
@@ -400,14 +404,17 @@ function runCommand(cmd, cwd, logFile, timeoutMinutes = 30) {
   return { ok: res.status === 0, output, status: res.status };
 }
 
-// Per-rig policy: whether a green run's branch merges into the default branch
-// automatically and whether the deploy publishes automatically. Policy is the
-// whether/when; rig.deploy stays the mechanism (how). Safe defaults: absent
-// merge → "review" (never auto-merge by surprise; the run parks in state
-// awaiting-merge), absent deploy → "auto" (publishing a preview update is
-// additive and today's behaviour for every rig), absent preview → "off".
+// Per-rig policy: how a green run's branch reaches the default branch and
+// whether the deploy publishes automatically. policy.merge has exactly one
+// value, "review": every rig is PR-gated — the run parks in state
+// awaiting-merge and the founder merges the PR on GitHub ("auto", whose whole
+// execution path ended at a local-only merge nothing ever pushed, was removed
+// 2026-08-11 — the key survives so stale configs fail with a clear message).
+// Policy is the whether/when; rig.deploy stays the mechanism (how). Safe
+// defaults: absent deploy → "auto" (publishing a preview update is additive
+// and today's behaviour for every rig), absent preview → "off".
 const POLICY_DEFAULTS = { merge: "review", deploy: "auto", preview: "off" };
-const POLICY_VALUES = { merge: ["auto", "review"], deploy: ["auto", "hold"], preview: ["on", "off"] };
+const POLICY_VALUES = { merge: ["review"], deploy: ["auto", "hold"], preview: ["on", "off"] };
 
 /** Resolve and validate a rig's policy block (pure, exercised by selftest).
  *  Returns { policy, problems }: `policy` is always fully resolved (invalid or
@@ -429,7 +436,10 @@ function resolveRigPolicy(rigName, raw) {
       continue;
     }
     if (!POLICY_VALUES[key].includes(value)) {
-      problems.push(`rig ${rigName}: policy.${key} '${value}' invalid (allowed: ${POLICY_VALUES[key].join("|")})`);
+      const hint = key === "merge" && value === "auto"
+        ? " — auto-merge was removed 2026-08-11: every rig is PR-gated, and `factory-run sync` completes the run after the PR merges"
+        : "";
+      problems.push(`rig ${rigName}: policy.${key} '${value}' invalid (allowed: ${POLICY_VALUES[key].join("|")})${hint}`);
       continue;
     }
     policy[key] = value;
@@ -1223,9 +1233,10 @@ function runBranch(run) {
 }
 
 /** The exact publish invocation (pure, exercised by selftest):
- *  --force-with-lease because deploy recovery rebases the branch (rewriting
- *  every sha), -u so the first push creates the upstream the agents' plain
- *  `git push` relies on. Accepts a run id or a full factory/<id> branch name;
+ *  --force-with-lease so a locally rewritten branch (a founder or follow-up
+ *  rebase) still publishes safely, -u so the first push creates the upstream
+ *  the agents' plain `git push` relies on. Accepts a run id or a full
+ *  factory/<id> branch name;
  *  the factory/ prefix is hard-coded in the command literal so the D26
  *  push-source-scan keeps proving every engine push targets a run branch. */
 function pushRunBranchCommand(branch) {
@@ -1710,9 +1721,9 @@ function easPublishArgs(deploy, msg) {
   ];
 }
 
-/** Pure decision core for the harness-merge web-console restart (exercised by
- * selftest). Given the merge commit's first-parent file list, says whether the
- * factory web server must be restarted and whether its frontend build is stale
+/** Pure decision core for the harness-restart web-console restart (exercised
+ * by selftest). Given the merge commit's file list, says whether the factory
+ * web server must be restarted and whether its frontend build is stale
  * (frontend/dist/ is gitignored, so merged frontend sources need a rebuild). */
 function classifyWebRestart(files) {
   const owned = files.filter(
@@ -1724,7 +1735,7 @@ function classifyWebRestart(files) {
   };
 }
 
-// The exact dep-sync + build command for a harness-merge frontend rebuild
+// The exact dep-sync + build command for a harness-restart frontend rebuild
 // (single source of truth, exercised by selftest): `npm ci` for lockfile
 // reproducibility, `npm install` fallback when the lockfile is absent or out
 // of sync with package.json. Run synchronously into deploy.log — a detached
@@ -1734,7 +1745,7 @@ const WEB_FRONTEND_DIR = "orchestration/web/frontend";
 const WEB_FRONTEND_BUILD_CMD =
   "(npm ci --no-fund --no-audit || npm install --no-fund --no-audit) && npm run build";
 
-/** Pure decision core for judging the harness-merge web-console restart
+/** Pure decision core for judging the harness-restart web-console restart
  *  (exercised by selftest). `buildOk` is true when no rebuild was needed. A
  *  failed build must fail the outcome even if the console answers (it would be
  *  serving the stale pre-merge frontend). */
@@ -1745,151 +1756,6 @@ function classifyWebRestartOutcome({ buildOk, downOk, upOk, upOutput }) {
     return { ok: false, reason: "web console did not come back up" };
   }
   return { ok: true, reason: "restarted" };
-}
-
-// Deploy-time base-drift recovery (harness-merge only): concurrent runs land
-// on the base branch mid-run, so a stale-base merge is never attempted. On
-// drift the run branch is rebased onto the base inside the worktree and the
-// executor loops the verification gates back over the new base, bounded by
-// RECOVERY_CAP. The counter lives in run.json (run.recovery) so engine
-// restarts and resumes cannot reset it.
-const RECOVERY_CAP = 5;
-
-// Engine-synthetic agent step: spawned by the executor only when a recovery
-// rebase conflicts — never declared in workflow JSON.
-const RESOLVE_STEP = { id: "resolve-conflicts", type: "agent", prompt: "conflict-resolver", timeoutMinutes: 30 };
-
-/** Pure decision core for deploy-time base-drift recovery (exercised by
- *  selftest). `iterations` = recovery cycles already burned. Called before the
- *  rebase with conflicted=false (merge / escalate / permission-to-rebase) and
- *  again after it with the real conflict outcome. */
-function classifyRecovery({ drifted, conflicted, iterations, cap = RECOVERY_CAP }) {
-  if (!drifted) return { action: "merge", reason: "base branch unchanged since branch point" };
-  if (iterations >= cap) return { action: "escalate", reason: `recovery cap reached (${iterations}/${cap} cycles)` };
-  if (conflicted) return { action: "resolve", reason: "rebase conflicted; agent resolution required" };
-  return { action: "reverify", reason: "clean rebase; deterministic gates must re-run against the new base" };
-}
-
-/** Write conflict.md into the run dir: the conflicting files/hunks plus the
- *  base-side commits that caused the drift — the dynamic context the static
- *  conflict-resolver prompt template references (same pattern as findings.md). */
-function writeConflictContext(run, fromSha, toSha, logFile) {
-  const files = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2).output.trim();
-  const commits = runCommand(`git log --format='%h %s' ${fromSha}..${toSha}`, run.worktree, logFile, 2).output.trim();
-  const hunksRaw = runCommand("git diff", run.worktree, logFile, 2).output;
-  const hunks = hunksRaw.length > 30000 ? `${hunksRaw.slice(0, 30000)}\n… (truncated)` : hunksRaw;
-  fs.writeFileSync(
-    path.join(runDirOf(run.id), "conflict.md"),
-    [
-      "# Rebase conflict: base branch advanced during this run",
-      "",
-      `Run branch \`${runBranch(run)}\` is being rebased onto \`${run.baseBranch}\` (\`${toSha.slice(0, 12)}\`); the rebase stopped on conflicts.`,
-      "",
-      "## Conflicting files",
-      "",
-      files ? `\`\`\`\n${files}\n\`\`\`` : "(none reported)",
-      "",
-      `## Base-side commits since the branch point (\`${fromSha.slice(0, 12)}..${toSha.slice(0, 12)}\`)`,
-      "",
-      commits ? `\`\`\`\n${commits}\n\`\`\`` : "(none)",
-      "",
-      "## Conflict hunks (`git diff` at the first stop, truncated)",
-      "",
-      "```diff",
-      hunks.trimEnd(),
-      "```",
-      "",
-    ].join("\n")
-  );
-}
-
-/** True while a rebase is mid-flight in the worktree (either backend). */
-function rebaseInProgress(worktree) {
-  return ["rebase-merge", "rebase-apply"].some((d) => {
-    const p = git(worktree, ["rev-parse", "--git-path", d]);
-    return p.status === 0 && fs.existsSync(path.resolve(worktree, p.stdout.trim()));
-  });
-}
-
-/** Merge the validated run branch into the rig's default branch — local only,
- *  for every rig: the engine never pushes the default branch (see D26; the
- *  run branch factory/<id> is pushed throughout the run). Extracted from
- *  the harness-merge deploy so every deploy type merges identically when
- *  policy.merge is "auto". Base drift is handled exactly as before:
- *  classifyRecovery decides merge/reverify/resolve/escalate, rebases are
- *  recorded in run.recovery, and non-merge outcomes return {recover} for the
- *  executor's handleRecovery loop. Returns {ok:true, sha} once the merge
- *  commit lands. */
-function mergeRunBranch(run, rig) {
-  const runDir = runDirOf(run.id);
-  const logFile = path.join(runDir, "deploy.log");
-  let baseSha, mergeBase;
-  try {
-    baseSha = sh(`git -C ${JSON.stringify(run.worktree)} rev-parse ${run.baseBranch}`).trim();
-    mergeBase = sh(`git -C ${JSON.stringify(run.worktree)} merge-base ${run.baseBranch} HEAD`).trim();
-  } catch (err) {
-    return { ok: false, summary: `base drift check failed: ${String(err.message || err).slice(0, 300)}` };
-  }
-  const iterations = run.recovery ? run.recovery.iterations : 0;
-  const pre = classifyRecovery({ drifted: baseSha !== mergeBase, conflicted: false, iterations });
-  if (pre.action === "escalate") {
-    return { ok: false, recover: "escalate", summary: pre.reason };
-  }
-  if (pre.action !== "merge") {
-    log(runDir, `deploy: base ${run.baseBranch} advanced ${mergeBase.slice(0, 8)} -> ${baseSha.slice(0, 8)}; rebasing ${runBranch(run)} in the worktree`);
-    const rb = runCommand(`git rebase ${JSON.stringify(run.baseBranch)}`, run.worktree, logFile, 10);
-    let conflicted = false;
-    if (!rb.ok) {
-      const unmerged = runCommand("git diff --name-only --diff-filter=U", run.worktree, logFile, 2);
-      conflicted = unmerged.ok && unmerged.output.trim() !== "";
-      if (!conflicted) {
-        runCommand("git rebase --abort", run.worktree, logFile, 2);
-        return { ok: false, summary: `rebase onto ${run.baseBranch} failed without conflicts (aborted, see deploy.log): ${rb.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
-      }
-      writeConflictContext(run, mergeBase, baseSha, logFile);
-    }
-    const decision = classifyRecovery({ drifted: true, conflicted, iterations });
-    if (!run.recovery) run.recovery = { iterations: 0, attempts: [] };
-    run.recovery.iterations += 1;
-    run.recovery.attempts.push({ at: nowIso(), fromSha: mergeBase, toSha: baseSha, conflicted, outcome: decision.action });
-    // Founder steering: a clean rebase re-runs only the deterministic gates,
-    // so the executor skips the review agent while `pending` is "reverify".
-    run.recovery.pending = decision.action;
-    saveRun(run);
-    if (!conflicted) {
-      // The clean rebase rewrote every sha: reconcile origin (force-with-
-      // lease) and the recorded commit artifacts with the new history.
-      pushRunBranch(run);
-      recordCommits(run);
-    }
-    return {
-      ok: false,
-      recover: decision.action,
-      summary: conflicted
-        ? `rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)}) conflicted`
-        : `clean rebase onto ${run.baseBranch} (${baseSha.slice(0, 8)})`,
-    };
-  }
-  if (run.recovery && run.recovery.pending) {
-    delete run.recovery.pending;
-    saveRun(run);
-  }
-  // The prompt's first line is free-form founder/plan text and can contain
-  // backticks, quotes or $ — single-quote it so the shell treats it as data.
-  const prefix = (rig.deploy || {}).type === "harness-merge" ? "self-improvement" : "factory-run";
-  const mergeSubject = `${prefix}: ${run.prompt.split("\n")[0].slice(0, 72)} (run ${run.id})`;
-  const r = runCommand(
-    `git merge --no-ff ${runBranch(run)} -m '${mergeSubject.replace(/'/g, `'\\''`)}'`,
-    rig.path,
-    logFile,
-    5
-  );
-  if (!r.ok) {
-    runCommand("git merge --abort", rig.path, logFile, 2);
-    return { ok: false, summary: `merge into ${rig.defaultBranch} failed (aborted cleanly): ${r.output.split("\n").slice(-3).join(" | ").slice(0, 300)}` };
-  }
-  const sha = sh(`git -C ${JSON.stringify(rig.path)} rev-parse --short HEAD`).trim();
-  return { ok: true, sha };
 }
 
 /** Render `url` as a scannable QR png in the run dir. Null qrPath on failure. */
@@ -1995,58 +1861,18 @@ function easBuild(run, rig, { qrName = "preview-qr.png" } = {}) {
  *  for the rig's deploy mechanism. Shared by deployStep and the held-deploy
  *  release (`factory-run deploy <id>`). */
 function publishDeploy(run, rig) {
-  const runDir = runDirOf(run.id);
   const deploy = rig.deploy || { type: "none" };
   if (deploy.type === "none") {
     return { ok: true, summary: "no deploy configured for this rig (quickfire/spec-only)", url: null };
   }
-  if (deploy.type === "harness-merge") {
-    // Self-improvement deploy: the merge already landed (policy.merge), so
-    // restart the gateway so skills/engine reload.
-    const logFile = path.join(runDir, "deploy.log");
-    if (!run.mergedSha) {
-      return { ok: true, summary: "harness-merge publish skipped: nothing merged yet (policy.merge review) — restart manually after merging", url: null };
-    }
-    const sha = run.mergedSha;
-    runCommand("openclaw gateway restart < /dev/null", rig.path, logFile, 5);
-    // The gateway restart reloads gateway-owned code only; the web console is a
-    // separate long-lived process, so a merge touching it needs its own restart.
-    const diff = runCommand("git diff --name-only HEAD^1 HEAD", rig.path, logFile, 2);
-    const web = classifyWebRestart(diff.ok ? diff.output.split("\n") : []);
-    if (!web.restart) {
-      return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway`, url: null };
-    }
-    // Rebuild synchronously BEFORE the restart: factory-web-up's readiness
-    // wait cannot cover a dep install + build, and a failed build must land in
-    // deploy.log with its exit code, not vanish into a detached server.log.
-    // On success vite refreshes dist/ itself; on failure the old dist stays so
-    // the console restarts on the stale-but-working frontend.
-    let build = { ok: true, output: "" };
-    if (web.rebuildFrontend) {
-      log(runDir, `deploy: rebuilding web frontend (${WEB_FRONTEND_BUILD_CMD})`);
-      build = runCommand(WEB_FRONTEND_BUILD_CMD, path.join(rig.path, WEB_FRONTEND_DIR), logFile, 15);
-    }
-    const down = runCommand("orchestration/bin/factory-web-down", rig.path, logFile, 5);
-    const up = runCommand("orchestration/bin/factory-web-up", rig.path, logFile, 10);
-    const outcome = classifyWebRestartOutcome({ buildOk: build.ok, downOk: down.ok, upOk: up.ok, upOutput: up.output });
-    if (outcome.ok) {
-      if (run.deployWarning) {
-        delete run.deployWarning;
-        saveRun(run);
-      }
-      return { ok: true, summary: `merged to ${rig.defaultBranch} (${sha}) and restarted gateway + web console`, url: null };
-    }
-    // The merge is durable and already on the default branch, so the deploy
-    // stays ok (no bogus recovery) — but the failure must reach the founder
-    // immediately and again in the final notify step, not just deploy.log.
-    const warning = `web console restart FAILED after harness merge (${sha}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
-    run.deployWarning = warning;
-    saveRun(run);
-    const tail = (build.ok ? up.output : build.output).split("\n").filter(Boolean).slice(-15).join("\n").slice(-1500);
-    notify(run, `:rotating_light: Run ${run.id} (${run.rig}): ${warning}${tail ? `\n\`\`\`\n${tail}\n\`\`\`` : ""}`);
+  if (deploy.type === "harness-restart") {
+    // Self-improvement rig: nothing merges at deploy (every rig is PR-gated),
+    // so there is nothing to reload yet — the run ends at an open PR and
+    // `factory-run sync` performs the gateway/web-console restart once the
+    // merged commit is present in the rig checkout (restartHarness).
     return {
       ok: true,
-      summary: `merged to ${rig.defaultBranch} (${sha}), restarted gateway; web console restart FAILED (${outcome.reason}) — restart manually with factory-web-up, see deploy.log`,
+      summary: `harness restart deferred: merge the PR, then \`factory-run sync ${run.id}\` restarts the gateway/web console`,
       url: null,
     };
   }
@@ -2056,16 +1882,71 @@ function publishDeploy(run, rig) {
   return easPublish(run, rig);
 }
 
-/** Deploy merge-phase decision (pure, exercised by selftest). "merge" runs
- *  mergeRunBranch; "already-merged" skips it — once a merge lands, the base
- *  branch tip IS the merge commit, so re-running the drift check on a resumed
- *  deploy (e.g. retrying a flaky eas publish) would misread that advance as
- *  base drift and burn a recovery cycle per retry, eventually escalating a
- *  publish problem as unresolvable drift; "review" leaves the branch for the
- *  founder. */
-function classifyDeployMerge({ merge, mergedSha }) {
-  if (merge !== "auto") return { action: "review" };
-  return { action: mergedSha ? "already-merged" : "merge" };
+/** Pure gate for the sync-time harness restart (exercised by selftest): only
+ *  harness-restart rigs restart, and only once the rig checkout's default
+ *  branch actually contains the merged commit — the restart relaunches the
+ *  live checkout, so restarting before the founder pulls would reload stale
+ *  code. The degrade is an actionable message; the engine never pushes or
+ *  pulls the default branch to fix it. */
+function classifyHarnessRestart({ deployType, containsMerge }) {
+  if (deployType !== "harness-restart") {
+    return { restart: false, reason: `deploy type '${deployType}' has no harness restart` };
+  }
+  if (!containsMerge) {
+    return { restart: false, reason: "local default branch lacks the merge commit — pull, then restart manually (the engine never pushes or pulls it)" };
+  }
+  return { restart: true, reason: "merge commit present in the rig checkout" };
+}
+
+/** Sync-time restart for harness-restart rigs (app-factory): restart the
+ *  OpenClaw gateway so skills/engine reload, and — when the merged commit
+ *  touched web-console sources — rebuild/restart the web console. Called from
+ *  the sync `done` path once the merge commit `sha` is confirmed present in
+ *  the rig checkout. Returns {ok, summary}; a failed console restart records
+ *  run.deployWarning and notifies, but the run stays done — the merge is
+ *  durable on origin. */
+function restartHarness(run, rig, sha) {
+  const runDir = runDirOf(run.id);
+  const logFile = path.join(runDir, "deploy.log");
+  runCommand("openclaw gateway restart < /dev/null", rig.path, logFile, 5);
+  // The gateway restart reloads gateway-owned code only; the web console is a
+  // separate long-lived process, so a merge touching it needs its own restart.
+  const diff = runCommand(`git diff --name-only ${sha}^1 ${sha}`, rig.path, logFile, 2);
+  const web = classifyWebRestart(diff.ok ? diff.output.split("\n") : []);
+  if (!web.restart) {
+    return { ok: true, summary: `restarted gateway (merge ${sha.slice(0, 12)} live)` };
+  }
+  // Rebuild synchronously BEFORE the restart: factory-web-up's readiness
+  // wait cannot cover a dep install + build, and a failed build must land in
+  // deploy.log with its exit code, not vanish into a detached server.log.
+  // On success vite refreshes dist/ itself; on failure the old dist stays so
+  // the console restarts on the stale-but-working frontend.
+  let build = { ok: true, output: "" };
+  if (web.rebuildFrontend) {
+    log(runDir, `sync: rebuilding web frontend (${WEB_FRONTEND_BUILD_CMD})`);
+    build = runCommand(WEB_FRONTEND_BUILD_CMD, path.join(rig.path, WEB_FRONTEND_DIR), logFile, 15);
+  }
+  const down = runCommand("orchestration/bin/factory-web-down", rig.path, logFile, 5);
+  const up = runCommand("orchestration/bin/factory-web-up", rig.path, logFile, 10);
+  const outcome = classifyWebRestartOutcome({ buildOk: build.ok, downOk: down.ok, upOk: up.ok, upOutput: up.output });
+  if (outcome.ok) {
+    if (run.deployWarning) {
+      delete run.deployWarning;
+      saveRun(run);
+    }
+    return { ok: true, summary: `restarted gateway + web console (merge ${sha.slice(0, 12)} live)` };
+  }
+  // The merge is durable on origin, so the run stays done — but the failure
+  // must reach the founder immediately, not just deploy.log.
+  const warning = `web console restart FAILED after PR merge (${sha.slice(0, 12)}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
+  run.deployWarning = warning;
+  saveRun(run);
+  const tail = (build.ok ? up.output : build.output).split("\n").filter(Boolean).slice(-15).join("\n").slice(-1500);
+  notify(run, `:rotating_light: Run ${run.id} (${run.rig}): ${warning}${tail ? `\n\`\`\`\n${tail}\n\`\`\`` : ""}`);
+  return {
+    ok: false,
+    summary: `restarted gateway; web console restart FAILED (${outcome.reason}) — restart manually with factory-web-up, see deploy.log`,
+  };
 }
 
 /** Pure decision core for the deploy step's branch-readiness gate (exercised
@@ -2074,12 +1955,8 @@ function classifyDeployMerge({ merge, mergedSha }) {
  *  and the worktree is clean. An implement agent that never committed passes
  *  checks/review/tests (they validate worktree files, not commits) and EAS
  *  (it bundles the working directory), shipping a green run with nothing
- *  mergeable — so the deploy step fails loudly here first. mergedSha
- *  short-circuits ok: an already-merged deploy retry has base..HEAD == 0 by
- *  construction (the merge landed on base), and re-checking would break
- *  publish retries. */
-function classifyBranchReadiness({ aheadCount, dirty, mergedSha, base }) {
-  if (mergedSha) return { ok: true, reason: `merge already landed (${mergedSha}); publish retry` };
+ *  mergeable — so the deploy step fails loudly here first. */
+function classifyBranchReadiness({ aheadCount, dirty, base }) {
   if (dirty) return { ok: false, reason: "worktree has uncommitted changes — the implementation was never fully committed" };
   if (aheadCount === 0) return { ok: false, reason: `run branch has no commits ahead of ${base} — nothing to merge, review, or ship` };
   return { ok: true, reason: `${aheadCount} commit(s) ahead of ${base}, worktree clean` };
@@ -2258,7 +2135,7 @@ function classifyNotifyMessage({ summaryFile, summaryText }) {
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
-  if (!["none", "harness-merge", "eas-update"].includes(deploy.type)) {
+  if (!["none", "harness-restart", "eas-update"].includes(deploy.type)) {
     return { ok: false, summary: `unknown deploy type: ${deploy.type}` };
   }
   // Branch-readiness gate: refuse to merge, open a PR, or publish unless the
@@ -2276,43 +2153,24 @@ function deployStep(run, rig) {
   const readiness = classifyBranchReadiness({
     aheadCount,
     dirty: status.stdout.trim() !== "",
-    mergedSha: run.mergedSha,
     base: run.baseBranch,
   });
   if (!readiness.ok) {
     return { ok: false, summary: `run ${run.id} is not ready to deploy: ${readiness.reason} (branch ${runBranch(run)})` };
   }
-  // Merge phase, identical for every deploy type. Order matters for eas rigs:
-  // merge first, publish second — the published bundle must equal what landed
-  // on the default branch. merge "review" leaves the branch for the founder
-  // (the run ends awaiting-merge, set by the executor); an already-landed
-  // merge (run.mergedSha) is never re-run — see classifyDeployMerge.
-  let mergeNote;
-  const mergePhase = classifyDeployMerge({ merge: policy.merge, mergedSha: run.mergedSha });
-  if (mergePhase.action === "merge") {
-    const m = mergeRunBranch(run, rig);
-    if (!m.ok) return m;
-    run.mergedSha = m.sha;
-    saveRun(run);
-    try {
-      tArtifact(run.id, "deploy", deploy.type === "harness-merge" ? "harness_merge_commit" : "merge_commit", m.sha);
-    } catch {}
-    mergeNote = deploy.type === "harness-merge" ? null : `merged ${runBranch(run)} into ${rig.defaultBranch} (${m.sha}, local only)`;
-  } else if (mergePhase.action === "already-merged") {
-    mergeNote = deploy.type === "harness-merge" ? null : `merge already landed (${run.mergedSha}, local only); retrying publish`;
-  } else {
-    // Review policy: the branch stays for the founder — open (or reuse) the
-    // GitHub PR they review and merge. Idempotent; degrades to a recorded
-    // warning on non-GitHub rigs or a missing gh CLI, never a failed run —
-    // except an empty-diff create failure, which means the branch holds no
-    // work and must fail the run, not shrink to a footnote.
-    const pr = ensurePrForRun(run, rig);
-    if (pr && pr.failed) {
-      return { ok: false, summary: `run ${run.id} has nothing to review: ${pr.failed} (branch ${runBranch(run)})` };
-    }
-    const prNote = pr ? `PR #${pr.number} awaits review (${pr.url})` : `branch ${runBranch(run)} left for founder merge (policy.merge review)`;
-    mergeNote = deploy.type === "none" && !pr ? null : prNote;
+  // PR phase: every rig is PR-gated (policy.merge "review") — the branch
+  // stays for the founder, who reviews and merges the GitHub PR opened (or
+  // idempotently reused) here; the run ends awaiting-merge, set by the
+  // executor. Degrades to a recorded warning on non-GitHub rigs or a missing
+  // gh CLI, never a failed run — except an empty-diff create failure, which
+  // means the branch holds no work and must fail the run, not shrink to a
+  // footnote.
+  const pr = ensurePrForRun(run, rig);
+  if (pr && pr.failed) {
+    return { ok: false, summary: `run ${run.id} has nothing to review: ${pr.failed} (branch ${runBranch(run)})` };
   }
+  const prNote = pr ? `PR #${pr.number} awaits review (${pr.url})` : `branch ${runBranch(run)} left for founder merge (policy.merge review)`;
+  const mergeNote = deploy.type === "none" && !pr ? null : prNote;
   // Publish phase. "hold" parks the publish for `factory-run deploy <id>`.
   if (policy.deploy === "hold" && deploy.type !== "none") {
     run.deployHeld = true;
@@ -2355,13 +2213,13 @@ function effectivePreviewMode(run, rig) {
 /** Whether a skipWhen:"no-preview" step (release-decision / preview /
  *  preview-gate) executes (pure, exercised by selftest). Mode off = today's
  *  straight-to-deploy. Once the founder has approved this run's preview
- *  (run.previewApproved), the trio never re-runs: deploy's onRecover target
- *  ("checks") sits before these steps, so a base-drift recovery loop-back
- *  would otherwise re-trigger a paid `eas build` and a second approval
- *  request for a preview the founder already approved. */
+ *  (run.previewApproved), the trio never re-runs: a resume rewound to an
+ *  earlier step (`factory-run resume --step checks`) would otherwise
+ *  re-trigger a paid `eas build` and a second approval request for a preview
+ *  the founder already approved. */
 function classifyPreviewStep({ previewOn, previewApproved }) {
   if (!previewOn) return { run: false, reason: "preview mode off" };
-  if (previewApproved) return { run: false, reason: "preview already approved this run — deploy recovery re-runs the gates, never the preview" };
+  if (previewApproved) return { run: false, reason: "preview already approved this run — re-runs cover the gates, never the preview" };
   return { run: true, reason: null };
 }
 
@@ -2745,26 +2603,36 @@ function fmtBytes(n) {
  *  "remove-worktree" (opt-in: reclaim a clean worktree while keeping its
  *  unmerged branch), "discard" (founder-explicit single-run force: worktree
  *  and branch removed even when dirty/unmerged — how the console discards a
- *  kept cancelled run). */
-function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged }, opts = {}) {
+ *  kept cancelled run). `merged` is the local ancestor probe; `prMerged` is
+ *  GitHub's verdict on the run's recorded PR — the source of merge truth for
+ *  PR-gated runs, because a squash/rebase merge never makes the run branch an
+ *  ancestor of the default branch. A prMerged-only clean carries
+ *  `forceBranch: true`: the branch is provably merged on origin, so forced
+ *  local deletion (`git branch -D`) is safe and required. */
+function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged, prMerged }, opts = {}) {
   if (!TERMINAL_STATES.includes(state)) return { action: "skip", reason: `state '${state}' is not terminal` };
   if (!worktreeExists && !branchExists) return { action: "none", reason: "nothing to clean" };
   if (opts.discard) {
     return { action: "discard", reason: "founder discard: worktree and branch force-removed (dirty/unmerged included)" };
   }
   if (worktreeExists && dirty) return { action: "skip", reason: "worktree has uncommitted changes" };
-  if (branchExists && !merged) {
+  if (branchExists && !merged && !prMerged) {
     if (worktreeExists && opts.removeUnmergedWorktrees) {
       return { action: "remove-worktree", reason: "unmerged branch kept; clean worktree removed (--remove-unmerged-worktrees)" };
     }
     return { action: "skip", reason: "branch not merged into default branch" };
   }
+  if (branchExists && !merged && prMerged) {
+    return { action: "clean", reason: "PR merged on GitHub (squash/rebase merge — forced local branch delete)", forceBranch: true };
+  }
   return { action: "clean", reason: branchExists ? "merged and clean" : "branch already deleted; reclaiming clean worktree" };
 }
 
-/** Reclaim one run's worktree/branch when safe. No forced deletion anywhere:
- *  `git worktree remove` without --force, `git branch -d` (which itself
- *  refuses unmerged branches). Returns {id, action, reason, freedBytes}. */
+/** Reclaim one run's worktree/branch when safe. Never forced past the
+ *  evidence: `git worktree remove` without --force, and `git branch -D` only
+ *  when the run's PR is provably merged on origin (or on founder --discard);
+ *  runs without a recorded PR keep the conservative local ancestor check and
+ *  `git branch -d`. Returns {id, action, reason, freedBytes}. */
 function cleanupRun(run, opts = {}) {
   const worktree = path.join(WORKTREES_DIR, run.id);
   const branch = runBranch(run);
@@ -2804,7 +2672,24 @@ function cleanupRun(run, opts = {}) {
     dirty = st.stdout.trim() !== "";
   }
   const merged = branchExists && git(rig.path, ["merge-base", "--is-ancestor", branch, rig.defaultBranch]).status === 0;
-  const decision = classifyCleanup({ state: run.state, worktreeExists, branchExists, dirty, merged }, opts);
+  // Merge truth for PR-gated runs comes from GitHub (D29 extended to cleanup):
+  // the local ancestor probe above is structurally false for squash/rebase
+  // merges and stale for unpulled checkouts, so when it says "unmerged" and
+  // the run recorded a PR, ask gh. Fetch first so origin's state is current;
+  // both probes are best-effort — on gh failure the conservative local
+  // verdict stands.
+  let prMerged = false;
+  if (branchExists && !merged && run.pr && run.pr.number && !opts.discard) {
+    runCommand("git fetch origin", rig.path, path.join(runDirOf(run.id), "pr.log"), 2);
+    const view = ghRun(run, prStatusCommand(run.pr.number), 2, rig.path);
+    let viewJson = null;
+    try {
+      viewJson = JSON.parse(view.stdout);
+    } catch {}
+    const status = view.ok ? parsePrStatus(viewJson) : null;
+    prMerged = !!(status && status.state === "merged");
+  }
+  const decision = classifyCleanup({ state: run.state, worktreeExists, branchExists, dirty, merged, prMerged }, opts);
   const result = { id: run.id, action: decision.action, reason: decision.reason, freedBytes: 0 };
   if (decision.action === "skip" || decision.action === "none") return result;
   if (opts.dryRun) {
@@ -2821,9 +2706,10 @@ function cleanupRun(run, opts = {}) {
   }
   git(rig.path, ["worktree", "prune"]);
   if ((decision.action === "clean" || forced) && branchExists) {
-    const del = git(rig.path, ["branch", forced ? "-D" : "-d", branch]);
+    const forceBranch = forced || decision.forceBranch === true;
+    const del = git(rig.path, ["branch", forceBranch ? "-D" : "-d", branch]);
     if (del.status !== 0) {
-      return { ...result, action: "error", reason: `git branch ${forced ? "-D" : "-d"} failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
+      return { ...result, action: "error", reason: `git branch ${forceBranch ? "-D" : "-d"} failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
     }
   }
   return result;
@@ -2889,102 +2775,6 @@ function cmdCleanup(argv) {
 }
 
 // ---------- executor ----------
-
-/** Deploy-step recovery orchestration: cap escalations, the synthetic
- *  resolve-conflicts agent step (with escalation.md handling), and the
- *  loop-back target. Returns { loopTo } for the executor to continue the step
- *  loop, or null when the run is terminal (state set + founder notified
- *  here). The worktree and branch are always left intact — and any in-flight
- *  rebase aborted — so `factory-run resume` can restart the run. */
-function handleRecovery(run, workflow, deployDef, result) {
-  const id = run.id;
-  const runDir = runDirOf(id);
-  const logFile = path.join(runDir, "deploy.log");
-  const attempts = (run.recovery && run.recovery.attempts) || [];
-  const last = attempts[attempts.length - 1];
-  if (result.recover === "escalate") {
-    setState(run, "failed", `deploy recovery escalation: ${result.summary}`);
-    notify(
-      run,
-      `:rotating_light: Run ${id} needs a human: ${result.summary} — the base branch keeps advancing past this run.\n` +
-        `Worktree and branch \`factory/${id}\` are intact. Restart with \`factory-run resume ${id}\` ` +
-        `(or rewind: \`factory-run resume ${id} --step <step-id>\`).\nRun dir: ${runDir}`
-    );
-    return null;
-  }
-  if (result.recover === "resolve") {
-    const escalationPath = path.join(runDir, "escalation.md");
-    fs.rmSync(escalationPath, { force: true }); // a stale escalation must not veto this cycle
-    const started = nowIso();
-    setState(run, `running:${RESOLVE_STEP.id}`, null);
-    notify(run, `:gear: Run ${id} (${run.rig}): ${result.summary} — step *${RESOLVE_STEP.id}* started.`);
-    const r = runAgentStep(run, RESOLVE_STEP);
-    const fail = (outcome, summary, notice) => {
-      if (last) last.outcome = outcome;
-      if (rebaseInProgress(run.worktree)) runCommand("git rebase --abort", run.worktree, logFile, 2);
-      // The resolver may have rewritten the branch before failing (e.g. a
-      // completed-but-off-target rebase): reconcile origin and the recorded
-      // commit artifacts with whatever HEAD the run terminates on, so a
-      // failed run never leaves unpushed local-only shas behind.
-      pushRunBranch(run);
-      recordCommits(run);
-      try {
-        tStep(id, RESOLVE_STEP.id, r.attempt, "fail", summary, started, r.usage);
-      } catch {}
-      setState(run, "failed", summary);
-      notify(run, notice);
-      return null;
-    };
-    if (fs.existsSync(escalationPath)) {
-      const text = fs.readFileSync(escalationPath, "utf8");
-      return fail(
-        "escalated",
-        `resolve-conflicts escalated: ${(text.split("\n").find((l) => l.trim()) || "see escalation.md").slice(0, 300)}`,
-        `:rotating_light: Run ${id} escalated by the conflict-resolution agent (rebase aborted; branch intact; ` +
-          `\`factory-run resume ${id}\` once addressed):\n\n${text.slice(0, 2800)}`
-      );
-    }
-    if (!r.ok) {
-      return fail("failed", r.summary, `:x: Run ${id} FAILED at step *${RESOLVE_STEP.id}*: ${r.summary}\nRun dir: ${runDir}`);
-    }
-    // The agent claims success — verify the rebase really completed before
-    // trusting the branch: no in-flight rebase, a clean tree, and HEAD
-    // containing the rebase target captured at drift time.
-    const status = git(run.worktree, ["status", "--porcelain"]);
-    const onTarget = !last || git(run.worktree, ["merge-base", "--is-ancestor", last.toSha, "HEAD"]).status === 0;
-    if (rebaseInProgress(run.worktree) || status.status !== 0 || status.stdout.trim() !== "" || !onTarget) {
-      return fail(
-        "incomplete",
-        "resolve-conflicts agent finished but the rebase is not complete (rebase aborted; see deploy.log)",
-        `:x: Run ${id}: conflict resolution did not complete the rebase; rebase aborted, branch intact. Resume with \`factory-run resume ${id}\`.`
-      );
-    }
-    if (last) last.outcome = "resolved";
-    saveRun(run);
-    // The completed rebase rewrote every sha: reconcile origin (force-with-
-    // lease) and the recorded commit artifacts with the rewritten branch.
-    pushRunBranch(run);
-    recordCommits(run);
-    try {
-      tStep(id, RESOLVE_STEP.id, r.attempt, "ok", r.summary, started, r.usage);
-    } catch {}
-  }
-  const target = deployDef.onRecover || "checks";
-  const backIdx = workflow.steps.findIndex((s) => s.id === target);
-  if (backIdx === -1) {
-    setState(run, "failed", `deploy onRecover target '${target}' is not a workflow step`);
-    notify(run, `:x: Run ${id} FAILED: deploy onRecover target '${target}' is not a workflow step.`);
-    return null;
-  }
-  const n = run.recovery.iterations;
-  const what =
-    result.recover === "resolve"
-      ? "conflicts resolved by agent; full gates re-run"
-      : "re-running deterministic gates (review skipped)";
-  setState(run, "recovering", `cycle ${n}/${RECOVERY_CAP}: ${result.summary} — ${what}`);
-  notify(run, `:arrows_counterclockwise: Run ${id}: ${result.summary}; ${what}. Looping back to *${target}* (recovery cycle ${n}/${RECOVERY_CAP}).`);
-  return { loopTo: backIdx };
-}
 
 function execRun(id) {
   const run = loadRun(id);
@@ -3089,20 +2879,10 @@ function execRun(id) {
       if (pvStep && !pvStep.run) {
         // Preview-and-approve steps only exist when the mode is on (per-run
         // flag over per-rig policy.preview); off = today's straight-to-deploy.
-        // An approved preview is skipped too, so a deploy-recovery loop-back
-        // through "checks" cannot re-build or re-gate (classifyPreviewStep).
+        // An approved preview is skipped too, so a rewound resume through
+        // "checks" cannot re-build or re-gate (classifyPreviewStep).
         result = { ok: true, summary: `${step.id} skipped (${pvStep.reason})` };
-      } else if (step.type === "agent" && step.id === "review" && run.recovery && run.recovery.pending === "reverify") {
-        // Founder steering: a clean recovery rebase re-runs only the
-        // deterministic gates — no code changed, the review verdict stands.
-        result = { ok: true, summary: "review skipped: clean-rebase re-verification runs deterministic gates only" };
       } else if (step.type === "agent") {
-        if (run.recovery && run.recovery.pending === "reverify") {
-          // Any other agent step (e.g. a checks failure looping back to
-          // implement) changes code — the review skip no longer applies.
-          delete run.recovery.pending;
-          saveRun(run);
-        }
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
         // A stale verdict from an earlier attempt must never masquerade as
@@ -3142,8 +2922,8 @@ function execRun(id) {
         result = waitForGate(run, step);
         if (result.ok) {
           // A passed preview gate is durable (survives resume): a later
-          // deploy-recovery loop-back skips the preview trio instead of
-          // re-building and re-asking (classifyPreviewStep).
+          // rewound resume skips the preview trio instead of re-building
+          // and re-asking (classifyPreviewStep).
           if (step.skipWhen === "no-preview") run.previewApproved = true;
           setState(run, "approved", result.summary);
         }
@@ -3187,23 +2967,17 @@ function execRun(id) {
             }
           })();
           const lines = [`:white_check_mark: Run ${id} complete: *${planTitle}*`];
-          if (run.mergedSha) {
-            lines.push(`Rig: ${run.rig} · merged into ${run.baseBranch} (${run.mergedSha}) — local merge only, push when ready.`);
-          } else {
-            lines.push(`Rig: ${run.rig} · branch \`${runBranch(run)}\` · worktree kept for merge review`);
-          }
+          lines.push(`Rig: ${run.rig} · branch \`${runBranch(run)}\` · worktree kept for merge review`);
           lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
           if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
             lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
           }
-          if (!run.mergedSha) {
-            if (run.pr) {
-              lines.push(`Review & merge the PR: ${run.pr.url} — then \`factory-run sync ${id}\` (or the console's Sync button) marks the run done.`);
-              lines.push(`Follow-up on the same PR: \`factory-run followup ${id} --workflow feature-dev --prompt "..."\` (or the run page's composer).`);
-            } else {
-              lines.push(`Merge when happy: \`git -C ${rig.path} merge ${runBranch(run)}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
-              if (run.prWarning) lines.push(`:warning: No PR: ${run.prWarning}`);
-            }
+          if (run.pr) {
+            lines.push(`Review & merge the PR: ${run.pr.url} — then \`factory-run sync ${id}\` (or the console's Sync button) marks the run done.`);
+            lines.push(`Follow-up on the same PR: \`factory-run followup ${id} --workflow feature-dev --prompt "..."\` (or the run page's composer).`);
+          } else {
+            lines.push(`Merge when happy: \`git -C ${rig.path} merge ${runBranch(run)}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
+            if (run.prWarning) lines.push(`:warning: No PR: ${run.prWarning}`);
           }
           if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
           const usage = usageLine(id);
@@ -3268,24 +3042,16 @@ function execRun(id) {
         return;
       }
 
-      log(runDir, `step '${step.id}': ${result.ok ? "OK" : result.recover ? `RECOVER:${result.recover}` : result.loopTo ? `GATE:${result.loopTo}` : "FAIL"} (${result.summary})`);
+      log(runDir, `step '${step.id}': ${result.ok ? "OK" : result.loopTo ? `GATE:${result.loopTo}` : "FAIL"} (${result.summary})`);
       try {
-        // Recovery cycles get their own telemetry status so deploy failure
-        // stats stay honest (a drift loop-back is not a broken deploy); same
-        // for founder-driven check-gate loop-backs ("gate", not "fail").
-        // Discussion steps record per-turn rows themselves (telemetryDone).
+        // Founder-driven check-gate loop-backs get their own telemetry status
+        // ("gate", not "fail") so failure stats stay honest. Discussion steps
+        // record per-turn rows themselves (telemetryDone).
         if (!result.telemetryDone) {
-          tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : result.recover ? "recover" : result.loopTo ? "gate" : "fail", result.summary, stepStarted, result.usage);
+          tStep(id, step.id, result.attempt || execCounts[step.id], result.ok ? "ok" : result.loopTo ? "gate" : "fail", result.summary, stepStarted, result.usage);
         }
         if (run.artifactUrl && step.type === "deploy" && result.ok) tArtifact(id, "deploy", "artifact_url", run.artifactUrl);
       } catch {}
-
-      if (result.recover) {
-        const rec = handleRecovery(run, workflow, step, result);
-        if (!rec) return;
-        i = rec.loopTo;
-        continue;
-      }
 
       if (result.ok && result.halt === "killed") {
         // A don't-build ending is a halting SUCCESS, never the :x: failure
@@ -3351,28 +3117,29 @@ function execRun(id) {
       run.stepIndex = i;
       saveRun(run);
     }
-    // Terminal state: a merge-policy "review" run whose workflow had a deploy
-    // (merge-capable) step and still owns an unmerged branch parks in
-    // awaiting-merge (terminal, a success — the founder merges factory/<id>
-    // by hand); everything else is done. Read-only workflows (worktree:
-    // false) have no branch to merge, and workflows without a deploy step
-    // were never going to merge (greenTerminalState).
+    // Terminal state: a run whose workflow had a deploy (PR-capable) step and
+    // still owns an unmerged branch parks in awaiting-merge (terminal, a
+    // success — the founder merges the PR on GitHub, then `factory-run sync`
+    // finishes the run); everything else is done. Read-only workflows
+    // (worktree: false) have no branch to merge, and workflows without a
+    // deploy step were never going to merge (greenTerminalState). The
+    // mergedSha guard covers only legacy auto-merge-era runs resumed after
+    // their deploy already merged locally.
     if (greenTerminalState(workflow, rig.policy, run.mergedSha) === "awaiting-merge") {
       setState(
         run,
         "awaiting-merge",
         run.pr
           ? `PR #${run.pr.number} (${run.pr.url}) awaits founder merge into ${run.baseBranch}; \`factory-run sync ${id}\` after merging`
-          : `branch ${runBranch(run)} awaits founder merge into ${run.baseBranch} (local merge — the engine never pushes ${run.baseBranch})`
+          : `branch ${runBranch(run)} awaits founder merge into ${run.baseBranch} (no PR recorded — \`factory-run sync ${id}\` prints the manual exit)`
       );
     } else {
       setState(run, "done", null);
     }
-    // Reclaim the worktree/branch when already merged (merge-policy "auto"
-    // rigs merge during deploy). Awaiting-merge runs skip as unmerged,
-    // preserving the "worktree kept for merge review" flow until the founder
-    // merges — the next cleanup then reclaims both. A cleanup failure must
-    // never change the run's terminal state.
+    // End-of-run cleanup is a no-op for awaiting-merge runs (branch unmerged
+    // — the "worktree kept for merge review" flow); the reclaim happens via
+    // cleanup once the PR merges. A cleanup failure must never change the
+    // run's terminal state.
     try {
       const c = cleanupRun(run, {});
       log(runDir, `cleanup: ${c.action} (${c.reason})`);
@@ -3903,8 +3670,8 @@ function cmdResume(argv) {
 //
 // Tier selection is classifyRetry (web/lib/retry.mjs): a first retry at the
 // current step plain-resumes; a repeat retry, or a failure a resume cannot fix
-// (preflight failure, recovery-cap escalation, escalation.md, missing
-// worktree), hands the run to the OpenClaw chief of staff as a triage session.
+// (preflight failure, escalation.md, missing worktree), hands the run to the
+// OpenClaw chief of staff as a triage session.
 // Stuck (stalled non-terminal) runs additionally gate on executor liveness:
 // killing a live executor requires --force.
 
@@ -4188,9 +3955,11 @@ function cmdStatus(argv) {
     if (id) {
       for (const h of r.history.slice(-10)) console.log(`  ${h.at}  ${h.state}${h.detail ? ` — ${h.detail}` : ""}`);
       if (r.recovery) {
+        // Legacy auto-merge-era runs only: the deploy-time recovery loop is
+        // gone, but old run.json files still carry its bookkeeping.
         const a = r.recovery.attempts || [];
         const detail = a.map((x) => `${x.conflicted ? "conflicted" : "clean"}→${x.outcome}`).join(", ");
-        console.log(`  recovery: ${r.recovery.iterations}/${RECOVERY_CAP} cycle(s)${detail ? ` — ${detail}` : ""}`);
+        console.log(`  recovery (legacy): ${r.recovery.iterations} cycle(s)${detail ? ` — ${detail}` : ""}`);
       }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
       if (r.pr) console.log(`  pr: #${r.pr.number} ${r.pr.url}${r.pr.state ? ` (${r.pr.state}, checked ${r.pr.checkedAt || "never"})` : ""}`);
@@ -4198,7 +3967,7 @@ function cmdStatus(argv) {
         console.log(
           r.pr
             ? `  pending merge: PR #${r.pr.number} into ${r.baseBranch} — \`factory-run sync ${r.id}\` after merging`
-            : `  pending merge: ${runBranch(r)} into ${r.baseBranch} (local merge — the engine never pushes ${r.baseBranch})`
+            : `  pending merge: ${runBranch(r)} into ${r.baseBranch} (no PR recorded — \`factory-run sync ${r.id}\` prints the manual exit)`
         );
       }
       if (r.deployHeld) console.log(`  deploy held: release with \`factory-run deploy ${r.id}\``);
@@ -4295,20 +4064,26 @@ function cmdCancel(id) {
 //
 // awaiting-merge stays terminal and resume-proof; `factory-run sync` is the
 // single sanctioned exit: it reads the run's PR from GitHub and either flips
-// the run to done (merged), to closed (PR closed without merging — worktree
-// torn down, branch kept for a later follow-up), or leaves it untouched
-// (still open). `factory-run followup` chains a new run onto a green terminal
-// parent, continuing the same branch and worktree so one PR accumulates the
-// whole conversation.
+// the run to done (merged — harness-restart rigs also get their gateway/web
+// restart here, once the rig checkout contains the merge), to closed (PR
+// closed without merging — worktree torn down, branch kept for a later
+// follow-up), or leaves it untouched (still open). `sync --all` sweeps every
+// awaiting-merge run. `factory-run followup` chains a new run onto a green
+// terminal parent, continuing the same branch and worktree so one PR
+// accumulates the whole conversation.
 
 /** Pure decision core for `factory-run sync` (exercised by selftest).
- *  `prStatus` omitted = pre-fetch guard ("check"); null = gh failed. */
+ *  `prStatus` omitted = pre-fetch guard ("check"); null = gh failed.
+ *  "unsyncable" is the PR-less degrade: legacy runs recorded before PR
+ *  gating have nothing to sync against, but must still get an actionable
+ *  exit instead of a bare refusal — sync is the only exit from
+ *  awaiting-merge. */
 function classifySync({ state, pr, prStatus }) {
   if (state !== "awaiting-merge") {
     return { action: "refuse", reason: `run is '${state}' — sync is the exit from awaiting-merge only` };
   }
   if (!pr || !pr.number) {
-    return { action: "refuse", reason: "no PR recorded on this run (nothing to sync against)" };
+    return { action: "unsyncable", reason: "no PR recorded on this run (legacy run from the local-merge era)" };
   }
   if (prStatus === undefined) return { action: "check", reason: `query PR #${pr.number}` };
   if (!prStatus) return { action: "refuse", reason: "PR status unavailable (gh failed or returned garbage — see pr.log)" };
@@ -4337,14 +4112,45 @@ function teardownWorktree(run, rig) {
   return { removed: true, reason: "worktree removed; branch kept" };
 }
 
-function cmdSync(argv) {
-  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+/** The harness-restart rig's sync-time restart: fetch origin, verify the
+ *  merged commit reached the local default branch, then restart the gateway
+ *  (+ web console when touched). Returns a human line for the sync output and
+ *  notify. Never pushes or pulls the default branch — a checkout that lacks
+ *  the merge gets an actionable degrade instead (classifyHarnessRestart). */
+function syncHarnessRestart(run, rig, mergedSha) {
+  if (!mergedSha) {
+    return "harness restart skipped: gh reported no merge commit — pull the rig checkout, then restart manually (`openclaw gateway restart`)";
+  }
+  runCommand("git fetch origin", rig.path, path.join(runDirOf(run.id), "deploy.log"), 5);
+  const contains = git(rig.path, ["merge-base", "--is-ancestor", mergedSha, rig.defaultBranch]).status === 0;
+  const gate = classifyHarnessRestart({ deployType: (rig.deploy || {}).type, containsMerge: contains });
+  if (!gate.restart) {
+    return `harness restart skipped: ${gate.reason.replace("local default branch", `local ${rig.defaultBranch} (git -C ${rig.path} pull)`)}`;
+  }
+  const r = restartHarness(run, rig, mergedSha);
+  return r.summary;
+}
+
+/** One run's sync, shared by `sync <id>` and `sync --all`. Never throws or
+ *  exits; returns {status, message} with status one of "refused" (not
+ *  awaiting-merge), "unsyncable" (no PR recorded — actionable degrade),
+ *  "error" (gh failed), "open", "done", "closed". */
+function syncOneRun(id) {
   const run = loadRun(id);
   const runDir = runDirOf(id);
   const pre = classifySync({ state: run.state, pr: run.pr || null });
   if (pre.action === "refuse") {
-    console.error(`cannot sync ${id}: ${pre.reason}`);
-    process.exit(1);
+    return { status: "refused", message: pre.reason };
+  }
+  if (pre.action === "unsyncable") {
+    return {
+      status: "unsyncable",
+      message:
+        `${pre.reason} — branch \`${runBranch(run)}\` has nothing to sync against. ` +
+        `Resolve by hand: open a PR from it (\`gh pr create --head ${runBranch(run)} --base ${run.baseBranch}\` in the rig checkout, ` +
+        `then record {"number", "url"} under "pr" in ${path.join(runDir, "run.json")} and re-sync), ` +
+        `or close the run out (set its run.json state to "done" or "closed").`,
+    };
   }
   const rig = resolveRig(run.rig);
   // The worktree may already be gone (torn down, or reclaimed); the rig
@@ -4357,14 +4163,12 @@ function cmdSync(argv) {
   const status = view.ok ? parsePrStatus(viewJson) : null;
   const outcome = classifySync({ state: run.state, pr: run.pr, prStatus: status });
   if (outcome.action === "refuse") {
-    console.error(`cannot sync ${id}: ${outcome.reason}`);
-    process.exit(1);
+    return { status: "error", message: outcome.reason };
   }
   run.pr = { ...run.pr, state: status.state, checkedAt: nowIso() };
   if (outcome.action === "open") {
     saveRun(run);
-    console.log(`${id}: ${outcome.reason} (${run.pr.url}) — state unchanged`);
-    return;
+    return { status: "open", message: `${outcome.reason} (${run.pr.url}) — state unchanged` };
   }
   if (outcome.action === "done") {
     if (outcome.mergedSha) run.mergedSha = outcome.mergedSha;
@@ -4372,10 +4176,16 @@ function cmdSync(argv) {
     try {
       if (outcome.mergedSha) tArtifact(id, "deploy", "merge_commit", outcome.mergedSha);
     } catch {}
-    notify(run, `:tada: Run ${id}: PR #${run.pr.number} merged on GitHub — run is done. Cleanup reclaims the worktree/branch after the rig checkout pulls the merge.`);
-    log(runDir, `sync: ${outcome.reason} -> done`);
-    console.log(`${id}: ${outcome.reason} — run is done`);
-    return;
+    // Harness-restart rigs reload the merged engine/skills here — the deploy
+    // step only opened the PR, so sync is where the improvement goes live.
+    const restartNote = (rig.deploy || {}).type === "harness-restart" ? syncHarnessRestart(run, rig, outcome.mergedSha) : null;
+    notify(
+      run,
+      `:tada: Run ${id}: PR #${run.pr.number} merged on GitHub — run is done.${restartNote ? ` ${restartNote}.` : ""} ` +
+        `Cleanup reclaims the worktree/branch now that the PR is merged.`
+    );
+    log(runDir, `sync: ${outcome.reason} -> done${restartNote ? ` (${restartNote})` : ""}`);
+    return { status: "done", message: `${outcome.reason} — run is done${restartNote ? `; ${restartNote}` : ""}` };
   }
   // PR closed without merging: tear down the workspace, keep the branch alive
   // in git so a follow-up run (with the PR discussion as reference context)
@@ -4388,7 +4198,53 @@ function cmdSync(argv) {
       `Pick it back up any time: \`factory-run followup ${id} --workflow feature-dev --prompt "<what to change>"\` (or the run page's composer).`
   );
   log(runDir, `sync: ${outcome.reason} -> closed (${td.reason})`);
-  console.log(`${id}: ${outcome.reason} — run closed (${td.reason})`);
+  return { status: "closed", message: `${outcome.reason} — run closed (${td.reason})` };
+}
+
+function cmdSync(argv) {
+  if (argv.includes("--all")) {
+    // Sweep every awaiting-merge run; one line per run, never abort the sweep
+    // on a single failure. Unsyncable (PR-less legacy) runs are reported, not
+    // errors; only a gh/exception failure makes the sweep exit non-zero.
+    const ids = listRunIds().filter((rid) => {
+      try {
+        return loadRun(rid).state === "awaiting-merge";
+      } catch {
+        return false;
+      }
+    });
+    if (!ids.length) {
+      console.log("sync --all: no awaiting-merge runs");
+      return;
+    }
+    let errored = false;
+    for (const rid of ids) {
+      let r;
+      try {
+        r = syncOneRun(rid);
+      } catch (err) {
+        r = { status: "error", message: String(err.message || err).slice(0, 300) };
+      }
+      if (r.status === "error") errored = true;
+      console.log(`${rid}: ${r.status === "error" ? "sync ERROR — " : ""}${r.message}`);
+    }
+    console.log(`\nsync --all: ${ids.length} run(s) checked${errored ? "; at least one errored" : ""}`);
+    if (errored) process.exit(1);
+    return;
+  }
+  const id = resolveRunId(argv.find((a) => !a.startsWith("--")));
+  const r = syncOneRun(id);
+  if (r.status === "refused" || r.status === "error") {
+    console.error(`cannot sync ${id}: ${r.message}`);
+    process.exit(1);
+  }
+  if (r.status === "unsyncable") {
+    // Deliberate non-zero without the generic "cannot sync": the message
+    // carries the manual resolution for this legacy run.
+    console.error(`${id}: ${r.message}`);
+    process.exit(1);
+  }
+  console.log(`${id}: ${r.message}`);
 }
 
 const FOLLOWUP_WORKFLOWS = ["feature-dev", "bug-fix"];
@@ -4619,11 +4475,6 @@ function cmdSelftest() {
     console.log(`workflow ${wf}: ${w.steps.length} steps ${wfProblems.length ? "INVALID" : "ok"}`);
   }
   {
-    const p = fs.existsSync(path.join(ORCH_DIR, "prompts", `${RESOLVE_STEP.prompt}.md`));
-    console.log(`prompt ${RESOLVE_STEP.prompt} (synthetic ${RESOLVE_STEP.id}): ${okMark(p)}`);
-    if (!p) problems.push(`missing prompt ${RESOLVE_STEP.prompt} for synthetic step ${RESOLVE_STEP.id}`);
-  }
-  {
     // The on-demand preview path runs RELEASE_DECISION_STEP outside any
     // workflow, so its prompt/profile references need their own check.
     const p = fs.existsSync(path.join(ORCH_DIR, "prompts", `${RELEASE_DECISION_STEP.prompt}.md`));
@@ -4669,18 +4520,23 @@ function cmdSelftest() {
   const policyChecks = [
     ["absent policy resolves to safe defaults", JSON.stringify(pol(undefined).policy) === JSON.stringify({ merge: "review", deploy: "auto", preview: "off" })],
     ["absent policy has no problems", pol(undefined).problems.length === 0],
-    ["explicit auto/auto accepted", (() => { const r = pol({ merge: "auto", deploy: "auto" }); return r.problems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    ["explicit review accepted", (() => { const r = pol({ merge: "review", deploy: "auto" }); return r.problems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
     ["hold and preview values accepted", (() => { const r = pol({ deploy: "hold", preview: "on" }); return r.problems.length === 0 && r.policy.deploy === "hold" && r.policy.preview === "on"; })()],
-    ["invalid value rejected naming rig and key", pol({ merge: "yes" }).problems.some((p) => p === "rig selftest-rig: policy.merge 'yes' invalid (allowed: auto|review)")],
+    ["invalid value rejected naming rig and key", pol({ merge: "yes" }).problems.some((p) => p === "rig selftest-rig: policy.merge 'yes' invalid (allowed: review)")],
     ["invalid value falls back to the safe default", pol({ merge: "yes" }).policy.merge === "review"],
+    // policy.merge "auto" was removed 2026-08-11 (its whole execution path
+    // ended at a local-only merge nothing ever pushed): a stale config must
+    // fail loudly, naming the rig and key, with the removal explained.
+    ["policy.merge 'auto' rejected naming rig and key", pol({ merge: "auto" }).problems.some((p) => p.includes("rig selftest-rig: policy.merge 'auto' invalid (allowed: review)") && p.includes("removed 2026-08-11"))],
+    ["policy.merge 'auto' falls back to review", pol({ merge: "auto" }).policy.merge === "review"],
     ["unknown key rejected naming rig and key", pol({ merg: "auto" }).problems.some((p) => p.includes("rig selftest-rig: unknown policy key 'merg'"))],
     ["non-object policy rejected", pol("auto").problems.length === 1],
-    // Product rigs review-gate their merges (founder decision 2026-08-11): a run
-    // is only "done" once its PR lands on origin's default branch. Auto-merge is
-    // reserved for the app-factory harness rig.
+    // Every rig PR-gates its merges (founder decision 2026-08-11): a run is
+    // only "done" once its PR lands on origin's default branch — the
+    // app-factory harness rig included.
     ["skip-hero is merge-review deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
     ["running-with-pace defaults to merge-review", (() => { const r = resolveRig("running-with-pace"); return r.policyProblems.length === 0 && r.policy.merge === "review"; })()],
-    ["app-factory is merge-auto deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "auto" && r.policy.deploy === "auto"; })()],
+    ["app-factory is merge-review deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
     ["running-with-pace defaults to merge-review", resolveRig("running-with-pace").policy.merge === "review"],
     ["awaiting-merge is a terminal state", TERMINAL_STATES.includes("awaiting-merge")],
     ["web lib agrees awaiting-merge is terminal", (() => {
@@ -4690,14 +4546,16 @@ function cmdSelftest() {
         return false;
       }
     })()],
-    // The engine never pushes the rig's default branch (D26): auto-merge is
-    // local-only for every rig. The engine DOES push the run's own
-    // factory/<id> branch (pushRunBranchCommand — console commit links,
-    // agents' upstream), so the scan targets command literals, not call
-    // sites (a call site split across lines must not dodge it): every
-    // non-comment `git push` string in the source must name factory/.
-    // The scan's own lines, and selftest lines that quote the literal for
-    // other checks, carry the no-push-scan marker and are excluded.
+    // The engine never pushes (or force-pushes) the rig's default branch —
+    // the invariant survives auto-merge's removal (D26's merge half is
+    // superseded; a run branch is either PR-merged on GitHub or still open).
+    // The engine DOES push the run's own factory/<id> branch
+    // (pushRunBranchCommand — console commit links, agents' upstream), so
+    // the scan targets command literals, not call sites (a call site split
+    // across lines must not dodge it): every non-comment `git push` string
+    // in the source must name factory/. The scan's own lines, and selftest
+    // lines that quote the literal for other checks, carry the no-push-scan
+    // marker and are excluded.
     ["every git push in the engine targets factory/<id>, never the base branch", (() => {
       const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
       const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
@@ -4712,25 +4570,31 @@ function cmdSelftest() {
       greenTerminalState({ steps: [{ type: "agent" }, { type: "manual" }] }, { merge: "review" }, null) === "done"],
     ["read-only workflow (worktree:false) ends done",
       greenTerminalState({ worktree: false, steps: [{ type: "deploy" }] }, { merge: "review" }, null) === "done"],
-    ["merged review-policy run ends done",
+    ["legacy locally-merged run ends done",
       greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "review" }, "abc123") === "done"],
-    ["auto-merge-policy run ends done",
-      greenTerminalState({ steps: [{ type: "deploy" }] }, { merge: "auto" }, "abc123") === "done"],
   ];
   for (const [name, ok] of policyChecks) {
     console.log(`policy ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`policy check failed: ${name}`);
   }
-  // Cleanup decision core (pure — no git or filesystem access).
+  // Cleanup decision core (pure — no git or filesystem access). Merge truth
+  // for PR-gated runs is GitHub's (prMerged): squash/rebase merges never make
+  // the run branch a local ancestor, so prMerged alone cleans — with a forced
+  // branch delete — while runs without a PR keep the conservative local
+  // ancestor behaviour.
   const cls = (over, opts) =>
-    classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, ...over }, opts).action;
+    classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, prMerged: false, ...over }, opts).action;
   const cleanupChecks = [
     ["in-flight run skipped", cls({ state: "running:implement" }) === "skip"],
-    ["awaiting-merge run skipped while unmerged", (() => { const d = classifyCleanup({ state: "awaiting-merge", worktreeExists: true, branchExists: true, dirty: false, merged: false }); return d.action === "skip" && d.reason === "branch not merged into default branch"; })()],
+    ["awaiting-merge run skipped while unmerged", (() => { const d = classifyCleanup({ state: "awaiting-merge", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: false }); return d.action === "skip" && d.reason === "branch not merged into default branch"; })()],
     ["awaiting-merge run reclaimed after manual merge", cls({ state: "awaiting-merge" }) === "clean"],
     ["dirty worktree skipped even when merged", cls({ dirty: true }) === "skip"],
     ["unmerged branch skipped by default", cls({ merged: false }) === "skip"],
     ["merged and clean reclaimed", cls({}) === "clean"],
+    ["squash-merged PR cleans without local ancestry", (() => { const d = classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: true }); return d.action === "clean" && d.forceBranch === true; })()],
+    ["unmerged-PR run still skipped", cls({ merged: false, prMerged: false }) === "skip"],
+    ["locally-merged branch never needs the forced delete", classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, prMerged: false }).forceBranch !== true],
+    ["dirty worktree outranks a merged PR", cls({ dirty: true, merged: false, prMerged: true }) === "skip"],
     ["failed run with merged branch reclaimed", cls({ state: "failed" }) === "clean"],
     ["branch gone, clean worktree removed", cls({ branchExists: false, merged: false }) === "clean"],
     ["worktree gone, merged branch deleted", cls({ worktreeExists: false }) === "clean"],
@@ -4749,7 +4613,7 @@ function cmdSelftest() {
   // derived from the state it replaces.
   const interruptChecks = [
     ["running:<step> names the step", interruptedStepOf("running:implement") === "implement"],
-    ["synthetic steps resolve too", interruptedStepOf("running:resolve-conflicts") === "resolve-conflicts"],
+    ["synthetic steps resolve too", interruptedStepOf("running:release-decision") === "release-decision"],
     ["deploying maps to the deploy step", interruptedStepOf("deploying") === "deploy"],
     ["waiting states interrupt no step", interruptedStepOf("awaiting-approval") === null && interruptedStepOf("queued") === null],
     ["setup interrupts no step", interruptedStepOf("setup") === null],
@@ -4759,7 +4623,7 @@ function cmdSelftest() {
     console.log(`cancel-step ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`cancel-step check failed: ${name}`);
   }
-  // Harness-merge web-restart decision core (pure).
+  // Harness-restart (sync-time) web-restart decision core (pure).
   const webChecks = [
     ["engine-only merge skips web restart", classifyWebRestart(["orchestration/bin/factory-run", "orchestration/prompts/implement.md"]).restart === false],
     ["server change restarts web", classifyWebRestart(["orchestration/web/server.mjs"]).restart === true],
@@ -4777,9 +4641,9 @@ function cmdSelftest() {
     console.log(`web-restart ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart check failed: ${name}`);
   }
-  // Harness-merge restart outcome core (pure) + the rebuild command contract:
+  // Harness-restart outcome core (pure) + the rebuild command contract:
   // deps must sync (npm ci, npm install fallback) before the frontend build,
-  // and a failed build/restart must never read as a clean deploy.
+  // and a failed build/restart must never read as a clean restart.
   const wro = (over) =>
     classifyWebRestartOutcome({ buildOk: true, downOk: true, upOk: true, upOutput: "factory-web: up at http://127.0.0.1:4620 · tailnet: already serving", ...over });
   const webOutcomeChecks = [
@@ -4794,71 +4658,45 @@ function cmdSelftest() {
     console.log(`web-restart-outcome ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`web-restart-outcome check failed: ${name}`);
   }
-  // Deploy-recovery decision core (pure — no git access). The cap semantics:
-  // `iterations` counts cycles already burned, so the 5th attempt (4 burned)
-  // still runs and a 6th (5 burned) escalates instead of rebasing.
-  const rec = (over) => classifyRecovery({ drifted: true, conflicted: false, iterations: 0, ...over }).action;
-  const recoveryChecks = [
-    ["no drift merges untouched", rec({ drifted: false }) === "merge"],
-    ["no drift merges even at cap", rec({ drifted: false, iterations: RECOVERY_CAP }) === "merge"],
-    ["clean rebase re-verifies", rec({}) === "reverify"],
-    ["conflicted rebase spawns resolution", rec({ conflicted: true }) === "resolve"],
-    ["last capped attempt still runs", rec({ iterations: RECOVERY_CAP - 1 }) === "reverify"],
-    ["attempt past the cap escalates", rec({ iterations: RECOVERY_CAP }) === "escalate"],
-    ["conflict past the cap escalates too", rec({ conflicted: true, iterations: RECOVERY_CAP + 2 }) === "escalate"],
+  // Sync-time harness restart gate (pure): only harness-restart rigs restart,
+  // and only once the local default branch contains the merged commit — the
+  // degrade must be actionable (pull, then restart manually), never a push.
+  const hr = (over) => classifyHarnessRestart({ deployType: "harness-restart", containsMerge: true, ...over });
+  const harnessRestartChecks = [
+    ["merge present in the checkout restarts", hr({}).restart === true],
+    ["missing merge degrades to an actionable message", (() => { const d = hr({ containsMerge: false }); return d.restart === false && /pull/.test(d.reason) && /never pushes/.test(d.reason); })()],
+    ["non-harness rigs never restart", hr({ deployType: "eas-update" }).restart === false && hr({ deployType: "none" }).restart === false],
   ];
-  for (const [name, ok] of recoveryChecks) {
-    console.log(`recovery ${name}: ${ok ? "ok" : "FAIL"}`);
-    if (!ok) problems.push(`recovery check failed: ${name}`);
+  for (const [name, ok] of harnessRestartChecks) {
+    console.log(`harness-restart ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`harness-restart check failed: ${name}`);
   }
-  // Run-branch publish contract: recovery rebases rewrite shas, so the push
-  // must be --force-with-lease with the upstream set on first push; the agent
-  // prompts must push per commit (never forbid it) but never switch branches.
+  // Run-branch publish contract: the push must be --force-with-lease (a
+  // locally rewritten branch still publishes safely) with the upstream set on
+  // first push; the agent prompts must push per commit (never forbid it) but
+  // never switch branches.
   const pushCmd = pushRunBranchCommand("bug-selftest");
   const stepPrompt = (name) => fs.readFileSync(path.join(ORCH_DIR, "prompts", `${name}.md`), "utf8");
-  // The resolver's fail() helper terminates the run: it must reconcile origin
-  // and the recorded shas first, or a failed run strands local-only commits.
-  const resolveFailSrc = (fs.readFileSync(__filename, "utf8").match(/const fail = \(outcome[\s\S]*?return null;\s*\};/) || [""])[0];
   const pushChecks = [
     ["push targets the run branch on origin", pushCmd.includes("origin factory/bug-selftest")],
     ["full factory/<id> branch names normalize to the same command", pushRunBranchCommand("factory/bug-selftest") === pushCmd],
-    ["push is force-with-lease (recovery rebases rewrite shas)", pushCmd.includes("--force-with-lease")],
+    ["push is force-with-lease (rewritten branches still publish)", pushCmd.includes("--force-with-lease")],
     ["first push sets the upstream for agents' plain git push", pushCmd.includes(" -u ")], // no-push-scan
     ["implement/fix prompts push per commit, stay on the branch", ["implementer", "bug-fixer"].every((n) => {
       const p = stepPrompt(n);
       return !p.includes("Do not push") && p.includes("git push") && p.includes("Do not switch branches"); // no-push-scan
     })],
-    ["resolver failure paths push the branch before terminating", resolveFailSrc.includes("pushRunBranch(run)")],
-    ["resolver failure paths re-record commits", resolveFailSrc.includes("recordCommits(run)")],
   ];
   for (const [name, ok] of pushChecks) {
     console.log(`push ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`push check failed: ${name}`);
   }
-  // Deploy merge-phase decision (pure): a resumed deploy whose merge already
-  // landed (run.mergedSha set, e.g. retrying a flaky eas publish) must never
-  // re-run mergeRunBranch — the merge commit on the base reads as drift and
-  // burns a recovery cycle per retry until a publish problem "escalates" as
-  // unresolvable base drift.
-  const dm = (over) => classifyDeployMerge({ merge: "auto", mergedSha: null, ...over }).action;
-  const deployMergeChecks = [
-    ["auto policy merges", dm({}) === "merge"],
-    ["landed merge never re-runs on resume", dm({ mergedSha: "abc1234" }) === "already-merged"],
-    ["review policy leaves the branch", dm({ merge: "review" }) === "review"],
-    ["review outranks a stale mergedSha", dm({ merge: "review", mergedSha: "abc1234" }) === "review"],
-  ];
-  for (const [name, ok] of deployMergeChecks) {
-    console.log(`deploy-merge ${name}: ${ok ? "ok" : "FAIL"}`);
-    if (!ok) problems.push(`deploy-merge check failed: ${name}`);
-  }
-  // Review-policy PR creation (pure): PRs only on merge-review rigs with a
-  // GitHub origin and a working gh; recorded/open PRs are reused, never
-  // duplicated; degraded skips carry the warning flag so run.json says why
-  // no PR exists.
+  // PR creation (pure): every rig is PR-gated — PRs need a GitHub origin and
+  // a working gh; recorded/open PRs are reused, never duplicated; degraded
+  // skips carry the warning flag so run.json says why no PR exists.
   const pc = (over) =>
     classifyPrCreation({ merge: "review", githubOrigin: "https://github.com/o/r", ghAvailable: true, recordedPr: null, openPr: null, ...over });
   const prChecks = [
-    ["auto policy never opens a PR", pc({ merge: "auto" }).action === "skip" && pc({ merge: "auto" }).warn === false],
     ["review policy with GitHub origin creates", pc({}).action === "create"],
     ["non-GitHub origin skips with a warning", (() => { const d = pc({ githubOrigin: null }); return d.action === "skip" && d.warn === true; })()],
     ["missing gh skips with a warning", (() => { const d = pc({ ghAvailable: false }); return d.action === "skip" && d.warn === true; })()],
@@ -4870,19 +4708,15 @@ function cmdSelftest() {
     console.log(`pr-creation ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`pr-creation check failed: ${name}`);
   }
-  // Branch-readiness gate (pure): the deploy step refuses to merge, open a
-  // PR, or publish when the implementation was never committed — a dirty
-  // worktree or a branch with zero commits ahead of base fails the run
-  // loudly instead of shipping a green run with nothing mergeable. A landed
-  // merge (run.mergedSha) short-circuits ok so publish retries keep working
-  // (base..HEAD == 0 by construction after the merge).
-  const br = (over) => classifyBranchReadiness({ aheadCount: 2, dirty: false, mergedSha: null, base: "main", ...over });
+  // Branch-readiness gate (pure): the deploy step refuses to open a PR or
+  // publish when the implementation was never committed — a dirty worktree
+  // or a branch with zero commits ahead of base fails the run loudly instead
+  // of shipping a green run with nothing mergeable.
+  const br = (over) => classifyBranchReadiness({ aheadCount: 2, dirty: false, base: "main", ...over });
   const readinessChecks = [
     ["clean branch ahead of base passes", br({}).ok === true],
     ["dirty worktree fails", (() => { const d = br({ dirty: true }); return d.ok === false && /uncommitted/.test(d.reason); })()],
     ["zero commits ahead fails naming the base", (() => { const d = br({ aheadCount: 0 }); return d.ok === false && /no commits ahead of main/.test(d.reason); })()],
-    ["landed merge short-circuits ok for publish retries", br({ aheadCount: 0, mergedSha: "abc1234" }).ok === true],
-    ["landed merge outranks the dirty probe on retry", br({ dirty: true, mergedSha: "abc1234" }).ok === true],
     ["empty-diff gh create failure is fatal", classifyPrCreateFailure("GraphQL: No commits between main and factory/x (createPullRequest)").fatal === true],
     ["other gh create failures stay degraded warnings", classifyPrCreateFailure("HTTP 401: Bad credentials").fatal === false],
   ];
@@ -4892,12 +4726,14 @@ function cmdSelftest() {
   }
   // Sync decision core (pure): the only exit from awaiting-merge. Merged PRs
   // finish the run, closed PRs park it in the restartable `closed` state,
-  // open PRs change nothing; every other state refuses.
+  // open PRs change nothing; every other state refuses. PR-less legacy runs
+  // degrade to "unsyncable" — an actionable message, never a bare refusal,
+  // because sync is their only exit too.
   const sy = (over) =>
     classifySync({ state: "awaiting-merge", pr: { number: 4, url: "https://github.com/o/r/pull/4" }, prStatus: { state: "open", mergedAt: null, mergeCommit: null }, ...over });
   const syncChecks = [
     ["non-awaiting-merge runs refuse sync", sy({ state: "running:implement" }).action === "refuse" && sy({ state: "done" }).action === "refuse"],
-    ["missing PR record refuses sync", sy({ pr: null }).action === "refuse"],
+    ["missing PR record degrades to unsyncable, not a bare refusal", (() => { const d = sy({ pr: null }); return d.action === "unsyncable" && /legacy/.test(d.reason); })()],
     ["pre-fetch guard says check", classifySync({ state: "awaiting-merge", pr: { number: 4 } }).action === "check"],
     ["gh failure refuses without a state change", sy({ prStatus: null }).action === "refuse"],
     ["merged PR finishes the run with the merge sha", (() => { const d = sy({ prStatus: { state: "merged", mergedAt: "2026-01-01T00:00:00Z", mergeCommit: "abc" } }); return d.action === "done" && d.mergedSha === "abc"; })()],
@@ -4975,7 +4811,6 @@ function cmdSelftest() {
     ["first retry of a failed run resumes", (() => { const d = rt({}); return d.eligible && d.tier === "resume"; })()],
     ["repeat retry at the same step goes to triage", rt({ retries: [{ at: rtT0, tier: "resume", step: "implement" }] }).tier === "triage"],
     ["preflight failure goes straight to triage", rt({}, { lastFailure: "preflight failed: probe broken" }).tier === "triage"],
-    ["recovery-cap escalation goes straight to triage", rt({}, { lastFailure: "deploy recovery escalation: recovery cap reached (5/5 cycles)" }).tier === "triage"],
     ["escalation.md goes straight to triage", rt({}, { escalationPresent: true }).tier === "triage"],
     ["missing worktree goes straight to triage", rt({}, { worktreeMissing: true }).tier === "triage"],
     ["stalled non-terminal run is retryable", rt({ state: "running:implement" }).eligible === true],
@@ -5335,16 +5170,16 @@ function cmdSelftest() {
     console.log(`preview-mode ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`preview-mode check failed: ${name}`);
   }
-  // Preview-step gating across deploy recoveries (pure): deploy's onRecover
-  // target ("checks") sits before release-decision/preview/preview-gate, so a
-  // base-drift recovery on a preview run would re-run all three — a second
-  // paid `eas build` and a second approval request for a preview the founder
-  // already approved. An approved preview pins the trio skipped.
+  // Preview-step gating across re-runs (pure): a resume rewound to "checks"
+  // sits before release-decision/preview/preview-gate, so it would re-run all
+  // three — a second paid `eas build` and a second approval request for a
+  // preview the founder already approved. An approved preview pins the trio
+  // skipped.
   const ps = (over) => classifyPreviewStep({ previewOn: true, previewApproved: false, ...over });
   const previewStepChecks = [
     ["mode off skips the trio", ps({ previewOn: false }).run === false],
     ["mode on runs the trio", ps({}).run === true],
-    ["approved preview never re-runs on recovery", ps({ previewApproved: true }).run === false],
+    ["approved preview never re-runs on rewind", ps({ previewApproved: true }).run === false],
     ["approved skip reason names the approval", /already approved/.test(ps({ previewApproved: true }).reason)],
     ["mode off outranks approval", ps({ previewOn: false, previewApproved: true }).reason === "preview mode off"],
   ];

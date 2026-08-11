@@ -11,7 +11,7 @@
     { "id": "release-decision", "type": "agent", "prompt": "release-decision", "agent": "release-engineer", "timeoutMinutes": 15, "skipWhen": "no-preview" },
     { "id": "preview", "type": "preview", "skipWhen": "no-preview" },
     { "id": "preview-gate", "type": "gate", "skipWhen": "no-preview", "autoApprove": false },
-    { "id": "deploy", "type": "deploy", "onRecover": "checks" },
+    { "id": "deploy", "type": "deploy" },
     { "id": "notify", "type": "notify" }
   ]
 }
