@@ -2060,11 +2060,18 @@ function porcelainPaths(stdout) {
     });
 }
 
+/** Sentinel for a present path whose content `git hash-object` could not
+ *  hash (directory-shaped entries like dirty submodules, permission errors).
+ *  It carries no content identity, so it must never satisfy the tolerated
+ *  match: sentinel === sentinel says nothing about the content. */
+const UNHASHABLE = "unhashable";
+
 /** Partition the deploy gate's dirty paths into setup-tolerated and unexpected
  *  (pure, exercised by selftest). A path is tolerated only while the run's
  *  post-setup snapshot lists it AND its current content hash equals what setup
  *  left (null on both sides = still deleted). Everything else — agent-authored
- *  paths, and snapshot paths whose content changed again since setup — is
+ *  paths, snapshot paths whose content changed again since setup, and paths
+ *  whose content identity is unknown on either side (UNHASHABLE) — is
  *  unexpected. No snapshot at all (legacy run, `snapshot` undefined) tolerates
  *  nothing: today's strict behavior. */
 function partitionDirtyPaths({ paths, snapshot, hashOf }) {
@@ -2072,8 +2079,14 @@ function partitionDirtyPaths({ paths, snapshot, hashOf }) {
   const unexpected = [];
   for (const p of paths) {
     const snap = Array.isArray(snapshot) ? snapshot.find((d) => d.path === p) : null;
-    if (snap && snap.hash === hashOf(p)) tolerated.push(p);
-    else unexpected.push(p);
+    if (snap && snap.hash !== UNHASHABLE) {
+      const hash = hashOf(p);
+      if (hash !== UNHASHABLE && snap.hash === hash) {
+        tolerated.push(p);
+        continue;
+      }
+    }
+    unexpected.push(p);
   }
   return { tolerated, unexpected };
 }
@@ -2272,11 +2285,13 @@ function classifyNotifyMessage({ summaryFile, summaryText }) {
 }
 
 /** Content identity of one dirty path for the setup snapshot: the
- *  `git hash-object` blob sha for files present on disk, null for deletions. */
+ *  `git hash-object` blob sha for files present on disk, null for deletions,
+ *  UNHASHABLE when hashing fails (partitionDirtyPaths then always treats the
+ *  path as unexpected — an unknown identity can never prove "unchanged"). */
 function dirtyPathHash(worktree, p) {
   if (!fs.existsSync(path.join(worktree, p))) return null;
   const r = git(worktree, ["hash-object", "--", p]);
-  return r.status === 0 ? r.stdout.trim() : "unhashable";
+  return r.status === 0 ? r.stdout.trim() : UNHASHABLE;
 }
 
 function deployStep(run, rig) {
@@ -4952,6 +4967,8 @@ function cmdSelftest() {
     ["snapshot path whose content changed again is unexpected", (() => { const d = part({ hashOf: () => "changed" }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
     ["path outside the snapshot is unexpected", part({ paths: ["src/new.ts"] }).unexpected.includes("src/new.ts")],
     ["deletion on both sides is tolerated", part({ paths: ["gone.txt"] }).tolerated.includes("gone.txt")],
+    ["unhashable on both sides is unexpected — the sentinel is not a content match", (() => { const d = part({ snapshot: [{ path: "vendor/sub", hash: "unhashable" }], paths: ["vendor/sub"], hashOf: () => "unhashable" }); return d.unexpected.includes("vendor/sub") && d.tolerated.length === 0; })()],
+    ["path that became unhashable since a real snapshot hash is unexpected", (() => { const d = part({ hashOf: () => "unhashable" }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
     ["missing snapshot stays strict — every dirty path is unexpected", (() => { const d = part({ snapshot: undefined }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
     ["empty-diff gh create failure is fatal", classifyPrCreateFailure("GraphQL: No commits between main and factory/x (createPullRequest)").fatal === true],
     ["other gh create failures stay degraded warnings", classifyPrCreateFailure("HTTP 401: Bad credentials").fatal === false],
