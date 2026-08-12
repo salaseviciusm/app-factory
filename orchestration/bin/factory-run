@@ -2047,17 +2047,71 @@ function restartHarness(run, rig, sha) {
   };
 }
 
+/** Paths from `git status --porcelain` output (pure). Strips the two-char
+ *  status + space prefix; a rename `R  old -> new` reports the new path. */
+function porcelainPaths(stdout) {
+  return (stdout || "")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const p = line.slice(3);
+      const arrow = p.indexOf(" -> ");
+      return arrow === -1 ? p : p.slice(arrow + 4);
+    });
+}
+
+/** Sentinel for a present path whose content `git hash-object` could not
+ *  hash (directory-shaped entries like dirty submodules, permission errors).
+ *  It carries no content identity, so it must never satisfy the tolerated
+ *  match: sentinel === sentinel says nothing about the content. */
+const UNHASHABLE = "unhashable";
+
+/** Partition the deploy gate's dirty paths into setup-tolerated and unexpected
+ *  (pure, exercised by selftest). A path is tolerated only while the run's
+ *  post-setup snapshot lists it AND its current content hash equals what setup
+ *  left (null on both sides = still deleted). Everything else — agent-authored
+ *  paths, snapshot paths whose content changed again since setup, and paths
+ *  whose content identity is unknown on either side (UNHASHABLE) — is
+ *  unexpected. No snapshot at all (legacy run, `snapshot` undefined) tolerates
+ *  nothing: today's strict behavior. */
+function partitionDirtyPaths({ paths, snapshot, hashOf }) {
+  const tolerated = [];
+  const unexpected = [];
+  for (const p of paths) {
+    const snap = Array.isArray(snapshot) ? snapshot.find((d) => d.path === p) : null;
+    if (snap && snap.hash !== UNHASHABLE) {
+      const hash = hashOf(p);
+      if (hash !== UNHASHABLE && snap.hash === hash) {
+        tolerated.push(p);
+        continue;
+      }
+    }
+    unexpected.push(p);
+  }
+  return { tolerated, unexpected };
+}
+
 /** Pure decision core for the deploy step's branch-readiness gate (exercised
  *  by selftest). Two invariants are assumed everywhere downstream and checked
  *  nowhere else: the run branch is ≥1 commit ahead of the rig default branch,
- *  and the worktree is clean. An implement agent that never committed passes
- *  checks/review/tests (they validate worktree files, not commits) and EAS
- *  (it bundles the working directory), shipping a green run with nothing
- *  mergeable — so the deploy step fails loudly here first. */
-function classifyBranchReadiness({ aheadCount, dirty, base }) {
-  if (dirty) return { ok: false, reason: "worktree has uncommitted changes — the implementation was never fully committed" };
+ *  and the worktree carries no dirt beyond what setup itself churned
+ *  (`dirtyPaths` is the unexpected set from partitionDirtyPaths). An implement
+ *  agent that never committed passes checks/review/tests (they validate
+ *  worktree files, not commits) and EAS (it bundles the working directory),
+ *  shipping a green run with nothing mergeable — so the deploy step fails
+ *  loudly here first, naming each offending path. */
+function classifyBranchReadiness({ aheadCount, dirtyPaths, toleratedPaths = [], base }) {
+  if (dirtyPaths.length) {
+    return {
+      ok: false,
+      reason: `worktree has uncommitted changes not attributable to setup (${dirtyPaths.join(", ")}) — commit or revert them; the implementation may not be fully committed`,
+    };
+  }
   if (aheadCount === 0) return { ok: false, reason: `run branch has no commits ahead of ${base} — nothing to merge, review, or ship` };
-  return { ok: true, reason: `${aheadCount} commit(s) ahead of ${base}, worktree clean` };
+  const dirtNote = toleratedPaths.length
+    ? `worktree dirt limited to ${toleratedPaths.length} setup-churned path(s)`
+    : "worktree clean";
+  return { ok: true, reason: `${aheadCount} commit(s) ahead of ${base}, ${dirtNote}` };
 }
 
 // ---------- review-policy PRs (gh CLI; the branch is already pushed) ----------
@@ -2230,6 +2284,16 @@ function classifyNotifyMessage({ summaryFile, summaryText }) {
   return { source: "default" };
 }
 
+/** Content identity of one dirty path for the setup snapshot: the
+ *  `git hash-object` blob sha for files present on disk, null for deletions,
+ *  UNHASHABLE when hashing fails (partitionDirtyPaths then always treats the
+ *  path as unexpected — an unknown identity can never prove "unchanged"). */
+function dirtyPathHash(worktree, p) {
+  if (!fs.existsSync(path.join(worktree, p))) return null;
+  const r = git(worktree, ["hash-object", "--", p]);
+  return r.status === 0 ? r.stdout.trim() : UNHASHABLE;
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -2238,7 +2302,9 @@ function deployStep(run, rig) {
   }
   // Branch-readiness gate: refuse to open a PR or publish unless the
   // branch actually carries committed work (see classifyBranchReadiness).
-  // A probe error fails too — this gate never silently passes.
+  // A probe error fails too — this gate never silently passes. Dirt that
+  // setup itself churned (per the post-setup snapshot, content unchanged)
+  // is tolerated — but each tolerated path is logged, never passed silently.
   const status = git(run.worktree, ["status", "--porcelain"]);
   if (status.status !== 0) {
     return { ok: false, summary: `branch-readiness probe failed: git status in ${run.worktree}: ${(status.stderr || status.stdout || "").trim().slice(0, 200)}` };
@@ -2248,9 +2314,18 @@ function deployStep(run, rig) {
   if (!Number.isFinite(aheadCount)) {
     return { ok: false, summary: `branch-readiness probe failed: git rev-list --count ${run.baseBranch}..HEAD: ${(revList.stderr || revList.stdout || "").trim().slice(0, 200)}` };
   }
+  const { tolerated, unexpected } = partitionDirtyPaths({
+    paths: porcelainPaths(status.stdout),
+    snapshot: run.setupDirtyPaths,
+    hashOf: (p) => dirtyPathHash(run.worktree, p),
+  });
+  for (const p of tolerated) {
+    log(runDirOf(run.id), `deploy gate tolerating dirty path ${p}: dirtied by setup, content unchanged since post-setup snapshot`);
+  }
   const readiness = classifyBranchReadiness({
     aheadCount,
-    dirty: status.stdout.trim() !== "",
+    dirtyPaths: unexpected,
+    toleratedPaths: tolerated,
     base: run.baseBranch,
   });
   if (!readiness.ok) {
@@ -2952,6 +3027,21 @@ function execRun(id) {
         const r = runCommand(cmd, run.worktree, setupLog, 30);
         if (!r.ok) throw new Error(`setup failed: ${cmd} (see setup.log)`);
       }
+      // Post-setup snapshot: tracked-file churn the setup commands left behind
+      // (lockfile metadata, generated files) is recorded as {path, hash} so
+      // the deploy readiness gate can tolerate exactly that dirt — and nothing
+      // else. Empty array = setup left the tree clean; field absent entirely =
+      // legacy run (the gate stays strict). A failed status probe snapshots
+      // empty too: never tolerate dirt we could not attribute.
+      const postSetup = git(run.worktree, ["status", "--porcelain"]);
+      run.setupDirtyPaths =
+        postSetup.status === 0
+          ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
+          : [];
+      saveRun(run);
+      if (run.setupDirtyPaths.length) {
+        log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
+      }
     }
 
     let i = run.stepIndex || 0;
@@ -3259,7 +3349,9 @@ function execRun(id) {
 /** Branch, worktree, and base branch a new run works on (pure, exercised by
  *  selftest). Fresh runs mint factory/<id> and their own worktree; a follow-up
  *  (`baseRun` = the parent run.json) inherits the chain root's branch and
- *  worktree so its pushes update the one open PR. */
+ *  worktree so its pushes update the one open PR — and the parent's post-setup
+ *  dirty snapshot, because a follow-up reuses the worktree and never re-runs
+ *  setup, so its deploy gate must make the same tolerance decision. */
 function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_DIR) {
   if (!baseRun) {
     return { branch: `factory/${id}`, worktree: path.join(worktreesDir, id), baseBranch: defaultBranch };
@@ -3268,6 +3360,7 @@ function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_
     branch: runBranch(baseRun),
     worktree: baseRun.worktree,
     baseBranch: baseRun.baseBranch || defaultBranch,
+    setupDirtyPaths: baseRun.setupDirtyPaths,
   };
 }
 
@@ -3296,6 +3389,10 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
     baseBranch: setup.baseBranch,
     branch: setup.branch,
     worktree: setup.worktree,
+    // Follow-ups inherit the chain root's post-setup dirty snapshot (they skip
+    // setup); fresh runs get theirs written after their own setup phase.
+    // undefined here means the field is absent from run.json (legacy-strict).
+    setupDirtyPaths: setup.setupDirtyPaths,
     state: "queued",
     stepIndex: 0,
     artifactUrl: null,
@@ -4847,14 +4944,32 @@ function cmdSelftest() {
     if (!ok) problems.push(`pr-creation check failed: ${name}`);
   }
   // Branch-readiness gate (pure): the deploy step refuses to open a PR or
-  // publish when the implementation was never committed — a dirty worktree
-  // or a branch with zero commits ahead of base fails the run loudly instead
-  // of shipping a green run with nothing mergeable.
-  const br = (over) => classifyBranchReadiness({ aheadCount: 2, dirty: false, base: "main", ...over });
+  // publish when the implementation was never committed — unexpected dirty
+  // paths (named in the reason) or a branch with zero commits ahead of base
+  // fail the run loudly instead of shipping a green run with nothing
+  // mergeable. Dirt that setup itself churned (post-setup snapshot, content
+  // unchanged) is tolerated; a run without a snapshot stays strict.
+  const br = (over) => classifyBranchReadiness({ aheadCount: 2, dirtyPaths: [], toleratedPaths: [], base: "main", ...over });
+  const snapHashes = { "package-lock.json": "aaa", "src/foo.ts": "bbb" };
+  const part = (over) =>
+    partitionDirtyPaths({
+      paths: ["package-lock.json"],
+      snapshot: [{ path: "package-lock.json", hash: "aaa" }, { path: "gone.txt", hash: null }],
+      hashOf: (p) => (p in snapHashes ? snapHashes[p] : null),
+      ...over,
+    });
   const readinessChecks = [
     ["clean branch ahead of base passes", br({}).ok === true],
-    ["dirty worktree fails", (() => { const d = br({ dirty: true }); return d.ok === false && /uncommitted/.test(d.reason); })()],
+    ["unexpected dirty paths fail naming each path", (() => { const d = br({ dirtyPaths: ["src/foo.ts", "bar.json"] }); return d.ok === false && /uncommitted/.test(d.reason) && d.reason.includes("src/foo.ts") && d.reason.includes("bar.json"); })()],
+    ["tolerated-only dirt passes mentioning the tolerated count", (() => { const d = br({ toleratedPaths: ["package-lock.json"] }); return d.ok === true && /1 setup-churned/.test(d.reason); })()],
     ["zero commits ahead fails naming the base", (() => { const d = br({ aheadCount: 0 }); return d.ok === false && /no commits ahead of main/.test(d.reason); })()],
+    ["setup-churned path with unchanged content is tolerated", (() => { const d = part({}); return d.tolerated.includes("package-lock.json") && d.unexpected.length === 0; })()],
+    ["snapshot path whose content changed again is unexpected", (() => { const d = part({ hashOf: () => "changed" }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
+    ["path outside the snapshot is unexpected", part({ paths: ["src/new.ts"] }).unexpected.includes("src/new.ts")],
+    ["deletion on both sides is tolerated", part({ paths: ["gone.txt"] }).tolerated.includes("gone.txt")],
+    ["unhashable on both sides is unexpected — the sentinel is not a content match", (() => { const d = part({ snapshot: [{ path: "vendor/sub", hash: "unhashable" }], paths: ["vendor/sub"], hashOf: () => "unhashable" }); return d.unexpected.includes("vendor/sub") && d.tolerated.length === 0; })()],
+    ["path that became unhashable since a real snapshot hash is unexpected", (() => { const d = part({ hashOf: () => "unhashable" }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
+    ["missing snapshot stays strict — every dirty path is unexpected", (() => { const d = part({ snapshot: undefined }); return d.unexpected.includes("package-lock.json") && d.tolerated.length === 0; })()],
     ["empty-diff gh create failure is fatal", classifyPrCreateFailure("GraphQL: No commits between main and factory/x (createPullRequest)").fatal === true],
     ["other gh create failures stay degraded warnings", classifyPrCreateFailure("HTTP 401: Bad credentials").fatal === false],
   ];
@@ -4905,6 +5020,7 @@ function cmdSelftest() {
     ["fresh run mints factory/<id> and its own worktree", (() => { const s = inheritedRunSetup(null, "feature-x", "main"); return s.branch === "factory/feature-x" && s.worktree === path.join(WORKTREES_DIR, "feature-x") && s.baseBranch === "main"; })()],
     ["follow-up inherits the parent's branch, worktree, and base", (() => { const s = inheritedRunSetup(parentRunFx, "feature-child", "main"); return s.branch === "factory/feature-root" && s.worktree === parentRunFx.worktree && s.baseBranch === "main"; })()],
     ["a chain of follow-ups keeps the root branch", grandchildSetup.branch === "factory/feature-root" && grandchildSetup.worktree === parentRunFx.worktree],
+    ["follow-up inherits the parent's post-setup dirty snapshot", (() => { const s = inheritedRunSetup({ ...parentRunFx, setupDirtyPaths: [{ path: "package-lock.json", hash: "aaa" }] }, "feature-child", "main"); return Array.isArray(s.setupDirtyPaths) && s.setupDirtyPaths[0].path === "package-lock.json"; })()],
     ["legacy parent without run.branch still chains on factory/<parent-id>", inheritedRunSetup({ id: "feature-old", worktree: "/w/feature-old", baseBranch: "main" }, "feature-child", "main").branch === "factory/feature-old"],
   ];
   for (const [name, ok] of followupChecks) {
