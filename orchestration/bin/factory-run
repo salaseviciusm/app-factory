@@ -2294,6 +2294,34 @@ function dirtyPathHash(worktree, p) {
   return r.status === 0 ? r.stdout.trim() : UNHASHABLE;
 }
 
+/** Whether the executor must (re-)run the rig's setup commands (pure,
+ *  exercised by selftest). Gated on run.setupOk — written only after every
+ *  setup command exited 0 and the post-setup snapshot was saved — never on
+ *  the worktree directory existing: a run that crashed mid-setup leaves the
+ *  directory behind half-provisioned, and resuming past it burns a whole
+ *  agent pipeline before dying at deploy. A legacy run.json without the field
+ *  re-provisions once on its next resume — that population is exactly the one
+ *  that may be half-built, and rig.setup commands are npm-install-style
+ *  idempotent (the cost is minutes, not correctness). Read-only workflows
+ *  ("worktree": false) never provision. */
+function setupNeeded(run, workflow) {
+  if (workflow && workflow.worktree === false) return false;
+  return run.setupOk !== true;
+}
+
+/** Failure line for a rig.setup command that exited non-zero (pure, exercised
+ *  by selftest): thrown (so the crash notification carries it verbatim) and
+ *  appended to setup.log. Names the failing command's 1-based position and
+ *  enumerates every command that never ran, so a parked run says exactly what
+ *  provisioning is still missing. */
+function setupFailureSummary(cmds, failedIndex) {
+  const unrun = cmds.slice(failedIndex + 1);
+  return (
+    `setup failed at command ${failedIndex + 1} of ${cmds.length}: ${cmds[failedIndex]} — ` +
+    `${unrun.length} command(s) never ran${unrun.length ? `: ${unrun.join(", ")}` : ""} (see setup.log)`
+  );
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -3001,46 +3029,73 @@ function execRun(id) {
     }
     // Worktree setup (idempotent on resume). Read-only workflows (self-review)
     // set "worktree": false and run agent steps against the live checkout.
+    // Creation and provisioning are gated separately: the directory existing
+    // proves only that `git worktree add` ran, never that rig.setup finished —
+    // a run that crashed mid-setup re-provisions on resume (setupNeeded)
+    // instead of burning an agent pipeline against a half-built tree.
     if (workflow.worktree === false) {
       run.worktree = rig.path;
       saveRun(run);
-    } else if (!fs.existsSync(run.worktree)) {
-      setState(run, "setup", "creating worktree");
-      fs.mkdirSync(WORKTREES_DIR, { recursive: true });
-      // Follow-up runs (and restarts of a closed chain) continue an existing
-      // branch: check it out instead of minting a new one off the base.
-      const branch = runBranch(run);
-      const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
-      sh(
-        branchExists
-          ? `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} ${branch}`
-          : `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b ${branch} ${rig.defaultBranch}`
-      );
-      log(runDir, `worktree created at ${run.worktree} (branch ${branch}${branchExists ? ", pre-existing" : ""})`);
-      // Publish the branch (and set its upstream) before the first agent step
-      // so the agents' per-commit plain `git push` works and the web console's
-      // commit links resolve as the run progresses.
-      pushRunBranch(run);
-      const setupLog = path.join(runDir, "setup.log");
-      for (const cmd of rig.setup || []) {
-        log(runDir, `setup: ${cmd}`);
-        const r = runCommand(cmd, run.worktree, setupLog, 30);
-        if (!r.ok) throw new Error(`setup failed: ${cmd} (see setup.log)`);
+    } else {
+      if (!fs.existsSync(run.worktree)) {
+        setState(run, "setup", "creating worktree");
+        fs.mkdirSync(WORKTREES_DIR, { recursive: true });
+        // Follow-up runs (and restarts of a closed chain) continue an existing
+        // branch: check it out instead of minting a new one off the base.
+        const branch = runBranch(run);
+        const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
+        sh(
+          branchExists
+            ? `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} ${branch}`
+            : `git -C ${JSON.stringify(rig.path)} worktree add ${JSON.stringify(run.worktree)} -b ${branch} ${rig.defaultBranch}`
+        );
+        log(runDir, `worktree created at ${run.worktree} (branch ${branch}${branchExists ? ", pre-existing" : ""})`);
+        // Publish the branch (and set its upstream) before the first agent step
+        // so the agents' per-commit plain `git push` works and the web console's
+        // commit links resolve as the run progresses.
+        pushRunBranch(run);
+        // A just-created worktree is by definition unprovisioned: an inherited
+        // or stale setupOk (e.g. a follow-up restarting a closed chain whose
+        // worktree was reclaimed) describes a directory that no longer exists.
+        if (run.setupOk !== undefined) {
+          delete run.setupOk;
+          saveRun(run);
+        }
       }
-      // Post-setup snapshot: tracked-file churn the setup commands left behind
-      // (lockfile metadata, generated files) is recorded as {path, hash} so
-      // the deploy readiness gate can tolerate exactly that dirt — and nothing
-      // else. Empty array = setup left the tree clean; field absent entirely =
-      // legacy run (the gate stays strict). A failed status probe snapshots
-      // empty too: never tolerate dirt we could not attribute.
-      const postSetup = git(run.worktree, ["status", "--porcelain"]);
-      run.setupDirtyPaths =
-        postSetup.status === 0
-          ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
-          : [];
-      saveRun(run);
-      if (run.setupDirtyPaths.length) {
-        log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
+      if (setupNeeded(run, workflow)) {
+        setState(run, "setup", `provisioning worktree (${(rig.setup || []).length} rig.setup command(s))`);
+        const setupLog = path.join(runDir, "setup.log");
+        const setupCmds = rig.setup || [];
+        for (let c = 0; c < setupCmds.length; c++) {
+          log(runDir, `setup: ${setupCmds[c]}`);
+          const r = runCommand(setupCmds[c], run.worktree, setupLog, 30);
+          if (!r.ok) {
+            const summary = setupFailureSummary(setupCmds, c);
+            fs.appendFileSync(setupLog, `${summary}\n`);
+            throw new Error(summary);
+          }
+        }
+        // Post-setup snapshot: tracked-file churn the setup commands left behind
+        // (lockfile metadata, generated files) is recorded as {path, hash} so
+        // the deploy readiness gate can tolerate exactly that dirt — and nothing
+        // else. Empty array = setup left the tree clean; field absent entirely =
+        // legacy run (the gate stays strict). A failed status probe snapshots
+        // empty too: never tolerate dirt we could not attribute. Re-taken on
+        // every (re-)provision so the gate matches what this pass churned.
+        const postSetup = git(run.worktree, ["status", "--porcelain"]);
+        run.setupDirtyPaths =
+          postSetup.status === 0
+            ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
+            : [];
+        saveRun(run);
+        if (run.setupDirtyPaths.length) {
+          log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
+        }
+        // Provisioning completion is explicit run state, written in exactly one
+        // place — after every setup command exited 0 and the post-setup snapshot
+        // was saved. No failure path writes it.
+        run.setupOk = true;
+        saveRun(run);
       }
     }
 
@@ -3350,8 +3405,10 @@ function execRun(id) {
  *  selftest). Fresh runs mint factory/<id> and their own worktree; a follow-up
  *  (`baseRun` = the parent run.json) inherits the chain root's branch and
  *  worktree so its pushes update the one open PR — and the parent's post-setup
- *  dirty snapshot, because a follow-up reuses the worktree and never re-runs
- *  setup, so its deploy gate must make the same tolerance decision. */
+ *  dirty snapshot plus setupOk, because a follow-up reuses the worktree: its
+ *  deploy gate must make the same tolerance decision, and its executor must
+ *  make the same provision-or-skip decision (setupNeeded) — a follow-up of a
+ *  provisioned run skips setup, one of an unprovisioned run re-provisions. */
 function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_DIR) {
   if (!baseRun) {
     return { branch: `factory/${id}`, worktree: path.join(worktreesDir, id), baseBranch: defaultBranch };
@@ -3361,6 +3418,7 @@ function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_
     worktree: baseRun.worktree,
     baseBranch: baseRun.baseBranch || defaultBranch,
     setupDirtyPaths: baseRun.setupDirtyPaths,
+    setupOk: baseRun.setupOk,
   };
 }
 
@@ -3389,10 +3447,12 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
     baseBranch: setup.baseBranch,
     branch: setup.branch,
     worktree: setup.worktree,
-    // Follow-ups inherit the chain root's post-setup dirty snapshot (they skip
-    // setup); fresh runs get theirs written after their own setup phase.
-    // undefined here means the field is absent from run.json (legacy-strict).
+    // Follow-ups inherit the chain root's post-setup dirty snapshot and its
+    // setupOk (they reuse the worktree); fresh runs get theirs written after
+    // their own setup phase. undefined here means the field is absent from
+    // run.json (legacy-strict for the snapshot, re-provision for setupOk).
     setupDirtyPaths: setup.setupDirtyPaths,
+    setupOk: setup.setupOk,
     state: "queued",
     stepIndex: 0,
     artifactUrl: null,
@@ -5021,11 +5081,30 @@ function cmdSelftest() {
     ["follow-up inherits the parent's branch, worktree, and base", (() => { const s = inheritedRunSetup(parentRunFx, "feature-child", "main"); return s.branch === "factory/feature-root" && s.worktree === parentRunFx.worktree && s.baseBranch === "main"; })()],
     ["a chain of follow-ups keeps the root branch", grandchildSetup.branch === "factory/feature-root" && grandchildSetup.worktree === parentRunFx.worktree],
     ["follow-up inherits the parent's post-setup dirty snapshot", (() => { const s = inheritedRunSetup({ ...parentRunFx, setupDirtyPaths: [{ path: "package-lock.json", hash: "aaa" }] }, "feature-child", "main"); return Array.isArray(s.setupDirtyPaths) && s.setupDirtyPaths[0].path === "package-lock.json"; })()],
+    ["follow-up inherits the parent's setupOk", inheritedRunSetup({ ...parentRunFx, setupOk: true }, "feature-child", "main").setupOk === true && inheritedRunSetup(parentRunFx, "feature-child", "main").setupOk === undefined],
     ["legacy parent without run.branch still chains on factory/<parent-id>", inheritedRunSetup({ id: "feature-old", worktree: "/w/feature-old", baseBranch: "main" }, "feature-child", "main").branch === "factory/feature-old"],
   ];
   for (const [name, ok] of followupChecks) {
     console.log(`followup ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`followup check failed: ${name}`);
+  }
+  // Resume setup revalidation (pure): provisioning is gated on run.setupOk —
+  // never on the worktree directory existing — and a setup failure names the
+  // failing command's position plus the exact unrun tail.
+  const setupCmdsFx = ["npm ci", "npm run build", "npm run seed"];
+  const setupChecks = [
+    ["legacy run without setupOk re-provisions on resume", setupNeeded({}, {}) === true],
+    ["setupOk false re-provisions on resume", setupNeeded({ setupOk: false }, {}) === true],
+    ["non-boolean setupOk re-provisions on resume", setupNeeded({ setupOk: "yes" }, {}) === true],
+    ["setupOk true skips provisioning on resume", setupNeeded({ setupOk: true }, {}) === false],
+    ["worktree-false workflow never provisions", setupNeeded({}, { worktree: false }) === false && setupNeeded({ setupOk: true }, { worktree: false }) === false],
+    ["failure summary names position, command, and unrun tail", setupFailureSummary(setupCmdsFx, 1) === "setup failed at command 2 of 3: npm run build — 1 command(s) never ran: npm run seed (see setup.log)"],
+    ["failure at the first command enumerates the whole tail", setupFailureSummary(setupCmdsFx, 0) === "setup failed at command 1 of 3: npm ci — 2 command(s) never ran: npm run build, npm run seed (see setup.log)"],
+    ["failure at the last command reports an empty unrun tail", setupFailureSummary(setupCmdsFx, 2) === "setup failed at command 3 of 3: npm run seed — 0 command(s) never ran (see setup.log)"],
+  ];
+  for (const [name, ok] of setupChecks) {
+    console.log(`setup ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`setup check failed: ${name}`);
   }
   // Resume step rewind (pure — no run dirs touched).
   const wfSteps = ["plan", "plan-discussion", "implement", "checks", "review", "tests", "deploy", "notify"];
