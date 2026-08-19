@@ -23,6 +23,9 @@
  *                                         still-live executor first)
  *   factory-run status [<run_id>] [--json]
  *   factory-run list [--json]
+ *   factory-run prs [--json]             (open non-draft PRs across every
+ *                                         registered rig, with founder-attention
+ *                                         classification — the standup's feed)
  *   factory-run approve <run_id>
  *   factory-run reject <run_id> "<feedback>"
  *   factory-run reply <run_id> "<text>"     (founder turn in a discussion step)
@@ -127,6 +130,14 @@ const {
   parsePrCreateUrl,
   prStatusCommand,
   parsePrStatus,
+  slackLink,
+  commitUrl,
+  compareUrl,
+  prChecksUrl,
+  prAttentionListCommand,
+  parsePrAttention,
+  repoUrlForRig,
+  rigCheckoutPath,
 } = require(path.join(ORCH_DIR, "web", "lib", "github.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
@@ -1090,28 +1101,69 @@ function loadRenderer(name) {
   return mod;
 }
 
-/** Web console URL for a run page (for gate messages judged from a phone):
- *  the tailnet HTTPS hostname when tailscale answers (same discovery as
- *  factory-web-up), loopback otherwise. Never throws. */
-function consoleRunUrl(runId) {
-  let host = null;
-  for (const bin of ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]) {
-    const res = spawnSync(bin, ["status", "--json"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10000,
-    });
-    if (res.status === 0) {
-      try {
-        const dns = (JSON.parse(res.stdout).Self.DNSName || "").replace(/\.$/, "");
-        if (dns) {
-          host = `https://${dns}`;
-          break;
-        }
-      } catch {}
+/** Pure precedence core for the web console base URL (exercised by selftest):
+ *  FACTORY_CONSOLE_URL env → rigs.json "consoleUrl" → tailscale-discovered
+ *  DNS name as https with NO port (tailscale serve fronts 4620 on 443) →
+ *  loopback. Trailing slashes and the DNS trailing dot are trimmed. */
+function resolveConsoleBase({ env, rigsUrl, discovered }) {
+  for (const v of [env, rigsUrl]) {
+    if (typeof v === "string" && v.trim()) return v.trim().replace(/\/+$/, "");
+  }
+  if (typeof discovered === "string" && discovered.trim()) {
+    return `https://${discovered.trim().replace(/\.$/, "")}`;
+  }
+  return "http://127.0.0.1:4620";
+}
+
+/** Web console base URL, resolved once per process — tailscale discovery
+ *  (same as factory-web-up) can spawn a 10s-timeout probe, so gate loops and
+ *  status sweeps must never pay it per message. Never throws. */
+let _consoleBase = null;
+function consoleBase() {
+  if (_consoleBase) return _consoleBase;
+  const env = process.env.FACTORY_CONSOLE_URL;
+  const rigsUrl = RIGS.consoleUrl;
+  let discovered = null;
+  const configured = [env, rigsUrl].some((v) => typeof v === "string" && v.trim());
+  if (!configured) {
+    for (const bin of ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]) {
+      const res = spawnSync(bin, ["status", "--json"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 10000,
+      });
+      if (res.status === 0) {
+        try {
+          const dns = (JSON.parse(res.stdout).Self.DNSName || "").replace(/\.$/, "");
+          if (dns) {
+            discovered = dns;
+            break;
+          }
+        } catch {}
+      }
     }
   }
-  return `${host || "http://127.0.0.1:4620"}/#/run/${runId}`;
+  _consoleBase = resolveConsoleBase({ env, rigsUrl, discovered });
+  return _consoleBase;
+}
+
+/** Web console URL for a run page (for gate messages judged from a phone). */
+function consoleRunUrl(runId) {
+  return `${consoleBase()}/#/run/${runId}`;
+}
+
+/** The one added line per founder-action message: a Slack-linked console
+ *  deep link (`Console: <base/#/run/<id>|run <id>>`). */
+function consoleLine(runId) {
+  return `Console: ${slackLink(consoleRunUrl(runId), `run ${runId}`)}`;
+}
+
+/** Failure messages' PR-checks pointer: one "Checks:" line linking the PR's
+ *  checks page when the run has a recorded PR, empty otherwise — a run
+ *  without a PR keeps today's message byte-identical. */
+function prChecksLine(run) {
+  const link = run.pr ? slackLink(prChecksUrl(run.pr.url), `PR #${run.pr.number} checks`) : null;
+  return link ? `\nChecks: ${link}` : "";
 }
 
 /** Structural enforcement of protected paths, run before every execution of a
@@ -1288,6 +1340,15 @@ function pushRunBranch(run) {
   const r = runCommand(pushRunBranchCommand(branch), run.worktree, path.join(runDir, "push.log"), 2);
   if (r.ok) {
     log(runDir, `pushed ${branch} to origin`);
+    // Record the published head: completion/sync messages link the head
+    // commit long after the worktree may have been torn down, so message
+    // time can never rev-parse it.
+    const head = git(run.worktree, ["rev-parse", "HEAD"]);
+    const sha = head.status === 0 ? head.stdout.trim() : "";
+    if (sha && run.headSha !== sha) {
+      run.headSha = sha;
+      saveRun(run);
+    }
   } else {
     log(runDir, `push FAILED for ${branch}: ${r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (commits stay local; see push.log)`);
   }
@@ -1316,7 +1377,8 @@ function waitForGate(run, step) {
         (p.url ? `Preview: ${p.url}\n` : "(no preview URL captured — see deploy.log)\n") +
         `Release decision: *${d.kind || "unknown"}*${d.failSafe ? " — FAIL-SAFE: the decision agent errored or was ambiguous, so it defaulted to a full build" : ""}` +
         (d.reasoning ? `\n> ${d.reasoning.slice(0, 700)}` : "") +
-        `\n\nApprove to merge+deploy: \`factory-run approve ${run.id}\` / reject: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`,
+        `\n\nApprove to merge+deploy: \`factory-run approve ${run.id}\` / reject: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).\n` +
+        consoleLine(run.id),
       qrPath
     );
   } else {
@@ -1326,7 +1388,8 @@ function waitForGate(run, step) {
       run,
       `:clipboard: Run ${run.id} (${run.workflow} on ${run.rig}) has a plan awaiting approval.\n\n` +
         plan.slice(0, 2800) +
-        `\n\nApprove: \`factory-run approve ${run.id}\` / reject with feedback: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).`
+        `\n\nApprove: \`factory-run approve ${run.id}\` / reject with feedback: \`factory-run reject ${run.id} "..."\` (or just tell the chief of staff).\n` +
+        consoleLine(run.id)
     );
   }
   if (!sent) {
@@ -1477,7 +1540,7 @@ function waitForCheckGate(run, step, rig, check, failure) {
     run,
     `:vertical_traffic_light: Run ${id} (${run.workflow} on ${run.rig}) — founder-gated check FAILED: \`${check.cmd}\`.\n\n` +
       rendered.text.slice(0, 2400) +
-      `\n\nFull comparison (timeline, numbers, debug video): ${consoleRunUrl(id)}\n` +
+      `\n\n${slackLink(consoleRunUrl(id), "Full comparison (timeline, numbers, debug video)")}\n` +
       `Approve = accept the new behaviour (harness re-baselines, checks re-run): \`factory-run approve ${id}\`\n` +
       `Reject = end the run: \`factory-run reject ${id} "<why>"\`\n` +
       `Steer the implementer instead: \`factory-run reply ${id} "<instruction>"\` (or just tell the chief of staff).`,
@@ -1679,7 +1742,8 @@ function runDiscussionStep(run, step) {
       `:speech_balloon: Run ${id}${opening} — *${step.id}* turn ${turns.length}/${maxTurns}:\n\n` +
         (turnText || "").slice(0, 2800) +
         `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
-        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
+        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).\n` +
+        consoleLine(id)
     );
     if (!sent) {
       return {
@@ -1705,7 +1769,8 @@ function runDiscussionStep(run, step) {
       `:speech_balloon: Run ${id} (${run.workflow} on ${run.rig}) — *${step.id}* re-opened at turn ${turns.length}/${maxTurns}, waiting for you:\n\n` +
         (lastTurn.text || "").slice(0, 2800) +
         `\n\nReply: \`factory-run reply ${id} "<text>"\` · go-ahead: \`factory-run approve ${id}\` · ` +
-        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).`
+        `don't build: \`factory-run reject ${id} "<why>"\` (or just tell the chief of staff).\n` +
+        consoleLine(id)
     );
     if (!sent) {
       return {
@@ -3154,20 +3219,29 @@ function execRun(id) {
               return run.prompt.slice(0, 80);
             }
           })();
+          // Links live behind words the message already says (mrkdwn
+          // <url|label> via the shared github.mjs helpers); a non-GitHub or
+          // remote-less rig resolves repoUrl null and every fallback below is
+          // today's backtick text — never a broken <|> fragment.
+          const repoUrl = repoUrlForRig(ORCH_DIR, run.rig);
+          const branchRef = slackLink(compareUrl(repoUrl, run.baseBranch, runBranch(run)), runBranch(run)) || `\`${runBranch(run)}\``;
+          const headRef = slackLink(commitUrl(repoUrl, run.headSha), String(run.headSha || "").slice(0, 8));
           const lines = [`:white_check_mark: Run ${id} complete: *${planTitle}*`];
-          lines.push(`Rig: ${run.rig} · branch \`${runBranch(run)}\` · worktree kept for merge review`);
+          lines.push(`Rig: ${run.rig} · branch ${branchRef}${headRef ? ` · head ${headRef}` : ""} · worktree kept for merge review`);
           lines.push(run.artifactUrl ? `Install/preview: ${run.artifactUrl}` : run.deployHeld ? `Deploy held — release with \`factory-run deploy ${id}\` or the console.` : "No deployable artifact for this rig.");
           if (run.artifactUrl && run.preview && run.preview.decision && run.preview.decision.kind === "build") {
             lines.push(`:warning: This run's release decision was *build* — the production OTA update will not reach devices until a new production build ships.`);
           }
           if (run.pr) {
-            lines.push(`Review & merge the PR: ${run.pr.url} — then \`factory-run sync ${id}\` (or the console's Sync button) marks the run done.`);
+            const prRef = slackLink(run.pr.url, `PR #${run.pr.number}`) || run.pr.url;
+            lines.push(`Review & merge the PR: ${prRef} — then \`factory-run sync ${id}\` (or the console's Sync button) marks the run done.`);
             lines.push(`Follow-up on the same PR: \`factory-run followup ${id} --workflow feature-dev --prompt "..."\` (or the run page's composer).`);
           } else {
             lines.push(`Merge when happy: \`git -C ${rig.path} merge ${runBranch(run)}\` (local merge — the engine never pushes ${run.baseBranch}; or ask the chief of staff).`);
             if (run.prWarning) lines.push(`:warning: No PR: ${run.prWarning}`);
           }
           if (run.deployWarning) lines.push(`:rotating_light: ${run.deployWarning}`);
+          lines.push(consoleLine(id));
           const usage = usageLine(id);
           if (usage) lines.push(usage);
           notify(run, lines.join("\n"), run.qrPath);
@@ -3297,7 +3371,7 @@ function execRun(id) {
         setState(run, "failed", result.summary);
         {
           const usage = usageLine(id);
-          notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}${usage ? `\n${usage}` : ""}`);
+          notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}${prChecksLine(run)}${usage ? `\n${usage}` : ""}`);
         }
         return;
       }
@@ -3338,7 +3412,7 @@ function execRun(id) {
     // A crash racing an external cancel must not overwrite the terminal state.
     if (!terminalStateOnDisk(id)) {
       setState(run, "failed", String(err.message || err));
-      notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}`);
+      notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}${prChecksLine(run)}`);
     }
     throw err;
   }
@@ -4043,7 +4117,7 @@ function cmdWatchdog(argv) {
           thresholdHours: decision.thresholdHours,
           usage: usageLine(id),
           action,
-        })
+        }) + `\n${consoleLine(id)}`
       );
       entry.alerted = sent;
       // Snapshot only on a successful send: a failed send must be retried by
@@ -4092,8 +4166,13 @@ function gateAge(sinceIso) {
  *  discussion helpers) — plus its age (gateAge; for discussions derived from
  *  the same activity-vs-clock-floor rule the executor's reminders use).
  *  For awaiting-merge runs, `pendingMerge` names the branch the founder must
- *  merge — machine-readable, so the standup never parses history strings. */
+ *  merge — machine-readable, so the standup never parses history strings.
+ *  Every entry carries `consoleUrl`, the run's web-console deep link
+ *  (consoleRunUrl), so consumers link runs without re-deriving the base. */
 function statusExtras(run) {
+  // Every entry carries its console deep link so consumers (the standup
+  // skill) link runs without knowing the base-URL resolution rules.
+  const consoleUrl = consoleRunUrl(run.id);
   const pendingMerge =
     run.state === "awaiting-merge"
       ? { branch: runBranch(run), baseBranch: run.baseBranch || null, pr: run.pr || null }
@@ -4102,11 +4181,11 @@ function statusExtras(run) {
   try {
     wf = loadWorkflow(run.workflow);
   } catch {
-    return { currentStep: null, gate: null, pendingMerge };
+    return { currentStep: null, gate: null, pendingMerge, consoleUrl };
   }
   const step = wf.steps[Math.min(run.stepIndex || 0, wf.steps.length - 1)];
   const currentStep = { index: run.stepIndex || 0, total: wf.steps.length, id: step.id, type: step.type };
-  if (run.state !== "awaiting-approval") return { currentStep, gate: null, pendingMerge };
+  if (run.state !== "awaiting-approval") return { currentStep, gate: null, pendingMerge, consoleUrl };
   if (step.type === "discussion") {
     const runDir = runDirOf(run.id);
     // A run dir can be absent (pruned, or a synthetic run in selftest); report
@@ -4116,6 +4195,7 @@ function statusExtras(run) {
         currentStep,
         gate: { kind: "discussion", pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
         pendingMerge,
+        consoleUrl,
       };
     }
     const turns = readDiscussionTurns(runDir, step.id);
@@ -4136,6 +4216,7 @@ function statusExtras(run) {
         ...gateAge(since || run.updatedAt),
       },
       pendingMerge,
+      consoleUrl,
     };
   }
   if (step.type === "commands") {
@@ -4146,6 +4227,7 @@ function statusExtras(run) {
       currentStep,
       gate: { kind: "check-gate", check: cg ? cg.cmd : null, pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
       pendingMerge,
+      consoleUrl,
     };
   }
   // Plan/preview gate (or any non-discussion approval wait): no reply
@@ -4156,6 +4238,7 @@ function statusExtras(run) {
     currentStep,
     gate: { kind, pendingReplies: null, lastActivityAt: run.updatedAt || null, ...gateAge(run.updatedAt) },
     pendingMerge,
+    consoleUrl,
   };
 }
 
@@ -4216,6 +4299,90 @@ function cmdStatus(argv) {
     }
   }
   if (runs.length === 0) console.log("no runs");
+}
+
+/** Every registered rig name: rigs.json entries plus factory:<app> for each
+ *  existing checkout under factoryApps.basePath (same addressing rule as
+ *  rigCheckoutPath — slug-named directories only). */
+function allRigNames() {
+  const names = Object.keys(RIGS.rigs || {});
+  if (RIGS.factoryApps && RIGS.factoryApps.basePath) {
+    const base = expandHome(String(RIGS.factoryApps.basePath));
+    let entries = [];
+    try {
+      entries = fs.readdirSync(base, { withFileTypes: true });
+    } catch {}
+    for (const e of entries) {
+      if (!e.isDirectory() || !/^[a-z0-9-]+$/.test(e.name)) continue;
+      if (fs.existsSync(path.join(base, e.name, ".git"))) names.push(`factory:${e.name}`);
+    }
+  }
+  return names;
+}
+
+/** `factory-run prs [--json]`: the open-PR feed across every registered rig —
+ *  the standup's one documented source for "PRs waiting on the founder".
+ *  One entry per open non-draft PR: {rig, number, title, url, createdAt,
+ *  ageDays, attention, checks} (classification: parsePrAttention). Rigs
+ *  without a GitHub origin are skipped silently; a gh failure on one rig
+ *  degrades to a per-rig {rig, error} entry — the sweep always exits 0, so a
+ *  Slack/GitHub outage can never fail the standup's gather step. */
+function cmdPrs(argv) {
+  const asJson = argv.includes("--json");
+  const now = Date.now();
+  const entries = [];
+  for (const rigName of allRigNames()) {
+    const repoUrl = repoUrlForRig(ORCH_DIR, rigName);
+    if (!repoUrl) continue;
+    const dir = rigCheckoutPath(ORCH_DIR, rigName);
+    const res = spawnSync("gh", prAttentionListCommand(), {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 60000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (res.error || res.status !== 0) {
+      const detail = (res.stderr || res.stdout || String((res.error && res.error.message) || "gh did not run")).trim();
+      entries.push({ rig: rigName, error: `gh pr list failed: ${detail.split("\n")[0].slice(0, 300)}` });
+      continue;
+    }
+    let parsed = null;
+    try {
+      parsed = JSON.parse(res.stdout);
+    } catch {}
+    if (!Array.isArray(parsed)) {
+      entries.push({ rig: rigName, error: "gh pr list returned unparseable JSON" });
+      continue;
+    }
+    for (const pr of parsePrAttention(parsed)) {
+      const createdMs = Date.parse(pr.createdAt || "");
+      entries.push({
+        rig: rigName,
+        number: pr.number,
+        title: pr.title,
+        url: pr.url,
+        createdAt: pr.createdAt,
+        ageDays: Number.isFinite(createdMs) ? Math.round(Math.max(0, now - createdMs) / 8640000) / 10 : null,
+        attention: pr.attention,
+        checks: pr.checks,
+      });
+    }
+  }
+  if (asJson) {
+    console.log(JSON.stringify(entries, null, 2));
+    return;
+  }
+  for (const e of entries) {
+    if (e.error) {
+      console.log(`${e.rig}: ERROR — ${e.error}`);
+      continue;
+    }
+    console.log(
+      `${e.rig}  #${e.number}  ${e.attention.padEnd(18)} checks ${e.checks.padEnd(8)} ${e.ageDays !== null ? `${e.ageDays}d` : "age?"}  ${e.title.slice(0, 60)}  ${e.url}`
+    );
+  }
+  if (entries.length === 0) console.log("no open PRs across registered rigs");
 }
 
 function cmdGate(id, decision, feedback) {
@@ -4417,7 +4584,8 @@ function syncOneRun(id) {
     notify(
       run,
       `:tada: Run ${id}: PR #${run.pr.number} merged on GitHub — run is done.${restartNote ? ` ${restartNote}.` : ""} ` +
-        `Cleanup reclaims the worktree/branch now that the PR is merged.`
+        `Cleanup reclaims the worktree/branch now that the PR is merged.\n` +
+        consoleLine(id)
     );
     log(runDir, `sync: ${outcome.reason} -> done${restartNote ? ` (${restartNote})` : ""}`);
     return { status: "done", message: `${outcome.reason} — run is done${restartNote ? `; ${restartNote}` : ""}` };
@@ -4668,7 +4836,7 @@ function execDeployHeld(id) {
   try {
     if (pub.url) tArtifact(id, "deploy", "artifact_url", pub.url);
   } catch {}
-  notify(run, `:package: Run ${id}: held deploy released — ${pub.summary}`, pub.qrPath || null);
+  notify(run, `:package: Run ${id}: held deploy released — ${pub.summary}\n${consoleLine(id)}`, pub.qrPath || null);
 }
 
 function cmdPreflight(argv) {
@@ -5227,11 +5395,48 @@ function cmdSelftest() {
     ["awaiting-merge run reports a machine-readable pendingMerge", (() => { const p = sx({ stepIndex: 11, state: "awaiting-merge" }).pendingMerge; return p !== null && p.branch === "factory/selftest-0000" && p.baseBranch === "main"; })()],
     ["pendingMerge honors an inherited run.branch and carries the PR", (() => { const p = sx({ stepIndex: 11, state: "awaiting-merge", branch: "factory/feature-root", pr: { number: 5, url: "https://github.com/o/r/pull/5" } }).pendingMerge; return p !== null && p.branch === "factory/feature-root" && p.pr && p.pr.number === 5; })()],
     ["non-awaiting-merge run has no pendingMerge", sx({}).pendingMerge === null],
-    ["unknown workflow degrades to nulls", JSON.stringify(sx({ workflow: "no-such-workflow" })) === JSON.stringify({ currentStep: null, gate: null, pendingMerge: null })],
+    ["every status entry carries its console run link", (() => { const u = sx({}).consoleUrl; return typeof u === "string" && u.endsWith("/#/run/selftest-0000"); })()],
+    ["unknown workflow degrades to nulls but keeps consoleUrl", (() => { const s = sx({ workflow: "no-such-workflow" }); return s.currentStep === null && s.gate === null && s.pendingMerge === null && typeof s.consoleUrl === "string" && s.consoleUrl.endsWith("/#/run/selftest-0000"); })()],
   ];
   for (const [name, ok] of statusChecks) {
     console.log(`status-json ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`status-json check failed: ${name}`);
+  }
+  // Console base-URL precedence (pure) + the run deep-link shape. Deep-linking
+  // messages depend on the tailnet URL carrying NO port (tailscale serve
+  // fronts 4620 on 443) and on env/rigs.json overrides winning over discovery.
+  const consoleChecks = [
+    ["env var wins over everything", resolveConsoleBase({ env: "https://console.example", rigsUrl: "https://rigs.example", discovered: "mac.tailnet.ts.net" }) === "https://console.example"],
+    ["rigs.json consoleUrl beats discovery", resolveConsoleBase({ env: "", rigsUrl: "https://rigs.example/", discovered: "mac.tailnet.ts.net" }) === "https://rigs.example"],
+    ["tailscale discovery is https with no port", resolveConsoleBase({ env: undefined, rigsUrl: undefined, discovered: "mac.tailnet.ts.net." }) === "https://mac.tailnet.ts.net"],
+    ["nothing resolvable falls back to loopback:4620", resolveConsoleBase({ env: "  ", rigsUrl: null, discovered: null }) === "http://127.0.0.1:4620"],
+    ["run deep link is <base>/#/run/<id>", /\/#\/run\/selftest-run$/.test(consoleRunUrl("selftest-run"))],
+    ["console line is a Slack-linked deep link", /^Console: <https?:\/\/\S+\/#\/run\/selftest-run\|run selftest-run>$/.test(consoleLine("selftest-run"))],
+  ];
+  for (const [name, ok] of consoleChecks) {
+    console.log(`console-url ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`console-url check failed: ${name}`);
+  }
+  // Slack link composition + the PR attention feed (pure cores from
+  // web/lib/github.mjs; deep coverage lives in github.test.mjs — this proves
+  // the engine's require(esm) wiring resolves the same helpers its notify
+  // messages and `prs` subcommand are built from).
+  const slackLinkChecks = [
+    ["labels escape mrkdwn control chars", slackLink("https://github.com/o/r", "a & <b>") === "<https://github.com/o/r|a &amp; &lt;b&gt;>"],
+    ["null url degrades to null, never a broken <|>", slackLink(null, "x") === null && slackLink("not a url", "x") === null],
+    ["compare url spans base...branch", compareUrl("https://github.com/o/r", "main", "factory/x") === "https://github.com/o/r/compare/main...factory/x"],
+    ["null repo url yields no compare/commit links", compareUrl(null, "main", "factory/x") === null && commitUrl(null, "abc123d") === null],
+    ["commit url takes the recorded head sha", commitUrl("https://github.com/o/r", "abc123def") === "https://github.com/o/r/commit/abc123def"],
+    ["pr checks url appends /checks to a PR url only", prChecksUrl("https://github.com/o/r/pull/7") === "https://github.com/o/r/pull/7/checks" && prChecksUrl("https://github.com/o/r") === null],
+    ["gh pr attention argv matches the shared contract", JSON.stringify(prAttentionListCommand()) === JSON.stringify(["pr", "list", "--state", "open", "--json", "number,title,url,createdAt,reviewDecision,mergeable,statusCheckRollup,isDraft"])],
+    ["approved+mergeable PR needs the founder", parsePrAttention([{ number: 1, url: "u", reviewDecision: "APPROVED", mergeable: "MERGEABLE", statusCheckRollup: [{ conclusion: "SUCCESS" }] }])[0].attention === "approved-mergeable"],
+    ["failing checks outrank the review decision", parsePrAttention([{ number: 1, url: "u", reviewDecision: "APPROVED", mergeable: "MERGEABLE", statusCheckRollup: [{ conclusion: "FAILURE" }] }])[0].attention === "failing-checks"],
+    ["draft PRs are excluded from the feed", parsePrAttention([{ number: 1, url: "u", isDraft: true }]).length === 0],
+    ["garbage gh output degrades to an empty feed", parsePrAttention("gh exploded").length === 0 && parsePrAttention(null).length === 0],
+  ];
+  for (const [name, ok] of slackLinkChecks) {
+    console.log(`slack-link ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`slack-link check failed: ${name}`);
   }
   // Plan-profile lint core (pure — from web/lib/plan-md.mjs; the deep coverage
   // lives in plan-md.test.mjs — this proves the engine's require(esm) wiring
@@ -5525,6 +5730,7 @@ try {
   else if (cmd === "resume") cmdResume(rest);
   else if (cmd === "retry") cmdRetry(rest);
   else if (cmd === "status" || cmd === "list") cmdStatus(rest);
+  else if (cmd === "prs") cmdPrs(rest);
   else if (cmd === "approve") cmdGate(resolveRunId(rest[0]), "approve");
   else if (cmd === "reject") cmdGate(resolveRunId(rest[0]), "reject", rest[1]);
   else if (cmd === "reply") cmdReply(resolveRunId(rest[0]), rest.slice(1).join(" "));
@@ -5544,7 +5750,7 @@ try {
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|retry|status|list|approve|reject|reply|steer|sync|followup|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|prs|approve|reject|reply|steer|sync|followup|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
