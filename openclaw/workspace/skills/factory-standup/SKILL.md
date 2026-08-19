@@ -14,8 +14,13 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
 1. Runs, gates, costs — from the engine, never from STATE.md:
    `~/src/app-factory/orchestration/bin/factory-run status --json`. Every run carries
    its `state`, a `currentStep` (`{index, total, id, type}`), per-run `usage`
-   (cost/tokens), and — for runs in state `awaiting-approval` — a `gate` object
-   (`kind`: `plan-gate` or `discussion`, plus `pendingReplies` and `lastActivityAt`).
+   (cost/tokens), a `consoleUrl` (the run's web-console deep link), and — for runs
+   in state `awaiting-approval` — a `gate` object (`kind`: `plan-gate` or
+   `discussion`, plus `pendingReplies` and `lastActivityAt`).
+   - **Linking runs**: every run you mention in the standup is a Slack mrkdwn link
+     using its `consoleUrl` from `status --json` — `<consoleUrl|run <id>>` — so the
+     founder can tap straight into the run page from his phone. Never paste a bare
+     run id where a link would do, and never hand-build console URLs.
    - **Pending gates** = every run in state `awaiting-approval`. A run in a
      discussion step awaiting a founder reply IS a pending gate — surface it in
      "Needs founder" exactly like a plan gate, with how long it has been waiting
@@ -39,14 +44,21 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
      didn't-land bucket; give each its one-line cause.
    - **Costs**: per-run `usage` from `status --json`; for aggregates (yesterday's or
      the week's spend) use `factory-run report --days N --json` (telemetry-db digest).
-2. `~/src/app-factory/STATE.md` — narrative only: current phase, active apps and their
+2. Open PRs across all rigs:
+   `~/src/app-factory/orchestration/bin/factory-run prs --json`. One entry per open
+   non-draft PR: `{rig, number, title, url, createdAt, ageDays, attention, checks}`,
+   where `attention` is `approved-mergeable`, `review-requested`, `failing-checks`,
+   or `none`. A per-rig `{rig, error}` entry means the listing failed for that rig —
+   say so rather than claiming zero PRs there. This feed is the authority on PRs
+   waiting for the founder; never shell out to `gh` yourself.
+3. `~/src/app-factory/STATE.md` — narrative only: current phase, active apps and their
    stages, yesterday's plan. Do not source run states, pending gates, or costs from it;
    the engine (step 1) is the authority on those.
-3. Per active app: `apps/<name>/STATUS.md` (stage, in-flight tasks, blockers) and
+4. Per active app: `apps/<name>/STATUS.md` (stage, in-flight tasks, blockers) and
    recent git log in its workspace.
-4. Portfolio pulse (only once analytics exist — Phase 3+): last nightly digest.
-5. Yesterday's standup thread: which proposals were adjusted, which proceeded by cutoff.
-6. **Introspection evidence** — `factory-run report --days 7 --json` plus yesterday's
+5. Portfolio pulse (only once analytics exist — Phase 3+): last nightly digest.
+6. Yesterday's standup thread: which proposals were adjusted, which proceeded by cutoff.
+7. **Introspection evidence** — `factory-run report --days 7 --json` plus yesterday's
    run dirs. You are looking for ONE thing worth changing about the pipeline itself:
    - a step that failed, timed out, retried, or burned unusual cost (`factory-run
      context <id>`);
@@ -85,9 +97,18 @@ the founder says yes. Once a week (or when the item is big) the answer is "run
 self-review on it" rather than an inline fix.
 
 **Needs founder** — pending gates, pending merges (with branch names), held deploys,
-and up to 3 decision-shaped questions, each with your recommended default so a
-one-word reply resolves it. The introspection change, if it needs a yes, is one of
-them.
+an "Open PRs" list, and up to 3 decision-shaped questions, each with your recommended
+default so a one-word reply resolves it. The introspection change, if it needs a yes,
+is one of them.
+
+- **Open PRs** (from `factory-run prs --json`): one line per PR — the title as a
+  Slack link to its `url` (`<url|title (#number)>`), then its attention state
+  (`approved-mergeable` = "merge when happy", `review-requested` = "awaiting your
+  review", `failing-checks` = "checks failing"), age (`ageDays`), and check status
+  (`checks`). Order by attention urgency, then age. PRs with attention `none` are
+  omitted unless nothing else is open; a rig's `error` entry gets one honest line.
+  Where a PR belongs to a run you already listed (pending merge), fold the link
+  into that line instead of repeating it.
 
 ## After posting
 
