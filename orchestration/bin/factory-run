@@ -128,6 +128,13 @@ const {
   prStatusCommand,
   parsePrStatus,
 } = require(path.join(ORCH_DIR, "web", "lib", "github.mjs"));
+// Sleep-proof spawn pure core (caffeinate wrapping for long-lived children +
+// the sleep-kill vs timeout vs plain-exit failure classifier) — same web-lib
+// pattern; deep coverage lives in test/agent-spawn.test.mjs.
+const {
+  sleepProofSpawn,
+  classifyAgentStepFailure,
+} = require(path.join(ORCH_DIR, "web", "lib", "agent-spawn.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -392,9 +399,13 @@ function sh(cmd, opts = {}) {
   return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts });
 }
 
-/** Run a shell command, capturing output to a log file. Returns {ok, output}. */
+/** Run a shell command, capturing output to a log file. Returns {ok, output}.
+ *  Sleep-proofed: setup/checks/deploy commands (eas build especially) run 30+
+ *  minutes unattended, so on darwin the spawn holds a caffeinate power
+ *  assertion for the child's lifetime — idle sleep must not kill a step. */
 function runCommand(cmd, cwd, logFile, timeoutMinutes = 30) {
-  const res = spawnSync("bash", ["-lc", cmd], {
+  const wrapped = sleepProofSpawn(process.platform, "bash", ["-lc", cmd]);
+  const res = spawnSync(wrapped.cmd, wrapped.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -901,9 +912,16 @@ function runAgentStep(run, step, extra) {
   if (step.model) args.push("--model", step.model);
   log(runDir, `agent step '${step.id}' starting (attempt ${attempt}, model=${step.model || "default"}, agent=${step.agent || "none"}, cwd=${run.worktree})`);
   const fd = fs.openSync(transcriptFile, "w");
+  // Sleep-proofed on darwin: caffeinate -is holds a power assertion for the
+  // agent's whole lifetime (released on any exit path) so idle sleep cannot
+  // kill an hours-long step; argv, stdio, env, timeout, and exit status all
+  // pass through untouched. On timeout, spawnSync signals only caffeinate —
+  // claude survives as a process-group orphan, exactly the case
+  // reapAgentSurvivors below already handles.
+  const wrapped = sleepProofSpawn(process.platform, "claude", args);
   let res;
   try {
-    res = spawnSync("claude", args, {
+    res = spawnSync(wrapped.cmd, wrapped.args, {
       cwd: run.worktree,
       encoding: "utf8",
       stdio: ["ignore", fd, "pipe"],
@@ -926,12 +944,20 @@ function runAgentStep(run, step, extra) {
     path.join(runDir, stepDocName(step.id, "output", attempt)),
     extracted.result ? JSON.stringify(extracted.result, null, 2) + "\n" : ""
   );
-  if (res.error && res.error.code === "ETIMEDOUT") {
-    reapAgentSurvivors(runDir);
-    return { ok: false, attempt, summary: `agent step '${step.id}' timed out after ${step.timeoutMinutes}m`, usage: extracted.usage };
-  }
-  if (res.status !== 0) {
-    return { ok: false, attempt, summary: `agent step '${step.id}' exited ${res.status}: ${(res.stderr || "").slice(0, 500)}`, usage: extracted.usage };
+  if (res.error && res.error.code === "ETIMEDOUT") reapAgentSurvivors(runDir);
+  const failure = classifyAgentStepFailure({
+    stepId: step.id,
+    timeoutMinutes: step.timeoutMinutes || 30,
+    errorCode: res.error ? res.error.code : undefined,
+    status: res.status,
+    stderr: res.stderr,
+    result: extracted.result,
+  });
+  if (failure) {
+    if (failure.kind === "sleep") {
+      log(runDir, `agent step '${step.id}' classified as sleep-kill: system sleep killed the in-flight API call (terminal_reason api_error), not a genuine timeout`);
+    }
+    return { ok: false, attempt, summary: failure.summary, usage: extracted.usage };
   }
   const resultText =
     extracted.result && typeof extracted.result.result === "string"
