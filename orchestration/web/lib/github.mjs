@@ -25,6 +25,43 @@ function readJson(p, fallback) {
 }
 
 /**
+ * Slack mrkdwn link `<url|label>` with the label's mrkdwn control characters
+ * escaped (&, <, > — Slack's documented escaping set). Pure; null when the
+ * url is not http(s) or the label is blank, so call sites can `|| fallback`
+ * to today's backtick text instead of ever emitting a broken `<|>` fragment.
+ */
+export function slackLink(url, label) {
+  if (typeof url !== "string" || !/^https?:\/\/\S+$/.test(url.trim())) return null;
+  const text = String(label ?? "").trim();
+  if (!text) return null;
+  const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<${url.trim()}|${escaped}>`;
+}
+
+/** GitHub commit page URL, or null when the repo URL or sha is unusable. */
+export function commitUrl(repoUrl, sha) {
+  if (typeof repoUrl !== "string" || !repoUrl) return null;
+  const s = typeof sha === "string" ? sha.trim() : "";
+  if (!/^[0-9a-f]{7,40}$/i.test(s)) return null;
+  return `${repoUrl}/commit/${s}`;
+}
+
+/** GitHub compare view (base...branch) URL, or null on any missing part. */
+export function compareUrl(repoUrl, base, branch) {
+  if (typeof repoUrl !== "string" || !repoUrl) return null;
+  const b = typeof base === "string" ? base.trim() : "";
+  const h = typeof branch === "string" ? branch.trim() : "";
+  if (!b || !h) return null;
+  return `${repoUrl}/compare/${b}...${h}`;
+}
+
+/** A GitHub PR's checks page URL, or null when prUrl isn't a PR URL. */
+export function prChecksUrl(prUrl) {
+  const m = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/.exec(String(prUrl || "").trim());
+  return m ? `${m[0]}/checks` : null;
+}
+
+/**
  * Normalize a git remote URL to a GitHub web URL, or null if it isn't GitHub.
  * Pure — exported for tests.
  *   git@github.com:owner/repo.git       → https://github.com/owner/repo
@@ -104,6 +141,73 @@ export function parsePrStatus(parsed) {
         ? parsed.mergeCommit.oid
         : null,
   };
+}
+
+/** argv for `gh <...>`: every open PR with the fields the attention
+ *  classifier (parsePrAttention) reads — the `factory-run prs` feed. */
+export function prAttentionListCommand() {
+  return [
+    "pr", "list", "--state", "open",
+    "--json", "number,title,url,createdAt,reviewDecision,mergeable,statusCheckRollup,isDraft",
+  ];
+}
+
+/** Roll a PR's statusCheckRollup (CheckRun `conclusion`/`status`, plain
+ *  StatusContext `state`) into one word: "failing" beats "pending" beats
+ *  "passing"; no checks at all is "none". Garbage entries are skipped. */
+function summarizeChecks(rollup) {
+  if (!Array.isArray(rollup) || rollup.length === 0) return "none";
+  let pending = false;
+  for (const c of rollup) {
+    if (!c || typeof c !== "object") continue;
+    const outcome = String(c.conclusion || c.state || "").toUpperCase();
+    if (["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(outcome)) {
+      return "failing";
+    }
+    if (!outcome || ["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "EXPECTED"].includes(outcome)) pending = true;
+  }
+  return pending ? "pending" : "passing";
+}
+
+/**
+ * Classify `gh pr list` output (prAttentionListCommand) into the open-PR
+ * attention feed: [{number, title, url, createdAt, attention, checks}].
+ * `attention` says why the PR needs the founder, first match wins:
+ *   failing-checks     — any check failed (nothing to merge yet, but act);
+ *   approved-mergeable — reviewed, green, one click from landing;
+ *   review-requested   — awaiting a review (REVIEW_REQUIRED, or no review
+ *                        decision at all — every factory PR is founder-merged,
+ *                        so an unreviewed open PR is his to look at);
+ *   none               — the ball is elsewhere (e.g. CHANGES_REQUESTED means
+ *                        the implementer owes a revision, or approved but
+ *                        conflicting).
+ * Drafts are excluded. Garbage (non-array input, malformed entries) degrades
+ * to [] / skipped entries — never throws.
+ */
+export function parsePrAttention(parsed) {
+  if (!Array.isArray(parsed)) return [];
+  const out = [];
+  for (const p of parsed) {
+    if (!p || typeof p !== "object" || Array.isArray(p)) continue;
+    if (!Number.isInteger(p.number) || typeof p.url !== "string") continue;
+    if (p.isDraft === true) continue;
+    const checks = summarizeChecks(p.statusCheckRollup);
+    const decision = String(p.reviewDecision || "").toUpperCase();
+    const mergeable = String(p.mergeable || "").toUpperCase();
+    let attention = "none";
+    if (checks === "failing") attention = "failing-checks";
+    else if (decision === "APPROVED" && mergeable === "MERGEABLE") attention = "approved-mergeable";
+    else if (decision === "REVIEW_REQUIRED" || decision === "") attention = "review-requested";
+    out.push({
+      number: p.number,
+      title: typeof p.title === "string" ? p.title : "",
+      url: p.url,
+      createdAt: typeof p.createdAt === "string" && p.createdAt ? p.createdAt : null,
+      attention,
+      checks,
+    });
+  }
+  return out;
 }
 
 const repoUrlCache = new Map();
