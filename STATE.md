@@ -914,3 +914,111 @@ awaiting review.
 
 **Still unanswered, fourth day:** skip-hero has no ship date, no v1 scope line, no
 store-submission target.
+
+---
+
+## 2026-08-22 18:00 — EOD sync (first since 08-11; STATE was 11 days stale)
+
+Verified against `factory-run status --json` (86 runs), git logs on all three rigs,
+`gh pr` on all three repos, and the run engine logs. The engine remains the authority.
+
+### Correction: the 08-11 "in flight" list was entirely stale
+
+All four items closed days ago and were never recorded:
+
+- `feature-android-pose-parity-spike` (skip-hero) — **done**, PR #3 merged 2026-08-22 11:05.
+- `feature-jittery-compass-driven-map-2` (pace) — **done**, PR #53 merged 08-11.
+- `bug-gates-die-silently-idle` (app-factory) — **done**, PR #1 merged 08-11. D32 shipped.
+- skip-hero PR #4 (golden bootstrap, hand-delivered under D33) — **merged 2026-08-22 11:05**.
+
+**Nothing is in flight as of 18:00 BST.** Every one of the 86 runs is in a terminal
+state (done / closed / failed / cancelled / rejected). No executor is holding a slot,
+no founder gate is open, no run is awaiting merge.
+
+### Today's factory runs: both shipped green, both closed unmerged by the founder
+
+- `bug-four-related-bugs-reported` (pace, $48.65) — green through checks, agentic
+  review PASS, tests, EAS preview published, PR #59 opened 13:20Z. Founder **closed it
+  without merging at 15:50Z, no comment, no review.**
+- `feature-free-skip-mode-landing` (skip-hero, $16.88) — plan discussion reached
+  `go-ahead` in 2 turns, all 4 checks green incl. `golden:check`, review PASS, EAS
+  preview published, PR #6 opened 13:23Z. Founder **closed it without merging at
+  15:49Z, no comment, no review.**
+
+**Why, for #59 at least — the founder beat it by hand.** pace PR #60
+(`fix/recorded-runs-journal-snapshot`, authored by the founder, merged 14:02Z) folds
+journal metadata — notes, visibility, photos — into the recorded-runs snapshot. That is
+the same brief as #59. #59 was superseded, not rejected on quality.
+
+**No such explanation exists for skip-hero #6.** Nothing on skip-hero main touches
+landing counters in free-skip mode. That one reads as a genuine reject with no reason
+recorded. $16.88 with no learning captured.
+
+**The founder built solo all afternoon.** 7 hand commits on pace and 8 on skip-hero
+between 13:00 and 17:40 BST, including a full GTM pack. He was not idle and not waiting
+on the factory — he routed around it.
+
+### Recorded: single-copy work sitting in an orphaned worktree
+
+`orchestration/worktrees/feature-android-pose-parity-spike` is **not a registered git
+worktree** (`git worktree list` shows only main) yet holds **~1,079 uncommitted
+insertions across 22 files plus 27 untracked paths**, including:
+
+- `apps/mobile/modules/skip-hero-mediapipe/` — a whole native Android module
+- `apps/mobile/src/impl/mediapipe-pose-source.ts`
+- ADRs 0028 (hip-oscillation v2 adaptive), 0029 (android live mediapipe module),
+  0030 (session jump-height window)
+
+**None of it exists in `skip-hero` origin/main, none is committed, none is pushed.**
+Its run is marked `done` and its PR #3 is merged, so nothing in the factory is tracking
+it. This is a single copy on one disk. Not touched by this sync — it is the founder's
+call whether it lands or goes.
+
+`orchestration/worktrees/bug-regression-fresh-non-mid` (998MB) is dirty only with
+`package-lock.json` setup churn; its run failed at step 0/7. Safe to delete.
+Combined the two orphans hold **3.1GB**.
+
+### Harness defect found: a run that fails after its PR opens can never be reconciled
+
+`bug-i-have-sign-app` (pace) is recorded **`failed` at step 5/7** — it died on
+`eas update` ("Something prevented Expo from exiting"), *after* PR #55 had already
+been opened. **PR #55 is merged.** The code shipped; the engine still calls the run a
+failure, and there is no exit:
+
+```
+$ factory-run sync bug-i-have-sign-app
+cannot sync bug-i-have-sign-app: run is 'failed' — sync is the exit from awaiting-merge only
+```
+
+`sync` only reconciles `awaiting-merge`. Any run whose PR merges after a post-PR step
+failure is permanently mis-stated. Same shape as the 08-11 retry/idle-clock defect:
+the state machine assumes failure is terminal for the *work*, when it is only terminal
+for the *run*. Candidate for the next app-factory bug-fix run.
+
+### Everything else verified clean
+
+- **No unpushed commits anywhere.** app-factory, skip-hero, pace all level with origin.
+- **`apps/pullup/STATUS.md` re-verified and still correct** — dormant under D27, zero
+  pullup runs in the engine's entire 86-run history, no file under `apps/pullup/`
+  touched since 08-10 (and that was an EOD sync editing STATUS.md itself, not product
+  work). Verification line updated.
+- **The agent workspace still has no remote.** Unchanged since 08-11: `~/.openclaw/workspace`
+  is at `96e3c67` with two empty untracked `memory/` files. USER.md, IDENTITY.md and
+  `memory/` still cannot go to the public app-factory repo without a founder decision.
+- **The 448MB skip-hero footage library remains unbacked-up.** Twelfth day.
+
+### For the founder tomorrow
+
+1. **Why was skip-hero PR #6 closed?** No comment, no review, and nothing on main
+   supersedes it. Without a reason the factory will rebuild the same thing.
+2. **~1,079 lines of Android MediaPipe work exist in exactly one place on disk.** Land
+   it, branch it, or say to bin it — but it should not stay untracked overnight.
+3. **Is the factory still the route for pace and skip-hero?** Both of today's runs were
+   discarded and the founder shipped 15 commits by hand. If hand-building is the mode
+   for now, say so and the factory stops burning ~$65/day producing PRs that get closed.
+4. **skip-hero marketing calendar is drafted and needs the gate.** `marketing/` landed
+   today with a 2-week launch calendar, ASO/naming, and 10 open decisions — but the
+   calendar is anchored to relative "Day 1–14" with **no absolute start date**, and the
+   marketing calendar is one of the three founder approval gates.
+5. **Still unanswered, twelfth day: skip-hero has no ship date, no v1 scope line, no
+   store-submission target.** The GTM pack now presumes a launch that is still unscheduled.
