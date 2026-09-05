@@ -1,20 +1,23 @@
-# Voice — Web Clock
+# Voice — Suit Up
 
 Factory floor: no hype, no fake urgency, no guilt, no social-pressure
-mechanics. Warm, direct, useful. Buttons terse. Empty states human.
+mechanics. Second person, short, direct. Buttons terse. Empty states human.
+Rest days are a rule, not a failure.
 
 ## Vocabulary
 
-Say: clock, rounds, leftover, bar, frame, counted, skipped, pull-ups,
-push-ups, squats, 20 minutes.
+Say: counted, lit, day, rounds, leftover, scaled, Rx, card, clock, frame,
+pull-ups, push-ups, squats, 20 minutes, 30 days.
 
-Do not say: AI magic, superhero, Spider-Man, cinematic, guaranteed form,
-leaderboard, “become him.”
+Do not say: grind, shred, AI, beast, cheat day, superhero, Spider-Man,
+cinematic, guaranteed form, leaderboard, "become him."
 
 ## Examples
 
-- Button: Start / Pause / Finish / +1
-- Framing empty: “Step back until the bar and your full body are in frame.”
-- Reject: “Not counted — lockout short.”
-- Summary: “14 + 7”
-- History empty: “Same clock next time. That’s the whole point.”
+- Button: Suit Up / Pause / Finish / +1 · it was clean
+- Framing empty: "Step back until the bar and your full body are in frame."
+- Reject: "Not counted — chest short. Do it again."
+- Day card: "11 + 4 · day 1 was 3"
+- Calendar: "A day is lit when the camera saw it."
+- Rest day: "Rest counts. Tomorrow's lit."
+- Challenge done: "3 → 11. Thirty days. Post the card."

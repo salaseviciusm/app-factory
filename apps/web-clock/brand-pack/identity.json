@@ -1,11 +1,11 @@
 {
-  "name": "Web Clock",
+  "name": "Suit Up",
   "codename": "web-clock",
-  "bundleId": "com.salaseviciusm.webclock",
-  "scheme": "webclock",
+  "bundleId": "com.salaseviciusm.suitup",
+  "scheme": "suitup",
   "store": {
-    "title": "Web Clock: AMRAP Counter",
-    "subtitle": "Camera reps. 20-min clock.",
-    "primaryKeywordPhrase": "amrap counter"
+    "title": "Suit Up: 30-Day Hero Workout",
+    "subtitle": "The camera counts. Lock in.",
+    "primaryKeywordPhrase": "30 day workout challenge"
   }
 }

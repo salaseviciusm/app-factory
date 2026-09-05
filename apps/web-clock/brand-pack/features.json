@@ -8,18 +8,20 @@
   "analytics": {
     "enabled": true,
     "events": [
-      "session-first-completed",
+      "challenge-started",
       "session-started",
-      "session-completed",
       "rep-counted",
-      "rep-rejected-invalid",
-      "framing-gate-passed",
-      "score-viewed",
-      "rep-adjusted-manual"
+      "rep-rejected",
+      "rep-added-manually",
+      "round-completed",
+      "session-finished",
+      "challenge-day-lit",
+      "challenge-completed",
+      "card-shared"
     ],
-    "activationEvent": "session-first-completed",
-    "habitEvent": "session-completed"
+    "activationEvent": "session-finished",
+    "habitEvent": "challenge-day-lit"
   },
   "notifications": { "enabled": false },
-  "reviewPrompt": { "enabled": true, "milestoneEvent": "session-completed" }
+  "reviewPrompt": { "enabled": true, "milestoneEvent": "challenge-day-lit" }
 }

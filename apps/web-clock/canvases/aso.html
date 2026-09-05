@@ -3,557 +3,2135 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Web Clock — ASO design / UI storyboard</title>
+    <title>Suit Up — ASO design · 30-day hero workout challenge</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Syne:wght@700;800&family=IBM+Plex+Mono:wght@500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./canvas.css" />
+    <style>
+      :root {
+        --bg: #0f1013;
+        --bg2: #16171c;
+        --fg: #eef0f4;
+        --mute: #9a9ea8;
+        --edge: #262831;
+        --accent: #d4ff3f;
+        --on-accent: #0f1013;
+        --danger: #ff5f4a;
+        --display: "Syne", sans-serif;
+        --mono: "IBM Plex Mono", monospace;
+        --num: "Syne", sans-serif;
+        --ui-bg: #0f1013;
+        --ui-fg: #eef0f4;
+        --cam-a: #3a3d47;
+        --cam-b: #131419;
+        --gate: #d4ff3f;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.5 Inter,
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      a {
+        color: inherit;
+      }
+      h1,
+      h2,
+      h3,
+      h4 {
+        margin: 0;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.92em;
+      }
+      .wrap {
+        max-width: 1380px;
+        margin: 0 auto;
+        padding: 0 28px;
+      }
+
+      /* top */
+      .top {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 12px 28px;
+        background: rgba(15, 16, 19, 0.88);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid var(--edge);
+      }
+      .top .code {
+        font: 600 12.5px/1 var(--mono);
+        color: var(--mute);
+      }
+      .top nav {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .top nav a {
+        text-decoration: none;
+        font-size: 12.5px;
+        font-weight: 600;
+        padding: 7px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--edge);
+        background: var(--bg2);
+      }
+      .top nav a.alt {
+        border-style: dashed;
+        color: var(--mute);
+      }
+
+      /* hero */
+      .hero {
+        padding: 64px 0 36px;
+        display: grid;
+        grid-template-columns: 1.25fr 1fr;
+        gap: 40px;
+        align-items: end;
+      }
+      .kicker {
+        font: 600 11.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      .hero h1 {
+        font: 800 72px/0.98 var(--display);
+        letter-spacing: -0.035em;
+        margin-top: 14px;
+      }
+      .hero h1 span {
+        color: var(--accent);
+      }
+      .hero .lede {
+        font-size: 18px;
+        color: #c9cdd6;
+        margin: 20px 0 0;
+        max-width: 62ch;
+      }
+      .plate {
+        background: var(--bg2);
+        border: 1px solid var(--edge);
+        border-radius: 16px;
+        padding: 20px 22px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px 22px;
+      }
+      .plate dt {
+        font: 600 10.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--mute);
+        margin-bottom: 6px;
+      }
+      .plate dd {
+        margin: 0;
+        font-weight: 600;
+        font-size: 15px;
+      }
+      .plate dd small {
+        display: block;
+        font: 500 11px/1.4 var(--mono);
+        color: var(--mute);
+        margin-top: 3px;
+      }
+      .plate .full {
+        grid-column: 1 / -1;
+      }
+
+      /* generic section */
+      .sec {
+        padding: 44px 0 8px;
+      }
+      .sec > h2 {
+        font: 800 30px/1.1 var(--display);
+        letter-spacing: -0.02em;
+      }
+      .sec > .sub {
+        color: var(--mute);
+        margin: 8px 0 22px;
+        max-width: 78ch;
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .grid-3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+      .grid-4 {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+      }
+      .card {
+        background: var(--bg2);
+        border: 1px solid var(--edge);
+        border-radius: 16px;
+        padding: 18px 20px;
+      }
+      .card h4 {
+        font: 600 11px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--mute);
+        margin-bottom: 10px;
+      }
+      .card h3 {
+        font: 800 20px/1.2 var(--display);
+        letter-spacing: -0.01em;
+        margin-bottom: 8px;
+      }
+      .card p {
+        margin: 0;
+        font-size: 14px;
+        color: #d3d6de;
+      }
+      .card p + p {
+        margin-top: 8px;
+      }
+      .card .quote {
+        font: 700 19px/1.3 var(--display);
+        color: var(--fg);
+        letter-spacing: -0.01em;
+      }
+      .card.acc {
+        border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+      }
+      .card.warn {
+        border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+      }
+      .num {
+        font: 800 34px/1 var(--display);
+        color: var(--accent);
+        letter-spacing: -0.02em;
+      }
+      .tag {
+        display: inline-block;
+        font: 600 10.5px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid var(--edge);
+        color: var(--mute);
+        margin-right: 6px;
+        margin-bottom: 8px;
+      }
+      .tag.on {
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+      }
+      .tag.off {
+        color: var(--danger);
+        border-color: color-mix(in srgb, var(--danger) 60%, transparent);
+      }
+
+      /* ---------- App Store product page mock (iOS light) ---------- */
+      .store {
+        background: #ffffff;
+        color: #1c1c1e;
+        border-radius: 22px;
+        padding: 26px 26px 24px;
+        box-shadow: 0 40px 80px -40px rgba(0, 0, 0, 0.8);
+        font-family: -apple-system, BlinkMacSystemFont, Inter, sans-serif;
+      }
+      .store-top {
+        display: grid;
+        grid-template-columns: 118px 1fr auto;
+        gap: 20px;
+        align-items: center;
+      }
+      .icon {
+        width: 118px;
+        height: 118px;
+        border-radius: 26px;
+        position: relative;
+        overflow: hidden;
+        background: #0f1013;
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.08),
+          0 8px 20px -10px rgba(0, 0, 0, 0.5);
+      }
+      .icon svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .store-top h3 {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+      }
+      .store-top .subline {
+        color: #6e6e73;
+        font-size: 15px;
+        margin-top: 4px;
+      }
+      .store-top .dev {
+        color: #0a84ff;
+        font-size: 13px;
+        margin-top: 8px;
+      }
+      .get {
+        background: #0a84ff;
+        color: #fff;
+        border: 0;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 15px;
+        padding: 8px 26px;
+      }
+      .get small {
+        display: block;
+        font-weight: 500;
+        font-size: 10px;
+        opacity: 0.85;
+        text-align: center;
+      }
+      .store-meta {
+        display: flex;
+        margin: 22px 0 18px;
+        border-top: 1px solid #e5e5ea;
+        border-bottom: 1px solid #e5e5ea;
+      }
+      .store-meta div {
+        flex: 1;
+        text-align: center;
+        padding: 12px 6px;
+        border-right: 1px solid #e5e5ea;
+      }
+      .store-meta div:last-child {
+        border-right: 0;
+      }
+      .store-meta b {
+        display: block;
+        font-size: 17px;
+        font-weight: 700;
+        color: #6e6e73;
+      }
+      .store-meta span {
+        display: block;
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #8e8e93;
+        margin-top: 2px;
+      }
+      .event {
+        display: grid;
+        grid-template-columns: 64px 1fr;
+        gap: 14px;
+        align-items: center;
+        background: #f2f2f7;
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin-bottom: 18px;
+      }
+      .event .ev-ic {
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
+        background: #0f1013;
+        display: grid;
+        place-items: center;
+        font: 800 22px/1 var(--display);
+        color: var(--accent);
+      }
+      .event b {
+        display: block;
+        font-size: 14.5px;
+      }
+      .event span {
+        display: block;
+        font-size: 12.5px;
+        color: #6e6e73;
+      }
+      .event .ev-lbl {
+        font-size: 10.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #0a84ff;
+        font-weight: 700;
+        margin-bottom: 2px;
+      }
+
+      /* screenshots strip */
+      .shots {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 8px;
+        justify-content: center;
+      }
+      .shot {
+        flex: 0 0 200px;
+        height: 462px;
+        border-radius: 16px;
+        background: linear-gradient(180deg, #1b1d24 0%, #0f1013 100%);
+        color: var(--fg);
+        position: relative;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 30px 12px 0;
+        text-align: center;
+      }
+      .shot .cap {
+        font: 800 15px/1.15 var(--display);
+        letter-spacing: -0.03em;
+        min-height: 68px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        margin-bottom: 14px;
+      }
+      .shot .cap em {
+        color: var(--accent);
+        font-style: normal;
+      }
+      .shot .n {
+        position: absolute;
+        top: 8px;
+        left: 10px;
+        font: 600 10px/1 var(--mono);
+        opacity: 0.5;
+      }
+      .ph {
+        width: 170px;
+        height: 368px;
+        border-radius: 30px;
+        background: #000;
+        padding: 5px;
+        box-shadow:
+          0 0 0 1.5px rgba(255, 255, 255, 0.22),
+          0 24px 40px -20px rgba(0, 0, 0, 0.8);
+        flex: 0 0 auto;
+      }
+      .scr {
+        width: 100%;
+        height: 100%;
+        border-radius: 25px;
+        overflow: hidden;
+        position: relative;
+        background: var(--ui-bg);
+        color: var(--ui-fg);
+        font-family: Inter, system-ui, sans-serif;
+      }
+      .island {
+        position: absolute;
+        top: 7px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 52px;
+        height: 14px;
+        border-radius: 999px;
+        background: #000;
+        z-index: 5;
+      }
+      .cam {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(
+            120% 70% at 50% 100%,
+            rgba(255, 255, 255, 0.08),
+            transparent 60%
+          ),
+          linear-gradient(180deg, var(--cam-a), var(--cam-b));
+      }
+      .cam::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 36%;
+        background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.5));
+      }
+      .bar-line {
+        position: absolute;
+        top: 27%;
+        left: 12%;
+        right: 12%;
+        height: 4px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.5);
+      }
+      .skel {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .skel line,
+      .skel polyline {
+        stroke: var(--accent);
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        fill: none;
+      }
+      .skel circle {
+        fill: var(--accent);
+      }
+      .skel.dim line,
+      .skel.dim polyline {
+        stroke: rgba(255, 255, 255, 0.5);
+        stroke-dasharray: 5 5;
+      }
+      .skel.dim circle {
+        fill: rgba(255, 255, 255, 0.5);
+      }
+      .hud {
+        position: absolute;
+        inset: 0;
+        padding: 32px 12px 14px;
+        display: flex;
+        flex-direction: column;
+      }
+      .clock {
+        font: 800 36px/1 var(--num);
+        letter-spacing: -0.03em;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+      }
+      .round {
+        font: 600 10px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-align: center;
+        opacity: 0.8;
+        margin-top: 6px;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .move {
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 12px;
+        padding: 9px 11px 11px;
+        color: #fff;
+      }
+      .move b {
+        display: block;
+        font: 600 9.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+        opacity: 0.8;
+      }
+      .move .rep {
+        font: 800 34px/1 var(--num);
+        margin-top: 4px;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      .move .rep small {
+        font-size: 16px;
+        color: #fff;
+        opacity: 0.7;
+      }
+      .prog {
+        height: 4px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.2);
+        margin-top: 7px;
+        overflow: hidden;
+      }
+      .prog i {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+      }
+      .ctl {
+        display: flex;
+        gap: 5px;
+        margin-top: 8px;
+      }
+      .ctl span {
+        flex: 1;
+        text-align: center;
+        font: 600 9px/1 var(--mono);
+        letter-spacing: 0.08em;
+        padding: 7px 0;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        color: #fff;
+      }
+      .ctl span.hi {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .gate {
+        position: absolute;
+        inset: 88px 18px 98px;
+        border: 2.5px dashed var(--gate);
+        border-radius: 16px;
+      }
+      .gate::before {
+        content: attr(data-label);
+        position: absolute;
+        top: -10px;
+        left: 10px;
+        background: var(--gate);
+        color: #000;
+        font: 700 8.5px/1 var(--mono);
+        letter-spacing: 0.1em;
+        padding: 4px 7px;
+        border-radius: 999px;
+      }
+      .start {
+        margin-top: 8px;
+        text-align: center;
+        font: 800 15px/1 var(--display);
+        letter-spacing: 0.06em;
+        padding: 12px 0;
+        border-radius: 999px;
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .pick {
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 12px;
+        padding: 5px;
+        color: #fff;
+      }
+      .pick div {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 9px;
+        border-radius: 8px;
+        font-size: 11px;
+      }
+      .pick div.on {
+        background: var(--accent);
+        color: var(--on-accent);
+        font-weight: 700;
+      }
+      .card-ui {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 36px 14px 14px;
+        text-align: center;
+        background: var(--ui-bg);
+        color: var(--ui-fg);
+      }
+      .card-ui .lbl {
+        font: 600 9.5px/1 var(--mono);
+        letter-spacing: 0.16em;
+        opacity: 0.7;
+      }
+      .card-ui .big {
+        font: 800 56px/1 var(--num);
+        letter-spacing: -0.04em;
+        margin: 10px 0 4px;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      .card-ui .big small {
+        font-size: 22px;
+        color: var(--ui-fg);
+        opacity: 0.6;
+        margin-left: 3px;
+      }
+      .card-ui .sub2 {
+        font-size: 10.5px;
+        opacity: 0.75;
+      }
+      .card-ui .brk {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+        margin-top: 14px;
+        font: 600 9.5px/1.3 var(--mono);
+        opacity: 0.85;
+      }
+      .card-ui .brk b {
+        display: block;
+        font-size: 14px;
+      }
+      .target {
+        margin: 16px 2px 0;
+        text-align: left;
+      }
+      .target .t-lbl {
+        display: flex;
+        justify-content: space-between;
+        font: 600 9px/1 var(--mono);
+        letter-spacing: 0.1em;
+        opacity: 0.75;
+        margin-bottom: 5px;
+      }
+      .target .t-bar {
+        height: 9px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.15);
+        position: relative;
+        overflow: hidden;
+      }
+      .target .t-bar i {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        background: var(--accent);
+        border-radius: 6px;
+      }
+      .target .t-bar i.ghost {
+        background: rgba(255, 255, 255, 0.3);
+      }
+      .cal {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 4px;
+        margin-top: 12px;
+        padding: 0 2px;
+      }
+      .cal i {
+        aspect-ratio: 1;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.08);
+        display: grid;
+        place-items: center;
+        font: 700 8.5px/1 var(--mono);
+        font-style: normal;
+      }
+      .cal i.f {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .cal i.r {
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.35);
+      }
+      .cal i.t {
+        outline: 1.5px solid var(--accent);
+        outline-offset: -1.5px;
+      }
+      .reject {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: rgba(0, 0, 0, 0.3);
+      }
+      .reject div {
+        border: 3px solid var(--danger);
+        color: var(--danger);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font: 800 20px/1 var(--display);
+        letter-spacing: 0.04em;
+        background: rgba(15, 16, 19, 0.92);
+        text-align: center;
+      }
+      .reject small {
+        display: block;
+        font: 600 8.5px/1.4 var(--mono);
+        letter-spacing: 0.08em;
+        margin-top: 6px;
+        color: #eef0f4;
+      }
+      .share {
+        position: absolute;
+        inset: 36px 12px 12px;
+        border-radius: 16px;
+        background: #16171c;
+        padding: 14px 12px;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid var(--edge);
+      }
+      .share .brandline {
+        font: 800 10.5px/1 var(--display);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.85;
+      }
+      .share .big {
+        font: 800 36px/1 var(--num);
+        margin: 8px 0 4px;
+        color: var(--accent);
+        letter-spacing: -0.04em;
+        white-space: nowrap;
+      }
+      .share .big small {
+        font-size: 18px;
+        opacity: 0.7;
+        color: var(--fg);
+      }
+      .share .vs {
+        font: 600 9px/1 var(--mono);
+        letter-spacing: 0.12em;
+        opacity: 0.7;
+      }
+      .share svg {
+        margin-top: auto;
+        width: 100%;
+        height: 130px;
+      }
+      .share .foot {
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        font: 600 7.5px/1.3 var(--mono);
+        letter-spacing: 0.08em;
+        opacity: 0.6;
+        margin-top: 8px;
+      }
+
+      .store-desc {
+        display: grid;
+        grid-template-columns: 1.3fr 1fr;
+        gap: 22px;
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid #e5e5ea;
+      }
+      .store-desc h4 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #8e8e93;
+        font-weight: 600;
+      }
+      .store-desc p {
+        margin: 0 0 10px;
+        font-size: 14.5px;
+        color: #3a3a3c;
+      }
+      .store-desc .more {
+        color: #0a84ff;
+        font-size: 13px;
+      }
+      .kw {
+        font: 500 12px/1.5 var(--mono);
+        background: #f2f2f7;
+        border-radius: 10px;
+        padding: 10px 12px;
+        color: #1c1c1e;
+        word-break: break-all;
+      }
+      .cnt {
+        font: 600 11px/1 var(--mono);
+        color: #8e8e93;
+        margin: 6px 0 14px;
+        text-align: right;
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 18px;
+      }
+      .meta-grid b {
+        display: block;
+        font-size: 14px;
+        color: #1c1c1e;
+        font-weight: 600;
+      }
+
+      /* tables */
+      table.t {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--bg2);
+        border: 1px solid var(--edge);
+        border-radius: 14px;
+        overflow: hidden;
+        font-size: 13.5px;
+      }
+      table.t th,
+      table.t td {
+        text-align: left;
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--edge);
+        vertical-align: top;
+      }
+      table.t th {
+        font: 600 10.5px/1.3 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--mute);
+        background: #121317;
+      }
+      table.t tr:last-child td {
+        border-bottom: 0;
+      }
+      table.t td.n {
+        font: 700 14px/1.3 var(--mono);
+        color: var(--accent);
+        white-space: nowrap;
+      }
+      table.t td.none {
+        color: var(--danger);
+        font-weight: 600;
+      }
+
+      /* calendar strip */
+      .timeline {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0;
+        background: var(--bg2);
+        border: 1px solid var(--edge);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .timeline div {
+        padding: 18px 20px;
+        border-right: 1px solid var(--edge);
+      }
+      .timeline div:last-child {
+        border-right: 0;
+      }
+      .timeline .when {
+        font: 600 10.5px/1 var(--mono);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 8px;
+      }
+      .timeline b {
+        display: block;
+        font: 800 17px/1.2 var(--display);
+        margin-bottom: 6px;
+      }
+      .timeline p {
+        margin: 0;
+        font-size: 13px;
+        color: #c9cdd6;
+      }
+
+      .swatches {
+        display: flex;
+        gap: 8px;
+      }
+      .swatches i {
+        flex: 1;
+        height: 48px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        position: relative;
+      }
+      .swatches i span {
+        position: absolute;
+        left: 6px;
+        bottom: 5px;
+        font: 600 9px/1 var(--mono);
+        color: #fff;
+        mix-blend-mode: difference;
+      }
+      .q {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 14px;
+        padding: 14px 0;
+        border-top: 1px solid var(--edge);
+      }
+      .q:last-child {
+        border-bottom: 1px solid var(--edge);
+      }
+      .q i {
+        font: 800 22px/1 var(--display);
+        color: var(--accent);
+        font-style: normal;
+      }
+      .q b {
+        display: block;
+        margin-bottom: 4px;
+      }
+      .q span {
+        color: #c9cdd6;
+        font-size: 14px;
+      }
+      .footer {
+        padding: 40px 0 64px;
+        color: var(--mute);
+        font-size: 13px;
+      }
+
+      @media (max-width: 1100px) {
+        .hero,
+        .grid-2,
+        .store-desc {
+          grid-template-columns: 1fr;
+        }
+        .grid-3,
+        .grid-4,
+        .timeline {
+          grid-template-columns: 1fr 1fr;
+        }
+        .hero h1 {
+          font-size: 48px;
+        }
+        .shots {
+          justify-content: flex-start;
+        }
+      }
+    </style>
   </head>
   <body>
-    <header class="topbar">
-      <div class="mark">5</div>
-      <div class="brand-lockup">Web Clock <span>/ ASO design</span></div>
-      <nav class="nav">
-        <a href="./index.html">Hub</a>
-        <a href="./aso.html" aria-current="page">Listing storyboard</a>
-        <a href="./infra.html">Infra canvas</a>
+    <header class="top">
+      <span class="code"
+        >apps/web-clock · ASO design · direction D chosen · 2026-09-05</span
+      >
+      <nav>
+        <a href="#store">Store page</a>
+        <a href="#marketing">Marketing angles</a>
+        <a href="#challenge">The challenge</a>
+        <a href="#landscape">Landscape</a>
+        <a href="#identity">Identity</a>
+        <a href="#calls">Founder calls</a>
+        <a class="alt" href="./directions.html">4-direction board (record)</a>
       </nav>
     </header>
 
-    <main class="page">
-      <p class="kicker">Stage 8 draft · storyboard for our own UI · no product screens built</p>
-      <h1>The listing is the product sketch.</h1>
-      <p class="lede">
-        Factory rule: screenshots sell the one great interaction in frame 1, and Rank 0 is the
-        store page. This board is the UI contract. It is not a Marvel listing, not a skip-hero
-        reskin, and not a welcome-hero. Phone propped. Clock running. Camera counting.
-      </p>
-
-      <section class="plate" aria-label="Locked defaults">
-        <article>
-          <dt>Brand / home label</dt>
-          <dd>Web Clock</dd>
-          <div class="dim">9 chars · ownable · no IP</div>
-        </article>
-        <article>
-          <dt>iOS title ≤30</dt>
-          <dd>Web Clock: AMRAP Counter</dd>
-          <div class="dim">24 chars · brand + category phrase</div>
-        </article>
-        <article>
-          <dt>iOS subtitle ≤30</dt>
-          <dd>Camera reps. 20-min clock.</dd>
-          <div class="dim">26 chars · benefit, not stuffing</div>
-        </article>
-        <article>
-          <dt>Primary keyword</dt>
-          <dd>amrap counter</dd>
-          <div class="dim">Long-tail first · head terms later</div>
-        </article>
-      </section>
-
-      <section class="section">
-        <h2>What the short actually is</h2>
-        <p class="sub">
-          Source: YouTube Short <code>eCL3aXcgU6U</code>, title “spiderman workout”, channel
-          Dhiman Desilva. Used as movement/reference only — founder will supply raw clips
-          tomorrow. The available still is a collage, not a clean exercise tape.
-        </p>
-        <div class="grid-2">
-          <div class="card">
-            <h3>What is on screen</h3>
-            <p>
-              Tom Holland in a Men’s Health interview: “I do a CrossFit workout.” A
-              Brand New Day poster. A gym clip of a one-legged high-knee / balance drill.
-            </p>
-            <p>
-              Holland’s named go-to when short on time is <strong>Cindy</strong>: 20:00 AMRAP,
-              5 pull-ups, 10 push-ups, 15 air squats. Score = rounds + leftover reps. His
-              quoted mark is 27 rounds.
-            </p>
-          </div>
-          <div class="card">
-            <h3>What we will track in v1</h3>
-            <p>
-              <strong>Default: the Cindy circuit.</strong> It is the only reading that needs
-              both a timer and a per-move rep count — the founder’s ask — and it is the
-              skip-hero / pullup pose pipeline with three detectors, not a new sport.
-            </p>
-            <p>
-              The one-legged “spiderman” drill stays a later detector until raw footage
-              proves it is the thing to count. We do not put Spider-Man, Holland, or the
-              film on the listing.
-            </p>
-          </div>
+    <main class="wrap">
+      <section class="hero">
+        <div>
+          <p class="kicker">
+            Direction D · 30-day workout challenge · lock-in season ·
+            hero-workout marketing
+          </p>
+          <h1>
+            Thirty days.<br />Twenty minutes.<br /><span
+              >The camera counts.</span
+            >
+          </h1>
+          <p class="lede">
+            Every "lock in" app on the store is a checkbox. Ours is the one
+            where the phone watches you do the work. Thirty days of the
+            20-minute hero workout — five pull-ups, ten push-ups, fifteen
+            squats, as many rounds as you can — scaled to where you start,
+            counted by the camera, scored on a card you can post. This page is
+            the store listing as it would ship and the UI contract we build
+            against.
+          </p>
         </div>
+        <dl class="plate">
+          <div>
+            <dt>Name</dt>
+            <dd>
+              Suit Up<small>alts: Round One · Proof of Work · Thirty</small>
+            </dd>
+          </div>
+          <div>
+            <dt>Title · 28 / 30</dt>
+            <dd>
+              Suit Up: 30-Day Hero Workout<small>brand + category phrase</small>
+            </dd>
+          </div>
+          <div>
+            <dt>Subtitle · 27 / 30</dt>
+            <dd>
+              The camera counts. Lock in.<small
+                >benefit + the 26k-rating phrase</small
+              >
+            </dd>
+          </div>
+          <div>
+            <dt>Cohort</dt>
+            <dd>
+              Winter Arc · starts Oct 1<small
+                >in-app event · 30 days · ends Oct 30</small
+              >
+            </dd>
+          </div>
+          <div class="full">
+            <dt>Wedge · one sentence</dt>
+            <dd>
+              A 30-day discipline challenge where you cannot tick the box — the
+              camera counted, or it didn't happen.
+            </dd>
+          </div>
+        </dl>
       </section>
 
-      <section class="section">
+      <!-- ================= STORE PAGE ================= -->
+      <section class="sec" id="store">
         <h2>App Store product page</h2>
         <p class="sub">
-          How search results and the product page should read. Icon is a 20-minute arc with
-          5 / 10 / 15 ticks — the workout, not a spider.
+          As it would ship. Frames 1–3 are what search shows; frame 1 must sell
+          the count, frame 3 the challenge. Every phone here is a listing mock
+          and a UI contract — if we cannot film a frame, it does not go on the
+          listing.
         </p>
-        <div class="grid-2">
-          <div class="store">
-            <div class="store-head">
-              <div class="icon" aria-hidden="true">
-                <div class="icon-arc"></div>
-                <div class="icon-ticks"><b>5</b><b>10</b><b>15</b></div>
+
+        <div class="store">
+          <div class="store-top">
+            <div class="icon" aria-hidden="true">
+              <svg viewBox="0 0 118 118">
+                <defs>
+                  <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#1c1e26" />
+                    <stop offset="1" stop-color="#0f1013" />
+                  </linearGradient>
+                </defs>
+                <rect width="118" height="118" fill="url(#g)" />
+                <!-- 30 ticks, 30 days; 9 lit -->
+                <g transform="translate(59 59)">
+                  <g id="ticks" fill="rgba(255,255,255,.18)">
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(0)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(12)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(24)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(36)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(48)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(60)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(72)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(84)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(96)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(108)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(120)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(132)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(144)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(156)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(168)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(180)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(192)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(204)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(216)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(228)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(240)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(252)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(264)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(276)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(288)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(300)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(312)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(324)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(336)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(348)"
+                    />
+                  </g>
+                  <g fill="#d4ff3f">
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(0)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(12)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(24)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(36)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(48)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(60)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(72)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(84)"
+                    />
+                    <rect
+                      x="-2"
+                      y="-46"
+                      width="4"
+                      height="10"
+                      rx="2"
+                      transform="rotate(96)"
+                    />
+                  </g>
+                  <text
+                    x="0"
+                    y="14"
+                    text-anchor="middle"
+                    font-family="Syne, sans-serif"
+                    font-weight="800"
+                    font-size="44"
+                    fill="#eef0f4"
+                    letter-spacing="-2"
+                  >
+                    30
+                  </text>
+                </g>
+              </svg>
+            </div>
+            <div>
+              <h3>Suit Up: 30-Day Hero Workout</h3>
+              <div class="subline">The camera counts. Lock in.</div>
+              <div class="dev">App Factory</div>
+            </div>
+            <button class="get" type="button">
+              Get<small>In-App Purchases</small>
+            </button>
+          </div>
+          <div class="store-meta">
+            <div><b>4+</b><span>Age</span></div>
+            <div><b>#—</b><span>Health &amp; Fitness</span></div>
+            <div><b>iPhone</b><span>iOS 17+</span></div>
+            <div><b>Offline</b><span>No account · no cloud video</span></div>
+          </div>
+
+          <div class="event">
+            <div class="ev-ic">10·1</div>
+            <div>
+              <div class="ev-lbl">In-app event · challenge</div>
+              <b>Winter Arc — 30 days, camera-counted</b>
+              <span
+                >Starts Oct 1. Pick your version on day 1. Post the card on day
+                30.</span
+              >
+            </div>
+          </div>
+
+          <div class="shots">
+            <article class="shot">
+              <span class="n">1 / 6</span>
+              <div class="cap">
+                <span>Day 1. 3 rounds.<br /><em>Counted.</em></span>
               </div>
-              <div>
-                <h3>Web Clock: AMRAP Counter</h3>
-                <div class="subline">Camera reps. 20-min clock.</div>
-                <div class="meta">Health &amp; Fitness · Offers In-App Purchases</div>
-                <div class="chips">
-                  <span>amrap timer</span>
-                  <span>rep counter</span>
-                  <span>pull-up</span>
-                  <span>push-up</span>
-                  <span>air squat</span>
+              <div class="ph">
+                <div class="scr">
+                  <div class="island"></div>
+                  <div class="cam"></div>
+                  <div class="bar-line"></div>
+                  <svg class="skel" viewBox="0 0 166 371" aria-hidden="true">
+                    <circle cx="83" cy="112" r="8" />
+                    <polyline points="36,100 56,132 83,126 110,132 130,100" />
+                    <polyline points="83,126 83,204" />
+                    <polyline points="83,204 66,266 70,318" />
+                    <polyline points="83,204 100,266 96,318" />
+                  </svg>
+                  <div class="hud">
+                    <div class="clock">13:52</div>
+                    <div class="round">DAY 1 · ROUND 3</div>
+                    <div class="spacer"></div>
+                    <div class="move">
+                      <b>JUMPING PULL-UPS</b>
+                      <div class="rep">4<small> / 5</small></div>
+                      <div class="prog"><i style="width: 80%"></i></div>
+                      <div class="ctl">
+                        <span>+1</span><span>PAUSE</span><span>FINISH</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <button class="get" type="button">Get</button>
-            </div>
-            <p style="color: var(--muted); margin: 0 0 8px">
-              The 20-minute bodyweight AMRAP. Five pull-ups, ten push-ups, fifteen squats —
-              counted by the camera, timed on the phone. Prop it up. Move. The clock and
-              the count stay honest.
-            </p>
-            <p style="color: var(--faint); font-size: 13px; margin: 0">
-              On-device Apple Vision. No account. No cloud pose. Manual +1 if the camera
-              blinks.
-            </p>
+            </article>
+
+            <article class="shot">
+              <span class="n">2 / 6</span>
+              <div class="cap">Start where<br />you are.</div>
+              <div class="ph">
+                <div class="scr">
+                  <div class="island"></div>
+                  <div class="cam"></div>
+                  <div class="hud">
+                    <div class="clock" style="font-size: 24px">20:00</div>
+                    <div class="round">PICK YOUR VERSION · DAY 1</div>
+                    <div class="spacer"></div>
+                    <div class="pick">
+                      <div><span>Pull-ups</span><span>5</span></div>
+                      <div class="on">
+                        <span>Jumping pull-ups</span><span>5</span>
+                      </div>
+                      <div class="on">
+                        <span>Knee push-ups</span><span>10</span>
+                      </div>
+                      <div><span>Push-ups</span><span>10</span></div>
+                      <div class="on">
+                        <span>Air squats</span><span>15</span>
+                      </div>
+                    </div>
+                    <div class="start">SUIT UP</div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="shot">
+              <span class="n">3 / 6</span>
+              <div class="cap">30 days.<br />You can't tick the box.</div>
+              <div class="ph">
+                <div class="scr">
+                  <div class="island"></div>
+                  <div
+                    class="card-ui"
+                    style="justify-content: flex-start; padding-top: 42px"
+                  >
+                    <div class="lbl">WINTER ARC · DAY 9 OF 30</div>
+                    <div class="cal">
+                      <i class="f">3</i><i class="f">3</i><i class="f">4</i
+                      ><i class="r">·</i><i class="f">4</i><i class="f">5</i>
+                      <i class="f">5</i><i class="f">6</i><i class="r">·</i
+                      ><i class="t">10</i><i>11</i><i>12</i> <i>13</i><i>14</i
+                      ><i>15</i><i>16</i><i>17</i><i>18</i> <i>19</i><i>20</i
+                      ><i>21</i><i>22</i><i>23</i><i>24</i> <i>25</i><i>26</i
+                      ><i>27</i><i>28</i><i>29</i><i>30</i>
+                    </div>
+                    <div class="brk" style="margin-top: 16px">
+                      <div><b>7</b>counted</div>
+                      <div><b>2</b>rest</div>
+                      <div><b>3 → 6</b>rounds</div>
+                    </div>
+                    <div class="sub2" style="margin-top: 14px; opacity: 0.6">
+                      a day is lit when the camera saw it
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="shot">
+              <span class="n">4 / 6</span>
+              <div class="cap">Not sure?<br />Not counted.</div>
+              <div class="ph">
+                <div class="scr">
+                  <div class="island"></div>
+                  <div class="cam"></div>
+                  <svg class="skel" viewBox="0 0 166 371" aria-hidden="true">
+                    <circle cx="36" cy="222" r="8" />
+                    <polyline points="42,230 80,228 124,222 152,216" />
+                    <polyline points="62,228 58,258" />
+                    <polyline points="98,226 94,258" />
+                  </svg>
+                  <div class="reject">
+                    <div>
+                      NOT COUNTED<small>CHEST SHORT · DO IT AGAIN</small>
+                    </div>
+                  </div>
+                  <div class="hud">
+                    <div class="clock">09:18</div>
+                    <div class="round">DAY 14 · PUSH-UPS 7 / 10</div>
+                    <div class="spacer"></div>
+                    <div class="ctl">
+                      <span class="hi">+1 · IT WAS CLEAN</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="shot">
+              <span class="n">5 / 6</span>
+              <div class="cap">Day 30<br />vs day 1.</div>
+              <div class="ph">
+                <div class="scr">
+                  <div class="island"></div>
+                  <div class="card-ui">
+                    <div class="lbl">DAY 30 · 20:00 · RX</div>
+                    <div class="big">11<small>+ 4</small></div>
+                    <div class="sub2">rounds + leftover reps</div>
+                    <div class="target">
+                      <div class="t-lbl">
+                        <span>DAY 1 · 3</span><span>TARGET · 27</span>
+                      </div>
+                      <div class="t-bar">
+                        <i style="width: 41%"></i
+                        ><i class="ghost" style="width: 11%"></i>
+                      </div>
+                    </div>
+                    <div class="brk">
+                      <div><b>+8</b>rounds</div>
+                      <div><b>26</b>days counted</div>
+                      <div><b>Rx</b>from day 19</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article class="shot">
+              <span class="n">6 / 6</span>
+              <div class="cap">Post the card,<br />not your face.</div>
+              <div class="ph">
+                <div class="scr">
+                  <div class="share">
+                    <div class="brandline">Suit Up · Winter Arc</div>
+                    <div class="big">3 → 11</div>
+                    <div class="vs">30 DAYS · 26 COUNTED · 20:00 EACH</div>
+                    <svg viewBox="0 0 150 130" aria-hidden="true">
+                      <g
+                        stroke="#d4ff3f"
+                        stroke-width="3"
+                        fill="none"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <circle cx="75" cy="30" r="7" fill="#d4ff3f" />
+                        <polyline points="32,22 50,54 75,46 100,54 118,22" />
+                        <polyline points="75,46 75,86" />
+                        <polyline points="75,86 58,112 62,128" />
+                        <polyline points="75,86 92,112 88,128" />
+                      </g>
+                      <line
+                        x1="8"
+                        y1="14"
+                        x2="142"
+                        y2="14"
+                        stroke="rgba(238,240,244,.5)"
+                        stroke-width="3"
+                      />
+                    </svg>
+                    <div class="foot">
+                      <span>REPLAY</span><span>NOTHING LEAVES THE PHONE</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
           </div>
-          <div class="card">
-            <h3>Identity (permanent)</h3>
-            <p>
-              Codename <code>web-clock</code> · bundle
-              <code>com.salaseviciusm.webclock</code> · scheme <code>webclock</code>
-            </p>
-            <p>
-              Category Health &amp; Fitness. Age 4+. iOS 17+ (Vision 3D). No Android in v1 —
-              the wedge is Apple Vision, same as skip-hero’s live path.
-            </p>
-            <h3>Monetization default</h3>
-            <p>
-              Freemium, paywall <em>after</em> the first finished 20:00. Free: live camera
-              count + today’s score. Pro: history, PBs, replay. Annual-forward, ~$19.99,
-              matching the pullup brief. Frequency is 2–4×/week — if history is not real
-              value, flip to lifetime.
-            </p>
+
+          <div class="store-desc">
+            <div>
+              <h4>Promotional text · 170</h4>
+              <p>
+                Winter Arc starts Oct 1. Thirty days of the 20-minute hero
+                workout, counted by your camera. Start scaled. Finish Rx. Post
+                the card.
+              </p>
+              <h4>Description · above the fold</h4>
+              <p>
+                Thirty days. Twenty minutes a day. Five pull-ups, ten push-ups,
+                fifteen squats, as many rounds as you can. Knee push-ups and
+                jumping pull-ups count. The camera counts every rep — so a day
+                is only lit when you actually did it. Day 30 is a card: your
+                number vs day 1. No account. No ads. Nothing leaves your phone.
+              </p>
+              <span class="more">more</span>
+              <div class="meta-grid" style="margin-top: 18px">
+                <div>
+                  <h4>Title · 28</h4>
+                  <b>Suit Up: 30-Day Hero Workout</b>
+                </div>
+                <div>
+                  <h4>Subtitle · 27</h4>
+                  <b>The camera counts. Lock in.</b>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h4>Keyword field · 98 / 100</h4>
+              <div class="kw">
+                pullup,pushup,squat,amrap,cindy,challenge,rounds,timer,bodyweight,rep,winter,arc,discipline,streak
+              </div>
+              <div class="cnt">
+                no title/subtitle words · no plurals · no CrossFit® · no 75
+                Hard®
+              </div>
+              <h4>Preview video · 10 s · muted autoplay</h4>
+              <p style="font-size: 13.5px">
+                0–1 phone propped against a wall · 1–2 gate goes green · 2–5
+                pull-ups 1→5 with the clock · 5–7 calendar day lights up · 7–10
+                the card: 3 → 11. On-screen text only. Shirt on or skeleton
+                framing.
+              </p>
+              <h4>Play short description · 80</h4>
+              <div class="kw">
+                30-day bodyweight challenge. Camera counts pull-ups, push-ups,
+                squats.
+              </div>
+              <div class="cnt">71 / 80 · Android is not v1; reserved</div>
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="section">
-        <h2>Screenshot storyboard — this is the UI</h2>
+      <!-- ================= MARKETING ANGLES ================= -->
+      <section class="sec" id="marketing">
+        <h2>Marketing angles — off the store, on the feed</h2>
         <p class="sub">
-          Six 6.7" portrait frames. Captions are benefit-first and in brand voice. Each
-          “UI contract” line is what we must ship; if a frame cannot be filmed, do not
-          put it on the listing (skip-hero’s unfilmable hero-clip lesson).
+          The listing stays clean; the content does the cultural work. Four
+          angles, each with its first clip, the evidence it rides, and the line
+          it does not cross. All run as the same edit across IG Reels, YT
+          Shorts, and TikTok; founder as subject; every comment answered within
+          ~2 hours.
         </p>
-        <div class="shots">
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="cam"></div>
-              <div class="skel"></div>
-              <div class="hud">
-                <div class="clock">14:37</div>
-                <div class="round">ROUND 8</div>
-                <div class="move">
-                  <b>PULL-UPS</b>
-                  <div class="rep">3 / 5</div>
-                  <div class="bar"><i style="width: 60%"></i></div>
-                </div>
-                <div class="controls"><span>+1</span><span>PAUSE</span><span>FINISH</span></div>
-              </div>
-            </div>
-            <h3>Frame 1 · live HUD</h3>
-            <p class="caption">It counts. You just move.</p>
-            <p class="contract">
-              UI contract: propped-phone live session. Tabular clock, current move, reps
-              in that move, rounds. Readable from the bar. No chrome hero. Manual +1
-              exists (review-mining: camera miss without fallback = 1★).
+        <div class="grid-4">
+          <article class="card acc">
+            <h4>Angle 1 · the hero workout</h4>
+            <p class="quote">
+              "The workout he says he does — 27 rounds. I'm starting at 3.
+              Thirty days."
+            </p>
+            <p>
+              Men's Journal (07-30):
+              <em
+                >"I think my record is 27 rounds… Think you can beat Holland's
+                record?"</em
+              >
+              The challenge and the number already exist in mainstream press;
+              the clip reports them the way that article did.
+            </p>
+            <p>
+              <span class="tag on">content only</span
+              ><span class="tag off">never on store / icon / in-app</span>
+            </p>
+            <p>
+              Legal posture: commentary on a publicly reported workout, no
+              likeness, no film stills, no logo. Founder decides comfort. "27"
+              is a number and the in-app target.
             </p>
           </article>
+          <article class="card acc">
+            <h4>Angle 2 · lock-in season</h4>
+            <p class="quote">
+              "Lock-in season starts Oct 1. Every lock-in app is a checkbox.
+              This one has a camera."
+            </p>
+            <p>
+              "Lock In" 26,542 ratings in 14 months · LOCKED 5,056 · Reload
+              1,262 · two "Winter Arc" apps shipped this year. The phrase is
+              live and the store proves the wallet. None of them can verify the
+              work.
+            </p>
+            <p>
+              <span class="tag on">Sep tease · Oct 1 cohort</span
+              ><span class="tag on">"lock in" in subtitle</span>
+            </p>
+            <p>
+              First clip: the checkbox app on the left, our calendar on the
+              right — a day lights only when the camera saw it.
+            </p>
+          </article>
+          <article class="card">
+            <h4>Angle 3 · day-N progress</h4>
+            <p class="quote">
+              "Day 1: 3 rounds. Day 30: 11. My phone counted every one."
+            </p>
+            <p>
+              Founder-as-subject. One 40-minute session every week yields 8–15
+              distinct clips (day-N cards, the first Rx pull-up, the no-count
+              moment). Cheap, repeatable, and the card carries it so the torso
+              never has to.
+            </p>
+            <p><span class="tag on">the volume engine</span></p>
+          </article>
+          <article class="card">
+            <h4>Angle 4 · query answers</h4>
+            <p class="quote">
+              "How many rounds of Cindy is good? I asked 30 days of my own
+              data."
+            </p>
+            <p>
+              YouTube long-form, 6–8 min: "tom holland workout how many rounds",
+              "cindy workout scaled", "how to count amrap rounds", "20 minute
+              bodyweight amrap". Real queries the app is the honest answer to;
+              compounds while the Shorts spike.
+            </p>
+            <p><span class="tag on">evergreen lane</span></p>
+          </article>
+        </div>
 
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="cam"></div>
-              <div class="guide"></div>
-              <div class="hud">
-                <div class="clock" style="font-size: 22px">20:00</div>
-                <div class="round">BEFORE THE CLOCK</div>
-                <div class="lock">
-                  <b>WE CAN SEE YOU</b>
-                  <small>bar + full body in frame</small>
-                  <div class="start">START</div>
-                </div>
-              </div>
-            </div>
-            <h3>Frame 2 · framing gate</h3>
-            <p class="caption">Won’t start until the frame is honest.</p>
-            <p class="contract">
-              UI contract: live confidence / orientation gate. Green only when the
-              skeleton is usable. Pullup spike: capture is a feature, not polish. First
-              open goes here, not a welcome carousel.
+        <div class="timeline" style="margin-top: 16px">
+          <div>
+            <div class="when">Now → Sep 30</div>
+            <b>Rank 0, then tease</b>
+            <p>
+              Listing live in every storefront, install path checked, Gate 0
+              instrumentation on. Then: founder's own day 1s, "the workout he
+              does" clips, "lock-in season is coming" hooks.
             </p>
-          </article>
-
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="cam"></div>
-              <div class="hud">
-                <div class="clock">11:02</div>
-                <div class="round">ROUND 12</div>
-                <div class="stack">
-                  <div class="row"><span>Pull-ups</span><span class="n">5 / 5</span></div>
-                  <div class="row on"><span>Push-ups</span><span class="n">4 / 10</span></div>
-                  <div class="row"><span>Squats</span><span class="n">0 / 15</span></div>
-                </div>
-              </div>
-            </div>
-            <h3>Frame 3 · the 5-10-15</h3>
-            <p class="caption">It advances when you do.</p>
-            <p class="contract">
-              UI contract: one director, three detectors. A finished pull-up set hands
-              the frame to push-ups without a tap. Data-driven circuit, not a mode maze
-              (UX playbook §3).
+          </div>
+          <div>
+            <div class="when">Oct 1</div>
+            <b>Winter Arc cohort · day 1</b>
+            <p>
+              In-app event goes live. Everyone starts together. Comment-driven
+              install path: "what app is that" → name in the pinned comment.
             </p>
-          </article>
-
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="cam"></div>
-              <div class="skel"></div>
-              <div class="hud">
-                <div class="clock">09:18</div>
-                <div class="round">ROUND 13</div>
-                <div class="reject">
-                  <b>NOT COUNTED</b>
-                  <small>lockout short · undercount on purpose</small>
-                </div>
-              </div>
-            </div>
-            <h3>Frame 4 · trust</h3>
-            <p class="caption">If it’s unsure, it doesn’t count.</p>
-            <p class="contract">
-              UI contract: visible reject. Versioned detector. Trust &gt; count — the
-              WSFU / GOLDEN review pattern. Never silently skip; never invent a rep.
+          </div>
+          <div>
+            <div class="when">Oct 1 → 30</div>
+            <b>Day-N content</b>
+            <p>
+              Founder posts his own days. Users post cards. Reply to every
+              comment. Thirty posts per platform is the floor before any read.
             </p>
-          </article>
-
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="hud">
-                <div class="round">TODAY</div>
-                <div class="score">
-                  <div class="big">14 + 7</div>
-                  <small>rounds + leftover reps</small>
-                  <small>20:00 · 70 / 147 / 210</small>
-                </div>
-              </div>
-            </div>
-            <h3>Frame 5 · the score</h3>
-            <p class="caption">Rounds and leftovers. That’s the sport.</p>
-            <p class="contract">
-              UI contract: Cindy scoring, not a generic “reps today” total. Breakdown
-              by movement. This screen is the aha and the review-prompt milestone.
+          </div>
+          <div>
+            <div class="when">Oct 30 → Nov</div>
+            <b>Day 30 cards, then the read</b>
+            <p>
+              Installs per 1,000 views by format; view → store → install → D7.
+              One of four pre-agreed outcomes (continue / reposition / reprice /
+              kill), written down before Oct 1.
             </p>
-          </article>
-
-          <article class="shot">
-            <div class="phone">
-              <div class="island"></div>
-              <div class="hud">
-                <div class="round">SAME CLOCK</div>
-                <div class="hist">
-                  <div class="pb"><span>PB</span><span>16 + 3</span></div>
-                  <div><span>Tue</span><span>14 + 7</span></div>
-                  <div><span>Sun</span><span>12 + 10</span></div>
-                  <div><span>Thu</span><span>11 + 2</span></div>
-                </div>
-              </div>
-            </div>
-            <h3>Frame 6 · compare</h3>
-            <p class="caption">Same three moves. A number you can beat.</p>
-            <p class="contract">
-              UI contract: history is the paid reason to return. No leaderboard in v1 —
-              cheatable cameras poison social scores (pullup review-mining).
-            </p>
-          </article>
+          </div>
         </div>
       </section>
 
-      <section class="section">
-        <h2>Preview video — muted, 10 seconds</h2>
+      <!-- ================= THE CHALLENGE ================= -->
+      <section class="sec" id="challenge">
+        <h2>The challenge — what the product must ship</h2>
         <p class="sub">
-          iOS search autoplays muted. If it doesn’t read silent, it doesn’t ship. No
-          shirtless-garden hero; frame from ¾ or render the skeleton (skip-hero F7
-          lesson).
+          Rules simple enough to say in a comment. Everything below is
+          expressible in the event-sourced core; see
+          <code>architecture.md</code>.
         </p>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Beat</th>
-              <th>Seconds</th>
-              <th>Picture</th>
-              <th>On-screen text only</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Setup</td>
-              <td>0–1</td>
-              <td>Phone against a wall, walk back</td>
-              <td>none</td>
-            </tr>
-            <tr>
-              <td>Gate</td>
-              <td>1–2</td>
-              <td>Guide goes green</td>
-              <td>WE CAN SEE YOU</td>
-            </tr>
-            <tr>
-              <td>Count</td>
-              <td>2–5</td>
-              <td>Pull-up, counter 1 → 5</td>
-              <td>PULL-UPS 5/5</td>
-            </tr>
-            <tr>
-              <td>Advance</td>
-              <td>5–8</td>
-              <td>Push-up, clock still running</td>
-              <td>14:12</td>
-            </tr>
-            <tr>
-              <td>Score</td>
-              <td>8–10</td>
-              <td>Summary 14 + 7</td>
-              <td>14 + 7</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section class="section">
-        <h2>Indexed metadata</h2>
-        <div class="grid-2">
+        <div class="grid-4">
           <div class="card">
-            <h3>iOS keyword field · 100 chars</h3>
+            <div class="num">30</div>
+            <h3>days, one workout</h3>
             <p>
-              Comma-separated, no spaces, no plurals, no repeats of title/subtitle words
-              (title already has web, clock, amrap, counter; subtitle has camera, reps).
-            </p>
-            <div class="kw">
-              pullup,pushup,squat,wod,cindy,timer,vision,pose,fitness,bodyweight,rounds,score,hiit,form,strict
-            </div>
-            <div class="count">96 / 100</div>
-            <p style="margin-top: 12px">
-              Plain nouns for Apple’s AI tags: interval timer, pull-up, push-up, squat,
-              offline. Check generated tags on launch and delete anything cinematic or
-              Marvel-adjacent.
+              The 20-minute 5-10-15 every session. Same clock, same three moves,
+              so day 30 compares to day 1 honestly.
             </p>
           </div>
           <div class="card">
-            <h3>Play short description · 80 chars</h3>
-            <div class="kw">
-              Camera counts 5-10-15. Pull-ups, push-ups, squats. You watch the clock.
-            </div>
-            <div class="count">71 / 80</div>
-            <p style="margin-top: 12px">
-              Play indexes the long description; iOS does not. Same pitch above the fold.
-              Play body repeats pull-up / push-up / squat / AMRAP / 20-minute in natural
-              prose. Do not ship one description to both stores.
+            <div class="num">5 / 7</div>
+            <h3>days counted</h3>
+            <p>
+              Two rest days a week are part of the rule, not a failure. A day is
+              lit only when the camera counted a finished 20:00.
+            </p>
+          </div>
+          <div class="card">
+            <div class="num">Scaled</div>
+            <h3>counts</h3>
+            <p>
+              Jumping pull-ups, knee push-ups, box squats are detector variants.
+              Pick on day 1; move to Rx any day. The card says which.
+            </p>
+          </div>
+          <div class="card">
+            <div class="num">3 → 11</div>
+            <h3>is the score</h3>
+            <p>
+              Day 1 rounds vs day 30 rounds, plus an optional target (default
+              27). Share a card, not a rank: no public leaderboard in v1.
+            </p>
+          </div>
+        </div>
+        <div class="grid-3" style="margin-top: 16px">
+          <div class="card">
+            <h4>Trust surface · every direction</h4>
+            <p>
+              Visible <b>NOT COUNTED</b> with a reason, and a manual
+              <b>+1 · it was clean</b> always in reach. Undercount when unsure;
+              never freeze silently. This is the WSFU 1★ pattern inverted.
+            </p>
+          </div>
+          <div class="card">
+            <h4>Never</h4>
+            <p>
+              Ads. Audio ducking. A destructive control in the bottom third
+              during a live set. History that an update can wipe. Footage
+              leaving the phone. Film IP anywhere on the product.
+            </p>
+          </div>
+          <div class="card">
+            <h4>Money</h4>
+            <p>
+              Free: the live count, today's card, the 30-day calendar. Pro:
+              history across arcs, PBs, the replay export, more targets. Annual
+              ~$19.99 and lifetime ~$29.99. Hard paywall + 17–32 day trial only
+              at the <em>reprice</em> outcome.
             </p>
           </div>
         </div>
       </section>
 
-      <section class="section">
-        <h2>Copy — iOS description</h2>
-        <div class="grid-2">
-          <div class="card">
-            <h3>Above the fold</h3>
-            <p>
-              The 20-minute bodyweight AMRAP. Five pull-ups, ten push-ups, fifteen
-              squats — counted by the camera, timed on the phone. Prop it up. Move. The
-              clock and the count stay honest.
-            </p>
-            <h3>Blocks</h3>
-            <p>
-              Hands-free 5-10-15. On-device Vision, not a cloud upload. Undercounts when
-              unsure. Manual +1 if a rep is clean and the camera blinked. Scores the way
-              the benchmark is scored: rounds plus leftover reps. History and PBs when
-              you want the number next Tuesday.
-            </p>
-          </div>
-          <div class="card">
-            <h3>Voice</h3>
-            <p>
-              Warm, direct, useful. Buttons terse. Empty states human. No hype, no fake
-              urgency, no “become Spider-Man,” no Holland name-drop, no guilt streaks.
-            </p>
-            <p>
-              Do say: clock, rounds, leftover, bar, frame, counted, skipped. Don’t say:
-              AI magic, superhero, cinematic, guaranteed form score, leaderboard grind.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Landscape (US iTunes, 2026-09-05)</h2>
+      <!-- ================= LANDSCAPE ================= -->
+      <section class="sec" id="landscape">
+        <h2>Landscape — the lane we are entering</h2>
         <p class="sub">
-          Ratings counts are a consistent proxy, not installs. Camera counting has
-          proved demand for push-ups and almost none for pull-up-only or jump-rope.
+          US App Store, iTunes Search API, 2026-09-05. Ratings are a proxy for
+          installs, not a measure; read the ratios. The pattern:
+          discipline-challenge apps are a proven, recent wallet, and every one
+          of them takes your word for it.
         </p>
-        <table class="table">
+        <table class="t">
           <thead>
             <tr>
               <th>App</th>
-              <th>n / ★</th>
-              <th>What it is</th>
-              <th>Vs us</th>
+              <th>US ratings</th>
+              <th>Shape</th>
+              <th>Verifies the work?</th>
+              <th>Read</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Cindy: Workout Timer &amp; Counter</td>
-              <td>0 / —</td>
-              <td>20:00 Cindy timer + tap rounds. Shipped 2026-08-18.</td>
-              <td>Exact WOD, no camera. We do not clone this.</td>
+              <td>Lock In — Reset Your Life (2025-06)</td>
+              <td class="n">26,542</td>
+              <td>Habit / discipline tracker</td>
+              <td class="none">No — checkbox</td>
+              <td>The phrase sells. 14 months to 26k.</td>
             </tr>
             <tr>
-              <td>CindyMax: Cindy WOD Timer</td>
-              <td>0 / —</td>
-              <td>Another Cindy clock.</td>
-              <td>Same empty lane.</td>
+              <td>75 Days Challenge Tough &amp; Soft</td>
+              <td class="n">8,662</td>
+              <td>Fixed-length challenge tracker</td>
+              <td class="none">No — self-report</td>
+              <td>Fixed-length challenges retain and pay.</td>
             </tr>
             <tr>
-              <td>SmartWOD Timer</td>
-              <td>54,032 / 4.94</td>
-              <td>General WOD clock. The category winner.</td>
-              <td>Programming + timer. No pose.</td>
+              <td>75 Hard</td>
+              <td class="n">6,406</td>
+              <td>Brand-owned challenge</td>
+              <td class="none">No</td>
+              <td>Trademark; never in our metadata.</td>
             </tr>
             <tr>
-              <td>WSFU Push Up Counter</td>
-              <td>3,124 / 4.84</td>
-              <td>Camera push-ups. Category-proof that hands-free count sells.</td>
-              <td>One move, no clock-as-sport.</td>
+              <td>LOCKED: Reach Your Potential (2025-10)</td>
+              <td class="n">5,056</td>
+              <td>Discipline tracker</td>
+              <td class="none">No</td>
+              <td>Second entrant, still 5k in a year.</td>
             </tr>
             <tr>
-              <td>GOLDEN Bars</td>
-              <td>7 / 4.29</td>
-              <td>Camera pull-ups + dips. Near-zero traction.</td>
-              <td>Pull-up-only is a dead aisle.</td>
+              <td>Her 75 (2025-06)</td>
+              <td class="n">4,993</td>
+              <td>Gendered challenge tracker</td>
+              <td class="none">No</td>
+              <td>Segmenting the same idea works.</td>
             </tr>
             <tr>
-              <td>GOLDEN Push Ups</td>
-              <td>~72 / 4.58</td>
-              <td>Same pose stack, more reviews.</td>
-              <td>Mine their “missed my rep” complaints.</td>
+              <td>30 Day Fitness at Home / 30 Day Fitness</td>
+              <td class="n">28,565 / 58,567</td>
+              <td>Coaching-content programs</td>
+              <td class="none">No</td>
+              <td>The lane we do <em>not</em> fight on: content volume.</td>
+            </tr>
+            <tr>
+              <td>Push Up Counter &amp; Tracker (WSFU)</td>
+              <td class="n">3,283</td>
+              <td>Camera counter, one move</td>
+              <td>Yes — push-ups only</td>
+              <td>Proof camera counting sells; 1★s are "missed my rep."</td>
+            </tr>
+            <tr>
+              <td>
+                Winter Arc — 90 Days Challenge (2026-08) · Cindy: Workout Timer
+                (2026-08)
+              </td>
+              <td class="n">0 · 0</td>
+              <td>Trend tracker · named-WOD timer</td>
+              <td class="none">No</td>
+              <td>The phrase alone, or the timer alone, is not a product.</td>
             </tr>
           </tbody>
         </table>
-      </section>
-
-      <section class="section">
-        <h2>Apple 4.3 defense</h2>
-        <div class="card">
-          <p>
-            <strong
-              >Not a reskinned WOD timer and not another N-exercise AI counter.</strong
-            >
-            The custom value is a single-benchmark specialist: on-device Vision
-            detectors for the 5-10-15 circuit, a clock that scores rounds the way the
-            workout is scored, a framing gate, and undercount-when-unsure. The template
-            is the shell. The detectors and the score are the app.
-          </p>
-          <p>
-            That defense dies if we ship a tap counter with a red theme, or if we put
-            Spider-Man on the icon. Trademark and 4.3 are the same decision: ownable
-            name, concrete capability, no film IP.
-          </p>
+        <div class="grid-3" style="margin-top: 16px">
+          <div class="card acc">
+            <h4>Differentiation · Apple 4.3 in one sentence</h4>
+            <p>
+              A fixed-length bodyweight challenge whose completion is verified
+              by on-device Vision detectors for one three-movement benchmark —
+              not a habit tracker, not a timer skin, not an N-exercise AI
+              counter.
+            </p>
+          </div>
+          <div class="card warn">
+            <h4>Strongest reason it's wrong</h4>
+            <p>
+              Trend-shaped twice over (a film and a season). If the native
+              module, three detectors, scaled variants and Rank 0 are not live
+              before Oct 1, we run the cohort late into a lane whose checkbox
+              incumbents already have 26k ratings and a head start.
+            </p>
+          </div>
+          <div class="card">
+            <h4>Falsifier · 30 posts</h4>
+            <p>
+              Non-zero views with installs per 1,000 views ≈ 0; or the modal
+              comment is about the actor rather than the workout; or beginners
+              ask for a program, not a counter.
+            </p>
+          </div>
         </div>
       </section>
 
-      <section class="section">
-        <h2>Reasons not to build — still on the table</h2>
+      <!-- ================= IDENTITY ================= -->
+      <section class="sec" id="identity">
+        <h2>Identity</h2>
+        <p class="sub">
+          Lock-in aesthetic: near-black, one volt accent, big numerals. Not
+          skip-hero's cyan nocturne, not a red-and-blue anything.
+        </p>
         <div class="grid-3">
           <div class="card">
-            <h3>The timer already exists</h3>
-            <p>
-              Two Cindy timers shipped this year to zero ratings. Counting-by-tap is
-              not a business. If Vision cannot hold three moves from one propped phone,
-              this is a don’t-build.
+            <h4>Palette</h4>
+            <div class="swatches">
+              <i style="background: #0f1013"><span>0F1013</span></i>
+              <i style="background: #16171c"><span>16171C</span></i>
+              <i style="background: #d4ff3f"><span>D4FF3F volt</span></i>
+              <i style="background: #eef0f4"><span>EEF0F4</span></i>
+              <i style="background: #ff5f4a"><span>FF5F4A reject</span></i>
+            </div>
+            <p style="margin-top: 12px">
+              Volt is the only colour that means "counted." Reject is the only
+              other colour on a live screen.
             </p>
           </div>
           <div class="card">
-            <h3>Camera count has not sold everywhere</h3>
+            <h4>Type · icon · voice</h4>
             <p>
-              Skip-hero’s own research: five camera jump-rope apps, 44 US ratings
-              combined. GOLDEN Bars is the pull-up specialist at 7. Push-ups are the
-              exception. We are betting the <em>benchmark + clock</em> is the missing
-              half.
+              <b>Syne 800</b> for the display and every number;
+              <b>Inter</b> body; <b>IBM Plex Mono</b> for labels and the
+              calendar.
+            </p>
+            <p>
+              Icon: thirty ticks around a "30", nine lit. It is the calendar,
+              not a spider, not a suit.
+            </p>
+            <p>
+              Voice: second person, short, no guilt. Say
+              <em>counted, lit, day, rounds, scaled, Rx, card</em>. Don't say
+              <em>grind, shred, AI, beast, cheat day</em>.
             </p>
           </div>
           <div class="card">
-            <h3>One camera, three planes</h3>
+            <h4>IP rules · permanent</h4>
             <p>
-              Pull-ups want ¾/front and ignore hips. Squats need hips/knees. 3D hips
-              are templated (pullup spike 002). Side/¾ standing full-body is a v1
-              requirement, not a suggestion.
+              No Marvel / Sony / performer names, likenesses, stills, webs, or
+              red-and-blue trade dress on any owned surface. No CrossFit® or 75
+              Hard® in metadata. "Cindy" allowed in keywords/description, never
+              as brand. "Hero" is our only nod and carries the WOD sense too.
+            </p>
+            <p>
+              Identity: codename <code>web-clock</code> · bundle
+              <code>com.salaseviciusm.suitup</code> · scheme
+              <code>suitup</code>.
             </p>
           </div>
         </div>
       </section>
 
-      <section class="section">
-        <h2>Founder calls before we implement UI</h2>
+      <!-- ================= FOUNDER CALLS ================= -->
+      <section class="sec" id="calls">
+        <h2>Founder calls before we build the UI</h2>
         <div class="q">
-          <b>1. Name — default Web Clock.</b>
-          <span
-            >Alt: “5-10-15” (searchable, less ownable). Reject: any Spider-Man /
-            Holland / Brand New Day string on the store.</span
-          >
+          <i>1</i>
+          <div>
+            <b>Name — default Suit Up.</b>
+            <span
+              >Alts on the board: Round One (warmer, taken as a generic term),
+              Proof of Work (the wedge as a name; reads crypto), Thirty (clean,
+              unsearchable). "Lock In" itself is taken at 26k.</span
+            >
+          </div>
         </div>
         <div class="q">
-          <b>2. Workout — default Cindy 5-10-15 × 20:00.</b>
-          <span
-            >The short also shows a one-legged drill. We wait for tomorrow’s raw clips
-            before adding a fourth detector.</span
-          >
+          <i>2</i>
+          <div>
+            <b>Cohort date — default Oct 1.</b>
+            <span
+              >Winter-arc convention. It is also the deadline that decides
+              whether v1 includes scaled detectors (jumping pull-up, knee
+              push-up) or ships Rx-only with a manual scaled mode.</span
+            >
+          </div>
         </div>
         <div class="q">
-          <b>3. Money — default free live set, paid history.</b>
-          <span
-            >Hard paywall only if you want Rank 0 closer to the skip-hero F0
-            recommendation. I would not gate the aha.</span
-          >
+          <i>3</i>
+          <div>
+            <b
+              >How far the hero angle goes in content — default: report the
+              public quote, nothing else.</b
+            >
+            <span
+              >Name and number as commentary, no stills, no likeness, no film
+              audio. Your comfort sets the line; the listing never depends on
+              it.</span
+            >
+          </div>
         </div>
         <div class="q">
-          <b>4. Scaled Cindy in v1?</b>
-          <span
-            >Default no. Banded / knee / 3-6-9 is a data table on the same director,
-            but it dilutes the listing. Ship Rx first.</span
-          >
+          <i>4</i>
+          <div>
+            <b>Free calendar or paid calendar — default free.</b>
+            <span
+              >A challenge whose proof is behind a paywall produces no cards and
+              no clean funnel read. Pro is history across arcs and the
+              export.</span
+            >
+          </div>
         </div>
       </section>
 
       <p class="footer">
-        Factory playbooks applied: aso.md, platforms/paid/aso.md (2026), ux.md,
-        monetization.md, analytics-taxonomy.md, skip-hero marketing notes, pullup
-        market-notes.md. No screens implemented. Infra board next.
+        Store data: iTunes Search API, US, 2026-09-05; reviews via iTunes
+        customer-review RSS. Sources: Men's Journal via AOL (2026-07-30);
+        Wikipedia, Spider-Man: Brand New Day (retrieved 2026-09-05). Rules:
+        playbooks/aso.md, docs/marketing/platforms/paid/aso.md,
+        docs/marketing/synthesis/platform-selection.md,
+        docs/marketing/apps/skip-hero.md. No product UI has been implemented.
+        Record of the four directions considered:
+        <a href="./directions.html">directions.html</a>.
       </p>
     </main>
   </body>

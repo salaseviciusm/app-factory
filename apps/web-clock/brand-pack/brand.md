@@ -1,17 +1,24 @@
-# Brand — Web Clock
+# Brand — Suit Up
 
-**Positioning:** The 20-minute 5-10-15, counted by the camera, scored the way
-the benchmark is scored. Not a superhero trainer. Not a general WOD clock.
+**Positioning:** A 30-day discipline challenge where you cannot tick the box.
+Thirty days of the 20-minute hero workout (5-10-15 AMRAP), scaled to where you
+start, counted by the camera, scored on a card. Not a habit tracker. Not a WOD
+clock. Not a superhero trainer.
 
-**Personality:** Quiet gym. Big numbers. Honest when it skips a rep. Sibling to
-skip-hero (propped phone, glow count, on-device pose) without borrowing its
-cyan nocturne or jump-rope vocabulary.
+**Personality:** Lock-in season, without the guilt. Near-black, one volt accent,
+big numerals. Honest when it does not count a rep. Sibling to skip-hero
+(propped phone, on-device pose) without its cyan nocturne or jump-rope words.
 
-**Audience:** People who will actually do Cindy — or the Holland clip they just
-watched — and want a number they can compare next Tuesday.
+**Audience:** 16–30, the "lock in" / winter-arc crowd who already downloads
+discipline trackers, plus at-home beginners who want a fixed-length challenge
+they can actually finish. Scaled variants are first-class so day 1 is possible.
 
-**Naming rationale:** Web Clock is ownable, 9 characters on the home screen,
-and does not use Marvel or performer IP. The searchable half lives in the
-title suffix (`AMRAP Counter`) and the keyword field (`cindy`, `pullup`,
-`pushup`, `squat`). Fallback name if the founder wants the workout in the
-icon: 5-10-15.
+**Naming rationale:** "Suit Up" is a commitment verb — get ready, show up — and
+the only nod to the film-adjacent hook, without any Marvel, Sony, or performer
+IP. "Hero" in the title carries the hero-WOD sense too. The searchable half
+lives in the title suffix (`30-Day Hero Workout`), the subtitle (`Lock in.`),
+and the keyword field. "Lock In" itself is taken (26k ratings). Alternates on
+record: Round One, Proof of Work, Thirty.
+
+**Never on any owned surface:** Marvel / Sony / performer names or likenesses,
+film stills, webs, red-and-blue trade dress, CrossFit®, 75 Hard®.
