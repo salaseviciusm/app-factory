@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Platform-free enforcement: no Node, no DOM. Touching a platform global
+    // is a compile error, not a code-review catch.
+    "types": [],
+    "lib": ["ES2022"]
+  },
+  "include": ["src"]
+}

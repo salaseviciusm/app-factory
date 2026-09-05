@@ -22,7 +22,7 @@ BRAND_PACK="$WORKSPACE/brand-pack"
 echo "==> Validating brand pack"
 (cd "$TEMPLATE_DIR/tools" && npx tsx -e "
 import { readFileSync } from 'node:fs';
-import { validateBrandPack } from './src/brand-pack-schema.js';
+import { validateBrandPack } from './src/brand-pack-schema.ts';
 const read = (f) => JSON.parse(readFileSync('$BRAND_PACK/' + f, 'utf8'));
 validateBrandPack({ tokens: read('tokens.json'), identity: read('identity.json'), features: read('features.json') });
 console.log('brand pack valid');
@@ -41,6 +41,8 @@ echo "==> Linking factory packages"
 mkdir -p "$APP_DIR/packages"
 cp -R "$TEMPLATE_DIR/packages/core" "$APP_DIR/packages/core"
 cp -R "$TEMPLATE_DIR/packages/analytics" "$APP_DIR/packages/analytics"
+# The packages' tsconfigs extend ../../tsconfig.base.json — the app root must hold it too.
+cp "$TEMPLATE_DIR/tsconfig.base.json" "$APP_DIR/tsconfig.base.json"
 node -e "
 const fs = require('fs');
 const p = JSON.parse(fs.readFileSync('$APP_DIR/package.json', 'utf8'));
