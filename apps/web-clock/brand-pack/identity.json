@@ -1,0 +1,11 @@
+{
+  "name": "Web Clock",
+  "codename": "web-clock",
+  "bundleId": "com.salaseviciusm.webclock",
+  "scheme": "webclock",
+  "store": {
+    "title": "Web Clock: AMRAP Counter",
+    "subtitle": "Camera reps. 20-min clock.",
+    "primaryKeywordPhrase": "amrap counter"
+  }
+}

@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Clock — infrastructure canvas</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./canvas.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="mark">5</div>
+      <div class="brand-lockup">Web Clock <span>/ infra canvas</span></div>
+      <nav class="nav">
+        <a href="./index.html">Hub</a>
+        <a href="./aso.html">Listing storyboard</a>
+        <a href="./infra.html" aria-current="page">Infra canvas</a>
+      </nav>
+    </header>
+
+    <main class="page">
+      <p class="kicker">Stage 5 draft · template delta · no stamp, no native module yet</p>
+      <h1>Skip-hero’s pipeline. Three detectors. One clock.</h1>
+      <p class="lede">
+        Pullup already named this: the camera trainer is skip-hero’s capture → pose seam
+        → event-sourced core, with a different detector. Web Clock does that for a
+        20-minute 5-10-15. This board is the architecture we implement against — not a
+        new platform, not a cloud model, not a hero stack.
+      </p>
+
+      <section class="plate">
+        <article>
+          <dt>Host</dt>
+          <dd>app-factory / apps/web-clock</dd>
+          <div class="dim">quickfire rig factory:web-clock after stamp</div>
+        </article>
+        <article>
+          <dt>Shell</dt>
+          <dd>Expo stamp + overlay</dd>
+          <div class="dim">ADR 0003 — do not vendor an Expo app here</div>
+        </article>
+        <article>
+          <dt>Pose</dt>
+          <dd>Apple Vision on-device</dd>
+          <div class="dim">2D + 3D · iOS 17+ · no MediaPipe v1</div>
+        </article>
+        <article>
+          <dt>State</dt>
+          <dd>Events + Cells</dd>
+          <div class="dim">ADR 0001 / 0002 · skip-hero convention wins</div>
+        </article>
+      </section>
+
+      <section class="section">
+        <h2>What we reuse vs what we write</h2>
+        <p class="sub">
+          skip-hero is not in this workspace. We reuse the <em>pattern and the spikes</em>,
+          not a git submodule. Copying skip-hero screens would be a 4.3 reskin.
+        </p>
+        <div class="lane">
+          <div class="label">Reuse as-is</div>
+          <div class="boxes">
+            <div class="box reuse">
+              <strong>@factory/core</strong>
+              <span>bus, store, defineEvent, projections, entitlements</span>
+            </div>
+            <div class="box reuse">
+              <strong>@factory/analytics</strong>
+              <span>typed track() · PostHog adapter later · D16</span>
+            </div>
+            <div class="box reuse">
+              <strong>mobile-overlay</strong>
+              <span>app-context.ts · Cell · generated tokens</span>
+            </div>
+            <div class="box reuse">
+              <strong>stamp-app.sh</strong>
+              <span>create-expo-app + brand pack validation</span>
+            </div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="label">Reuse as evidence</div>
+          <div class="boxes">
+            <div class="box reuse">
+              <strong>pullup spike 001</strong>
+              <span>2D Vision · elbow angle · ignore hips on pull-ups</span>
+            </div>
+            <div class="box reuse">
+              <strong>pullup spike 002</strong>
+              <span>3D · head.y vs wrist.y · 3D hips are templated</span>
+            </div>
+            <div class="box reuse">
+              <strong>skip-hero notes</strong>
+              <span>confidence gate · gap reset · undercount · framing</span>
+            </div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="label">Write here</div>
+          <div class="boxes">
+            <div class="box custom">
+              <strong>src/domain/</strong>
+              <span>events, director, three detectors, score fold</span>
+            </div>
+            <div class="box custom">
+              <strong>modules/apple-vision-pose</strong>
+              <span>Expo native module · Swift Vision · frame events</span>
+            </div>
+            <div class="box custom">
+              <strong>src/impl/pose-source-*</strong>
+              <span>live · simulated · fixture replay</span>
+            </div>
+            <div class="box custom">
+              <strong>tools/pose-extract.swift</strong>
+              <span>tomorrow’s .MOV → recording.json</span>
+            </div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="label">Later</div>
+          <div class="boxes">
+            <div class="box later">
+              <strong>SqliteEventStore</strong>
+              <span>InMemory is the v0 store · skip-hero ADR 0014 path</span>
+            </div>
+            <div class="box later">
+              <strong>RevenueCat</strong>
+              <span>one Entitlements impl · after first aha works</span>
+            </div>
+            <div class="box later">
+              <strong>Android MediaPipe</strong>
+              <span>skip-hero’s orphaned module is not a v1 plan</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Runtime pipeline</h2>
+        <p class="sub">
+          High-frequency frames never hit the event log. Durable facts do. That split
+          is load-bearing — do not “unify” them.
+        </p>
+        <div class="flow">
+          <article>
+            <h3>1. Capture</h3>
+            <p>
+              expo-camera preview. Phone upright, ¾ standing, bar + full body. No
+              recording required for a live set.
+            </p>
+          </article>
+          <article>
+            <h3>2. Vision</h3>
+            <p>
+              Local Expo module. 2D request for squat/push-up joints. 3D request for
+              pull-up chin-over-bar without a face.
+            </p>
+          </article>
+          <article>
+            <h3>3. PoseSource</h3>
+            <p>
+              Canonical <code>PoseFrame</code>. Live, simulated, or fixture replay.
+              Vendor types die at the adapter.
+            </p>
+          </article>
+          <article>
+            <h3>4. Director</h3>
+            <p>
+              Framing gate → active detector → 5/10/15 advance → AMRAP clock. Live
+              state in Cells.
+            </p>
+          </article>
+          <article>
+            <h3>5. Log</h3>
+            <p>
+              session / rep / reject / round / finish events. Projections fold scores
+              and history. Persistence-first on the bus.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Two channels</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Mechanism</th>
+              <th>Examples</th>
+              <th>Do not</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Live · ~15–30 Hz</td>
+              <td><code>Cell</code> + useSyncExternalStore</td>
+              <td>
+                remainingMs, currentExercise, repsInMove, rounds, framingOk,
+                lastVerdict, skeleton
+              </td>
+              <td>Publish pose frames on the bus</td>
+            </tr>
+            <tr>
+              <td>Durable facts</td>
+              <td>zod events, append-only</td>
+              <td>
+                session-started, rep-counted, rep-rejected-invalid,
+                exercise-advanced, round-completed, session-finished
+              </td>
+              <td>Update or delete a row</td>
+            </tr>
+            <tr>
+              <td>Reads</td>
+              <td>projections re-fold the log</td>
+              <td>SessionDetail, ScoreHistory, PersonalBest</td>
+              <td>Keep a mutable mirror “for speed”</td>
+            </tr>
+            <tr>
+              <td>Algorithms</td>
+              <td>version string on every derived event</td>
+              <td>pullup-v1, pushup-v1, squat-v1</td>
+              <td>Retune a frozen version in place</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Domain events (proposed)</h2>
+        <p class="sub">
+          Names are category-entity-action. Schema version 1. Detector version is a
+          payload field, not the event type.
+        </p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>When</th>
+              <th>Payload (beyond envelope)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>session-started</td>
+              <td>framing gate green + user starts</td>
+              <td>sessionId, planId=cindy-rx-20, durationMs=1200000</td>
+            </tr>
+            <tr>
+              <td>rep-counted</td>
+              <td>active detector commits a rep</td>
+              <td>sessionId, exercise, detectorVersion, romHint?</td>
+            </tr>
+            <tr>
+              <td>rep-rejected-invalid</td>
+              <td>motion seen, standard failed or confidence low</td>
+              <td>sessionId, exercise, reason, detectorVersion</td>
+            </tr>
+            <tr>
+              <td>exercise-advanced</td>
+              <td>5 or 10 or 15 hit</td>
+              <td>sessionId, from, to, roundIndex</td>
+            </tr>
+            <tr>
+              <td>round-completed</td>
+              <td>squat 15/15</td>
+              <td>sessionId, roundIndex</td>
+            </tr>
+            <tr>
+              <td>session-finished</td>
+              <td>clock hits 0 or user ends</td>
+              <td>sessionId, reason, scoreRounds, scoreLeftover, leftoverExercise</td>
+            </tr>
+            <tr>
+              <td>rep-adjusted-manual</td>
+              <td>+1 / −1</td>
+              <td>sessionId, exercise, delta</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Detectors — v1 contracts</h2>
+        <p class="sub">
+          State machines, not thresholds. Synthetic fixtures first; founder clips
+          retune versions, they do not rewrite the machine. 3D hips are unusable —
+          squats must ride 2D.
+        </p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Detector</th>
+              <th>Primary signal</th>
+              <th>Gate</th>
+              <th>Ignore</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>pullup-v1</td>
+              <td>3D elbow angle + head.y vs mean wrist.y</td>
+              <td>usable head+wrists+elbows; undercount if gap</td>
+              <td>Hips, nose, kip flourish</td>
+            </tr>
+            <tr>
+              <td>pushup-v1</td>
+              <td>2D elbow angle, both sides averaged</td>
+              <td>shoulder–hip line roughly plank; knees not a free pass</td>
+              <td>Absolute 3D calibration</td>
+            </tr>
+            <tr>
+              <td>squat-v1</td>
+              <td>2D hip.y oscillation + knee angle</td>
+              <td>stand → depth → stand; hysteresis</td>
+              <td>3D hip/root (templated at origin)</td>
+            </tr>
+            <tr>
+              <td>framing-v1</td>
+              <td>min confidence on the joints the active detector needs</td>
+              <td>refuses start; suspends count on drop</td>
+              <td>Pretty skeleton as a success signal</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>PoseSource seam</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3>LiveVisionPoseSource</h3>
+            <p>
+              iOS only. Wraps the Expo module. Maps Vision joints into canonical
+              names. Drops frames below a floor. Composition-root line, nothing else.
+            </p>
+          </div>
+          <div class="card">
+            <h3>SimulatedPoseSource</h3>
+            <p>
+              Ships in src (not test-only). Emits kinematic 5-10-15 cycles. Lets the
+              HUD and director be developed on Linux / Expo web without a device.
+            </p>
+          </div>
+          <div class="card">
+            <h3>FixtureReplaySource</h3>
+            <p>
+              Plays <code>fixtures/*.recording.json</code>. Tomorrow’s raw clips
+              become goldens the same way skip-hero replays
+              <code>examples/*.recording.json</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Tomorrow’s footage path</h2>
+        <p class="sub">
+          Founder: the YouTube short is reference, not raw. When examples land, we do
+          not eyeball thresholds in the Swift module. We extract, commit the pose
+          tape, lock a golden.
+        </p>
+        <div class="flow">
+          <article>
+            <h3>.MOV</h3>
+            <p>Local / Slack library. Gitignored. Provenance in a manifest.</p>
+          </article>
+          <article>
+            <h3>pose-extract.swift</h3>
+            <p>AVFoundation + the same Vision requests as the live module. macOS.</p>
+          </article>
+          <article>
+            <h3>recording.json</h3>
+            <p>Canonical frames. Committed. No pixels.</p>
+          </article>
+          <article>
+            <h3>director replay</h3>
+            <p>Deterministic fold. Human-verified score on the fixture.</p>
+          </article>
+          <article>
+            <h3>golden</h3>
+            <p>Versioned expected events. Fail the run if a retune drifts them.</p>
+          </article>
+        </div>
+        <p class="sub" style="margin-top: 16px">
+          Honest limit: Vision extract is Mac-only. This Linux agent can ship the
+          Swift CLI and the TS replay; it cannot certify a golden from raw video
+          here. That is a founder-machine step, same as skip-hero’s pose-extract.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Package map after stamp</h2>
+        <div class="card">
+          <pre style="margin:0;white-space:pre-wrap;color:var(--muted);font-family:var(--mono);font-size:12px;line-height:1.55">
+apps/web-clock/
+  spec.md  aso.md  architecture.md  brand-pack/  canvases/
+  app/                          ← stamp-app.sh output, not vendored in template
+    packages/core               ← copied factory core
+    packages/analytics
+    src/context/app-context.ts  ← only place impls are newed
+    src/domain/                 ← platform-free workout (types: no RN)
+    src/impl/                   ← vision, sqlite, posthog, revenuecat
+    src/design/                 ← tokens.generated.ts only
+    modules/apple-vision-pose/  ← Expo native module
+    tools/pose-extract.swift
+    fixtures/*.recording.json
+          </pre>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Composition root — the only new() site</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Always</h3>
+            <p>newId, clock, InMemoryEventBus, persistPublishedEvents → store.</p>
+            <p>GrantAllEntitlements until RevenueCat exists.</p>
+            <p>NoopAnalytics until the PostHog adapter is a one-line swap.</p>
+            <p>WorkoutDirector subscribed to PoseSource frames, publishing events.</p>
+          </div>
+          <div class="card">
+            <h3>Selected by env, not by ifs in features</h3>
+            <p><code>EXPO_PUBLIC_POSE=live|sim|fixture</code></p>
+            <p>Live on device builds. Sim on web/Linux. Fixture in golden:check.</p>
+            <p>
+              Swapping Vision for a later MediaPipe Android source is an adapter file
+              plus one line here. That is the skip-hero compliance test.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Analytics (defined before code)</h2>
+        <div class="card">
+          <p>
+            Activation: <code>session-first-completed</code> — first 20:00 (or early
+            finish) with at least one verified rep. Habit:
+            <code>session-completed</code>. Feature:
+            <code>rep-counted</code>, <code>rep-rejected-invalid</code>,
+            <code>framing-gate-passed</code>, <code>score-viewed</code>,
+            <code>rep-adjusted-manual</code>.
+          </p>
+          <p>
+            No pose, no coordinates, no video in PostHog. Crash-free sessions stay —
+            they are an ASO metric on Play and a quality metric everywhere.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>What we refuse</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3>No hero splash</h3>
+            <p>
+              features.onboarding.enabled = false. Camera permission is the first
+              gate, on Start. A marketing carousel is not a feature.
+            </p>
+          </div>
+          <div class="card">
+            <h3>No cloud pose</h3>
+            <p>
+              Frames stay on device. Analytics never sees joints. That is both
+              privacy and the skip-hero “keypoints, not footage” rule.
+            </p>
+          </div>
+          <div class="card">
+            <h3>No skip-hero screens</h3>
+            <p>
+              We take the pipeline, not Tile Rush, not lessons, not the cyan
+              nocturne HUD. Crimson clock. Different sport. 4.3.
+            </p>
+          </div>
+          <div class="card">
+            <h3>No Marvel surface</h3>
+            <p>
+              Bundle, icon, copy, tags. If Apple’s tagger emits “spider-man”, we
+              delete the tag.
+            </p>
+          </div>
+          <div class="card">
+            <h3>No leaderboard v1</h3>
+            <p>
+              Camera counters get 1★ for being cheatable. Manual +1 is for the
+              athlete, not for a global rank.
+            </p>
+          </div>
+          <div class="card">
+            <h3>No factory-run from this agent</h3>
+            <p>
+              Engine and Slack are not in this environment. These files are the
+              spec-repo artifacts. Stamp happens after you say go.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Risks that should delay stamp</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Risk</th>
+              <th>Why it matters</th>
+              <th>Cheapest next step</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Three moves, one angle</td>
+              <td>Pull-up 3D ignores hips; squat 2D needs them.</td>
+              <td>Wait for tomorrow’s clips before freezing thresholds.</td>
+            </tr>
+            <tr>
+              <td>Vision extract is Mac-only</td>
+              <td>Goldens cannot be minted on this Linux box.</td>
+              <td>Ship CLI + TS replay; you run extract once.</td>
+            </tr>
+            <tr>
+              <td>Cindy timers already exist</td>
+              <td>Without Vision we are the third 0-rating clock.</td>
+              <td>Do not stamp a tap-only MVP “to be safe.”</td>
+            </tr>
+            <tr>
+              <td>D27 still backs pullup</td>
+              <td>This app overlaps the pullup pose stack.</td>
+              <td>Treat pullup as dormant; this is the circuit, not a revival.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Implementation order — after go-ahead only</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>1–4 · core that can die cheap</h3>
+            <p>Validate brand pack. Stamp Expo app. Domain + vitest on synthetic 5-10-15 tapes. Director + clock + score fold green on Linux.</p>
+            <h3>5–6 · the storyboard</h3>
+            <p>Session / gate / summary / history routes matching the six frames. Simulated pose so the HUD is real before Vision is.</p>
+          </div>
+          <div class="card">
+            <h3>7–8 · device</h3>
+            <p>Native Vision module. Live source. Framing gate on a physical iPhone. Then your raw clips through pose-extract → goldens.</p>
+            <h3>9 · money / store</h3>
+            <p>SQLite. Paywall after aha. Listing assets filmed from the real HUD, not from this CSS storyboard.</p>
+          </div>
+        </div>
+      </section>
+
+      <p class="footer">
+        Principles: docs/03-coding-principles.md, template ADRs 0001–0003, pullup
+        spec §2.5/§5, skip-hero conventions where they conflict with pace. Canvas
+        only — no stamp, no UI implementation.
+      </p>
+    </main>
+  </body>
+</html>

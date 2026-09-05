@@ -1,0 +1,25 @@
+{
+  "onboarding": { "enabled": false, "steps": [] },
+  "monetization": {
+    "model": "freemium",
+    "entitlement": "pro",
+    "paywallPlacement": "post-aha"
+  },
+  "analytics": {
+    "enabled": true,
+    "events": [
+      "session-first-completed",
+      "session-started",
+      "session-completed",
+      "rep-counted",
+      "rep-rejected-invalid",
+      "framing-gate-passed",
+      "score-viewed",
+      "rep-adjusted-manual"
+    ],
+    "activationEvent": "session-first-completed",
+    "habitEvent": "session-completed"
+  },
+  "notifications": { "enabled": false },
+  "reviewPrompt": { "enabled": true, "milestoneEvent": "session-completed" }
+}

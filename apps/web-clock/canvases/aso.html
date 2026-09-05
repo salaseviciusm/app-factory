@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Clock — ASO design / UI storyboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./canvas.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="mark">5</div>
+      <div class="brand-lockup">Web Clock <span>/ ASO design</span></div>
+      <nav class="nav">
+        <a href="./index.html">Hub</a>
+        <a href="./aso.html" aria-current="page">Listing storyboard</a>
+        <a href="./infra.html">Infra canvas</a>
+      </nav>
+    </header>
+
+    <main class="page">
+      <p class="kicker">Stage 8 draft · storyboard for our own UI · no product screens built</p>
+      <h1>The listing is the product sketch.</h1>
+      <p class="lede">
+        Factory rule: screenshots sell the one great interaction in frame 1, and Rank 0 is the
+        store page. This board is the UI contract. It is not a Marvel listing, not a skip-hero
+        reskin, and not a welcome-hero. Phone propped. Clock running. Camera counting.
+      </p>
+
+      <section class="plate" aria-label="Locked defaults">
+        <article>
+          <dt>Brand / home label</dt>
+          <dd>Web Clock</dd>
+          <div class="dim">9 chars · ownable · no IP</div>
+        </article>
+        <article>
+          <dt>iOS title ≤30</dt>
+          <dd>Web Clock: AMRAP Counter</dd>
+          <div class="dim">24 chars · brand + category phrase</div>
+        </article>
+        <article>
+          <dt>iOS subtitle ≤30</dt>
+          <dd>Camera reps. 20-min clock.</dd>
+          <div class="dim">26 chars · benefit, not stuffing</div>
+        </article>
+        <article>
+          <dt>Primary keyword</dt>
+          <dd>amrap counter</dd>
+          <div class="dim">Long-tail first · head terms later</div>
+        </article>
+      </section>
+
+      <section class="section">
+        <h2>What the short actually is</h2>
+        <p class="sub">
+          Source: YouTube Short <code>eCL3aXcgU6U</code>, title “spiderman workout”, channel
+          Dhiman Desilva. Used as movement/reference only — founder will supply raw clips
+          tomorrow. The available still is a collage, not a clean exercise tape.
+        </p>
+        <div class="grid-2">
+          <div class="card">
+            <h3>What is on screen</h3>
+            <p>
+              Tom Holland in a Men’s Health interview: “I do a CrossFit workout.” A
+              Brand New Day poster. A gym clip of a one-legged high-knee / balance drill.
+            </p>
+            <p>
+              Holland’s named go-to when short on time is <strong>Cindy</strong>: 20:00 AMRAP,
+              5 pull-ups, 10 push-ups, 15 air squats. Score = rounds + leftover reps. His
+              quoted mark is 27 rounds.
+            </p>
+          </div>
+          <div class="card">
+            <h3>What we will track in v1</h3>
+            <p>
+              <strong>Default: the Cindy circuit.</strong> It is the only reading that needs
+              both a timer and a per-move rep count — the founder’s ask — and it is the
+              skip-hero / pullup pose pipeline with three detectors, not a new sport.
+            </p>
+            <p>
+              The one-legged “spiderman” drill stays a later detector until raw footage
+              proves it is the thing to count. We do not put Spider-Man, Holland, or the
+              film on the listing.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>App Store product page</h2>
+        <p class="sub">
+          How search results and the product page should read. Icon is a 20-minute arc with
+          5 / 10 / 15 ticks — the workout, not a spider.
+        </p>
+        <div class="grid-2">
+          <div class="store">
+            <div class="store-head">
+              <div class="icon" aria-hidden="true">
+                <div class="icon-arc"></div>
+                <div class="icon-ticks"><b>5</b><b>10</b><b>15</b></div>
+              </div>
+              <div>
+                <h3>Web Clock: AMRAP Counter</h3>
+                <div class="subline">Camera reps. 20-min clock.</div>
+                <div class="meta">Health &amp; Fitness · Offers In-App Purchases</div>
+                <div class="chips">
+                  <span>amrap timer</span>
+                  <span>rep counter</span>
+                  <span>pull-up</span>
+                  <span>push-up</span>
+                  <span>air squat</span>
+                </div>
+              </div>
+              <button class="get" type="button">Get</button>
+            </div>
+            <p style="color: var(--muted); margin: 0 0 8px">
+              The 20-minute bodyweight AMRAP. Five pull-ups, ten push-ups, fifteen squats —
+              counted by the camera, timed on the phone. Prop it up. Move. The clock and
+              the count stay honest.
+            </p>
+            <p style="color: var(--faint); font-size: 13px; margin: 0">
+              On-device Apple Vision. No account. No cloud pose. Manual +1 if the camera
+              blinks.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Identity (permanent)</h3>
+            <p>
+              Codename <code>web-clock</code> · bundle
+              <code>com.salaseviciusm.webclock</code> · scheme <code>webclock</code>
+            </p>
+            <p>
+              Category Health &amp; Fitness. Age 4+. iOS 17+ (Vision 3D). No Android in v1 —
+              the wedge is Apple Vision, same as skip-hero’s live path.
+            </p>
+            <h3>Monetization default</h3>
+            <p>
+              Freemium, paywall <em>after</em> the first finished 20:00. Free: live camera
+              count + today’s score. Pro: history, PBs, replay. Annual-forward, ~$19.99,
+              matching the pullup brief. Frequency is 2–4×/week — if history is not real
+              value, flip to lifetime.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Screenshot storyboard — this is the UI</h2>
+        <p class="sub">
+          Six 6.7" portrait frames. Captions are benefit-first and in brand voice. Each
+          “UI contract” line is what we must ship; if a frame cannot be filmed, do not
+          put it on the listing (skip-hero’s unfilmable hero-clip lesson).
+        </p>
+        <div class="shots">
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="cam"></div>
+              <div class="skel"></div>
+              <div class="hud">
+                <div class="clock">14:37</div>
+                <div class="round">ROUND 8</div>
+                <div class="move">
+                  <b>PULL-UPS</b>
+                  <div class="rep">3 / 5</div>
+                  <div class="bar"><i style="width: 60%"></i></div>
+                </div>
+                <div class="controls"><span>+1</span><span>PAUSE</span><span>FINISH</span></div>
+              </div>
+            </div>
+            <h3>Frame 1 · live HUD</h3>
+            <p class="caption">It counts. You just move.</p>
+            <p class="contract">
+              UI contract: propped-phone live session. Tabular clock, current move, reps
+              in that move, rounds. Readable from the bar. No chrome hero. Manual +1
+              exists (review-mining: camera miss without fallback = 1★).
+            </p>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="cam"></div>
+              <div class="guide"></div>
+              <div class="hud">
+                <div class="clock" style="font-size: 22px">20:00</div>
+                <div class="round">BEFORE THE CLOCK</div>
+                <div class="lock">
+                  <b>WE CAN SEE YOU</b>
+                  <small>bar + full body in frame</small>
+                  <div class="start">START</div>
+                </div>
+              </div>
+            </div>
+            <h3>Frame 2 · framing gate</h3>
+            <p class="caption">Won’t start until the frame is honest.</p>
+            <p class="contract">
+              UI contract: live confidence / orientation gate. Green only when the
+              skeleton is usable. Pullup spike: capture is a feature, not polish. First
+              open goes here, not a welcome carousel.
+            </p>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="cam"></div>
+              <div class="hud">
+                <div class="clock">11:02</div>
+                <div class="round">ROUND 12</div>
+                <div class="stack">
+                  <div class="row"><span>Pull-ups</span><span class="n">5 / 5</span></div>
+                  <div class="row on"><span>Push-ups</span><span class="n">4 / 10</span></div>
+                  <div class="row"><span>Squats</span><span class="n">0 / 15</span></div>
+                </div>
+              </div>
+            </div>
+            <h3>Frame 3 · the 5-10-15</h3>
+            <p class="caption">It advances when you do.</p>
+            <p class="contract">
+              UI contract: one director, three detectors. A finished pull-up set hands
+              the frame to push-ups without a tap. Data-driven circuit, not a mode maze
+              (UX playbook §3).
+            </p>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="cam"></div>
+              <div class="skel"></div>
+              <div class="hud">
+                <div class="clock">09:18</div>
+                <div class="round">ROUND 13</div>
+                <div class="reject">
+                  <b>NOT COUNTED</b>
+                  <small>lockout short · undercount on purpose</small>
+                </div>
+              </div>
+            </div>
+            <h3>Frame 4 · trust</h3>
+            <p class="caption">If it’s unsure, it doesn’t count.</p>
+            <p class="contract">
+              UI contract: visible reject. Versioned detector. Trust &gt; count — the
+              WSFU / GOLDEN review pattern. Never silently skip; never invent a rep.
+            </p>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="hud">
+                <div class="round">TODAY</div>
+                <div class="score">
+                  <div class="big">14 + 7</div>
+                  <small>rounds + leftover reps</small>
+                  <small>20:00 · 70 / 147 / 210</small>
+                </div>
+              </div>
+            </div>
+            <h3>Frame 5 · the score</h3>
+            <p class="caption">Rounds and leftovers. That’s the sport.</p>
+            <p class="contract">
+              UI contract: Cindy scoring, not a generic “reps today” total. Breakdown
+              by movement. This screen is the aha and the review-prompt milestone.
+            </p>
+          </article>
+
+          <article class="shot">
+            <div class="phone">
+              <div class="island"></div>
+              <div class="hud">
+                <div class="round">SAME CLOCK</div>
+                <div class="hist">
+                  <div class="pb"><span>PB</span><span>16 + 3</span></div>
+                  <div><span>Tue</span><span>14 + 7</span></div>
+                  <div><span>Sun</span><span>12 + 10</span></div>
+                  <div><span>Thu</span><span>11 + 2</span></div>
+                </div>
+              </div>
+            </div>
+            <h3>Frame 6 · compare</h3>
+            <p class="caption">Same three moves. A number you can beat.</p>
+            <p class="contract">
+              UI contract: history is the paid reason to return. No leaderboard in v1 —
+              cheatable cameras poison social scores (pullup review-mining).
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Preview video — muted, 10 seconds</h2>
+        <p class="sub">
+          iOS search autoplays muted. If it doesn’t read silent, it doesn’t ship. No
+          shirtless-garden hero; frame from ¾ or render the skeleton (skip-hero F7
+          lesson).
+        </p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Beat</th>
+              <th>Seconds</th>
+              <th>Picture</th>
+              <th>On-screen text only</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Setup</td>
+              <td>0–1</td>
+              <td>Phone against a wall, walk back</td>
+              <td>none</td>
+            </tr>
+            <tr>
+              <td>Gate</td>
+              <td>1–2</td>
+              <td>Guide goes green</td>
+              <td>WE CAN SEE YOU</td>
+            </tr>
+            <tr>
+              <td>Count</td>
+              <td>2–5</td>
+              <td>Pull-up, counter 1 → 5</td>
+              <td>PULL-UPS 5/5</td>
+            </tr>
+            <tr>
+              <td>Advance</td>
+              <td>5–8</td>
+              <td>Push-up, clock still running</td>
+              <td>14:12</td>
+            </tr>
+            <tr>
+              <td>Score</td>
+              <td>8–10</td>
+              <td>Summary 14 + 7</td>
+              <td>14 + 7</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Indexed metadata</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>iOS keyword field · 100 chars</h3>
+            <p>
+              Comma-separated, no spaces, no plurals, no repeats of title/subtitle words
+              (title already has web, clock, amrap, counter; subtitle has camera, reps).
+            </p>
+            <div class="kw">
+              pullup,pushup,squat,wod,cindy,timer,vision,pose,fitness,bodyweight,rounds,score,hiit,form,strict
+            </div>
+            <div class="count">96 / 100</div>
+            <p style="margin-top: 12px">
+              Plain nouns for Apple’s AI tags: interval timer, pull-up, push-up, squat,
+              offline. Check generated tags on launch and delete anything cinematic or
+              Marvel-adjacent.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Play short description · 80 chars</h3>
+            <div class="kw">
+              Camera counts 5-10-15. Pull-ups, push-ups, squats. You watch the clock.
+            </div>
+            <div class="count">71 / 80</div>
+            <p style="margin-top: 12px">
+              Play indexes the long description; iOS does not. Same pitch above the fold.
+              Play body repeats pull-up / push-up / squat / AMRAP / 20-minute in natural
+              prose. Do not ship one description to both stores.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Copy — iOS description</h2>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Above the fold</h3>
+            <p>
+              The 20-minute bodyweight AMRAP. Five pull-ups, ten push-ups, fifteen
+              squats — counted by the camera, timed on the phone. Prop it up. Move. The
+              clock and the count stay honest.
+            </p>
+            <h3>Blocks</h3>
+            <p>
+              Hands-free 5-10-15. On-device Vision, not a cloud upload. Undercounts when
+              unsure. Manual +1 if a rep is clean and the camera blinked. Scores the way
+              the benchmark is scored: rounds plus leftover reps. History and PBs when
+              you want the number next Tuesday.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Voice</h3>
+            <p>
+              Warm, direct, useful. Buttons terse. Empty states human. No hype, no fake
+              urgency, no “become Spider-Man,” no Holland name-drop, no guilt streaks.
+            </p>
+            <p>
+              Do say: clock, rounds, leftover, bar, frame, counted, skipped. Don’t say:
+              AI magic, superhero, cinematic, guaranteed form score, leaderboard grind.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Landscape (US iTunes, 2026-09-05)</h2>
+        <p class="sub">
+          Ratings counts are a consistent proxy, not installs. Camera counting has
+          proved demand for push-ups and almost none for pull-up-only or jump-rope.
+        </p>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>App</th>
+              <th>n / ★</th>
+              <th>What it is</th>
+              <th>Vs us</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Cindy: Workout Timer &amp; Counter</td>
+              <td>0 / —</td>
+              <td>20:00 Cindy timer + tap rounds. Shipped 2026-08-18.</td>
+              <td>Exact WOD, no camera. We do not clone this.</td>
+            </tr>
+            <tr>
+              <td>CindyMax: Cindy WOD Timer</td>
+              <td>0 / —</td>
+              <td>Another Cindy clock.</td>
+              <td>Same empty lane.</td>
+            </tr>
+            <tr>
+              <td>SmartWOD Timer</td>
+              <td>54,032 / 4.94</td>
+              <td>General WOD clock. The category winner.</td>
+              <td>Programming + timer. No pose.</td>
+            </tr>
+            <tr>
+              <td>WSFU Push Up Counter</td>
+              <td>3,124 / 4.84</td>
+              <td>Camera push-ups. Category-proof that hands-free count sells.</td>
+              <td>One move, no clock-as-sport.</td>
+            </tr>
+            <tr>
+              <td>GOLDEN Bars</td>
+              <td>7 / 4.29</td>
+              <td>Camera pull-ups + dips. Near-zero traction.</td>
+              <td>Pull-up-only is a dead aisle.</td>
+            </tr>
+            <tr>
+              <td>GOLDEN Push Ups</td>
+              <td>~72 / 4.58</td>
+              <td>Same pose stack, more reviews.</td>
+              <td>Mine their “missed my rep” complaints.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Apple 4.3 defense</h2>
+        <div class="card">
+          <p>
+            <strong
+              >Not a reskinned WOD timer and not another N-exercise AI counter.</strong
+            >
+            The custom value is a single-benchmark specialist: on-device Vision
+            detectors for the 5-10-15 circuit, a clock that scores rounds the way the
+            workout is scored, a framing gate, and undercount-when-unsure. The template
+            is the shell. The detectors and the score are the app.
+          </p>
+          <p>
+            That defense dies if we ship a tap counter with a red theme, or if we put
+            Spider-Man on the icon. Trademark and 4.3 are the same decision: ownable
+            name, concrete capability, no film IP.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Reasons not to build — still on the table</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3>The timer already exists</h3>
+            <p>
+              Two Cindy timers shipped this year to zero ratings. Counting-by-tap is
+              not a business. If Vision cannot hold three moves from one propped phone,
+              this is a don’t-build.
+            </p>
+          </div>
+          <div class="card">
+            <h3>Camera count has not sold everywhere</h3>
+            <p>
+              Skip-hero’s own research: five camera jump-rope apps, 44 US ratings
+              combined. GOLDEN Bars is the pull-up specialist at 7. Push-ups are the
+              exception. We are betting the <em>benchmark + clock</em> is the missing
+              half.
+            </p>
+          </div>
+          <div class="card">
+            <h3>One camera, three planes</h3>
+            <p>
+              Pull-ups want ¾/front and ignore hips. Squats need hips/knees. 3D hips
+              are templated (pullup spike 002). Side/¾ standing full-body is a v1
+              requirement, not a suggestion.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Founder calls before we implement UI</h2>
+        <div class="q">
+          <b>1. Name — default Web Clock.</b>
+          <span
+            >Alt: “5-10-15” (searchable, less ownable). Reject: any Spider-Man /
+            Holland / Brand New Day string on the store.</span
+          >
+        </div>
+        <div class="q">
+          <b>2. Workout — default Cindy 5-10-15 × 20:00.</b>
+          <span
+            >The short also shows a one-legged drill. We wait for tomorrow’s raw clips
+            before adding a fourth detector.</span
+          >
+        </div>
+        <div class="q">
+          <b>3. Money — default free live set, paid history.</b>
+          <span
+            >Hard paywall only if you want Rank 0 closer to the skip-hero F0
+            recommendation. I would not gate the aha.</span
+          >
+        </div>
+        <div class="q">
+          <b>4. Scaled Cindy in v1?</b>
+          <span
+            >Default no. Banded / knee / 3-6-9 is a data table on the same director,
+            but it dilutes the listing. Ship Rx first.</span
+          >
+        </div>
+      </section>
+
+      <p class="footer">
+        Factory playbooks applied: aso.md, platforms/paid/aso.md (2026), ux.md,
+        monetization.md, analytics-taxonomy.md, skip-hero marketing notes, pullup
+        market-notes.md. No screens implemented. Infra board next.
+      </p>
+    </main>
+  </body>
+</html>
