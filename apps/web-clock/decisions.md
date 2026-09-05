@@ -35,3 +35,38 @@ fork instruction.
 Cells for live pose, fixture replay. New HUD and new detectors. No Tile Rush,
 no cyan nocturne clone.
 **Why:** D6 (reuse where possible) and 4.3 (forks must be differentiated).
+
+## P5 — Direction D: the 30-day challenge, named Suit Up (2026-09-05)
+
+**Context:** Four listing directions were boarded (`directions.md`): A Twenty
+(benchmark), B Rooftop (27-round challenge), C Strict (camera as judge), D Round
+One (30 days, scaled). The pre-decision recommendation was B. Founder picked D,
+and asked to fold in the lock-in-season and hero-workout angles for marketing.
+**Decision (proposed):** Ship D. Working name **Suit Up**; title `Suit Up: 30-Day
+Hero Workout`; subtitle `The camera counts. Lock in.` The store face is the
+challenge and the calendar; the hero-workout reference is content-only. This
+supersedes P1's public name (Web Clock) — the IP rule in P1 stands.
+**Why:** Store data after the pick: the "lock in" lane is proven and recent
+(Lock In 26,542 ratings since 2025-06; LOCKED 5,056; 75 Days Challenge 8,662; Her
+75 4,993) and every entrant is a checkbox tracker. A fixed-length challenge whose
+proof is the camera is a wedge none of them can copy with a copy change. D also
+widens the audience to beginners via scaled variants, which B did not.
+
+## P6 — Winter Arc cohort on Oct 1; scaled detectors are the scope lever (2026-09-05)
+
+**Context:** Lock-in / winter-arc convention starts Oct 1. Four extra detectors
+(jumping pull-up, knee push-up, box squat, plus tuning) compete with that date.
+**Decision (proposed):** Cohort date Oct 1 as an in-app event. If scaled
+detectors are not golden-tested by then, v1 ships Rx detectors plus a manual
+scaled mode (`rep-added-manually`), and the card labels those sessions "manual".
+Manual-only sessions record but do not light a calendar day.
+**Why:** A challenge cohort that starts late into the season loses the hook; a
+challenge whose day-lighting can be faked loses the wedge. Both must hold.
+
+## P7 — Free calendar, paid history (2026-09-05)
+
+**Decision (proposed):** Live count, today's card, and the 30-day calendar are
+free. Pro: history across arcs, PBs, replay export, extra targets. No hard
+paywall until the *reprice* outcome fires (`market-check.md` §6).
+**Why:** A challenge whose proof sits behind a paywall produces no shared cards
+and no clean view → install → D7 read. The pilot exists to get that read.

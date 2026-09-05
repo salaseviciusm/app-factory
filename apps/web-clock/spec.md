@@ -1,13 +1,14 @@
-# web-clock — Spec
+# web-clock (Suit Up) — Spec
 
-> Owned by the product-lead. Canvases in `canvases/` are the reviewable stage-4/5
-> boards. Founder gate has not approved this spec.
+> Owned by the product-lead. `canvases/aso.html` is the reviewable listing board for
+> the chosen direction; `canvases/directions.html` is the record of the four considered.
+> Founder gate has not approved this spec.
 
 ## Spark
 
 **2026-09-05, founder (cloud agent thread):**
 
-Look at https://youtube.com/shorts/eCL3aXcgU6U (title “spiderman workout”, Dhiman
+Look at https://youtube.com/shorts/eCL3aXcgU6U (title "spiderman workout", Dhiman
 Desilva) **and skip-hero**. Generate a workout app that tracks this — counts the
 reps, and a timer. Use Apple Vision. The short is a reference, not raw footage;
 examples can arrive tomorrow. Then: ASO design page first, before any UI; and an
@@ -15,76 +16,110 @@ infra canvas before implementation.
 
 Chief-of-staff notes:
 
-- “skip hero” = skip-hero’s on-device Vision pipeline (same reading as pullup
+- "skip hero" = skip-hero's on-device Vision pipeline (same reading as pullup
   spec §2.5), **and** skip a marketing hero/onboarding splash.
-- The still is a collage: Holland “I do a CrossFit workout,” a Brand New Day
+- The still is a collage: Holland "I do a CrossFit workout," a Brand New Day
   poster, a one-legged gym drill. The workout that needs **both** a timer and a
   per-move count is Cindy: 20:00 AMRAP, 5 pull-ups / 10 push-ups / 15 air squats.
 - Marvel / Holland / film strings stay off the listing (trademark + 4.3).
 
+**2026-09-05, founder, second pass:** the first ASO board was rejected ("looks awful");
+asked for a markdown architecture, four name/theme/angle variations, a viability and
+market report, and a more creative name geared to a **workout challenge** that doubles
+as the factory's first **distribution pilot**. Then: **"D sounds best — workout
+challenge 30 days. Can go into the lock-in season angle also, as well as the Tom Holland
+angle for marketing."** Direction D is chosen; see `directions.md`, `decisions.md` P5.
+
 ## 1. Refinement
 
-- **Problem:** Doing the 20-minute 5-10-15, people either tap a WOD timer
-  (breaks hands-free, lies when they lose count) or use a generic camera counter
-  that does not know the circuit or the score. The pain is the combination:
-  which move am I on, how many, how much clock, what is my score.
-- **Target user:** The person who already knows Cindy — or just watched the
-  Holland clip — and will prop a phone at a bar or in a garden for 20 minutes.
-  Not the beginner who needs a pull-up program. Not the box that already runs
-  SmartWOD on a TV.
-- **Why now:** Vision is good enough for gross reps (pullup spikes VALIDATED).
-  A tap-only Cindy app shipped 2026-08-18 to zero ratings — the WOD is named,
-  the camera half is empty.
-- **Random-Tuesday answer:** They open it to run the same 20:00 and beat last
-  Tuesday’s `rounds + leftover`. Habit is low-frequency (2–4×/week).
-- **Monetization hypothesis:** Freemium. Aha (live count + score) is free.
-  History / PB is paid. Annual-forward ~$19.99. If history is not why they stay,
-  switch to lifetime — do not invent a subscription around a novelty counter.
+- **Problem:** Thirty-day discipline challenges are the hottest self-improvement
+  shape on the store, and every app running one takes your word for it. A checkbox
+  is easy to tick and easy to quit. Doing the 20-minute 5-10-15 specifically, people
+  tap a WOD timer that lies when they lose count, or a camera counter that does not
+  know the circuit or the score.
+- **Target user:** 16–30, the "lock in" / winter-arc crowd already downloading
+  discipline trackers, plus at-home beginners who want a fixed-length challenge they
+  can finish. Scaled variants make day 1 possible. Not the box on a TV; not the
+  person who wants a program.
+- **Why now:** Vision is good enough for gross reps (pullup spikes VALIDATED). The
+  hero workout is in mainstream press with a public 27-round number; lock-in season
+  opens Oct 1; the lane's incumbents (Lock In 26,542 ratings in 14 months) prove the
+  wallet and cannot verify the work.
+- **Random-Tuesday answer:** Day N of 30. Same 20:00, same three moves; the day lights
+  when the camera saw it. After the arc: run the benchmark again and beat day 30.
+- **Monetization hypothesis:** Freemium. Live count, today's card, the calendar are
+  free. History across arcs / PBs / export are Pro; annual ~$19.99, lifetime ~$29.99.
+  Hard paywall only at the *reprice* outcome. Do not invent a subscription around a
+  novelty counter.
 
 ## 2. Market check
 
-See `aso.md` and `canvases/aso.html` for the listing-shaped writeup. Headline:
+Full report: `market-check.md` (store data, review mining, why-now, audience,
+platform, pilot design, monetization, IP, reasons not to build). Headline:
 
-- **Cindy: Workout Timer & Counter** and **CindyMax** — exact WOD, tap/timer
-  only, 0 ratings. Do not clone.
-- **SmartWOD Timer** — 54k ratings; general clock; no pose.
-- **WSFU Push Up Counter** — 3,124 ratings; camera count *can* sell, for
-  push-ups.
-- **GOLDEN Bars** — 7 ratings; pull-up camera specialist stalled.
+- **Lock In** 26,542 · **LOCKED** 5,056 · **75 Days Challenge** 8,662 · **75 Hard**
+  6,406 · **Her 75** 4,993 — discipline-challenge trackers, all recent, all
+  self-report. The wallet is proven; none verifies the work.
+- **30 Day Fitness** 58k / 28k — coaching-content programs; the lane we do not fight on.
+- **WSFU Push Up Counter** 3,283 — camera counting sells; 1★s are "missed my rep."
+- **Cindy: Workout Timer**, **Winter Arc — 90 Days** — the WOD name alone or the
+  phrase alone, at 0 ratings. Do not clone either.
 
-**Differentiation / 4.3:** single-benchmark Vision specialist (5-10-15 + Cindy
-score + framing gate + undercount), not a timer skin and not an N-exercise AI
-counter.
+**Differentiation / 4.3:** a fixed-length bodyweight challenge whose completion is
+verified by on-device Vision for one three-movement benchmark — not a habit tracker,
+not a timer skin, not an N-exercise AI counter.
 
-**Verdict: BUILD-WITH-CHANGES**, gated on (a) founder accepting the boards, (b)
-raw clips proving three moves from one propped angle. If Vision cannot hold
-squats and pull-ups in one frame, this is a don’t-build — we will not ship a
-third 0-rating Cindy clock.
+**Verdict: BUILD**, as the distribution pilot, gated on (a) founder clips proving three
+moves from one propped placement, (b) Rank 0 before the first post, (c) a 30-post read
+with four pre-agreed outcomes. Falsifier and reasons-not-to in `market-check.md` §9.
 
 ## 3. Brand brief
 
-**Web Clock.** Home-screen 9 characters. Title `Web Clock: AMRAP Counter`.
-Icon: 20-minute arc with 5 / 10 / 15 ticks. Dark, crimson accent — sibling to
-skip-hero, not a cyan reskin. Voice: warm, direct, no superhero copy. Full pack
-in `brand-pack/` (proposed).
+**Suit Up.** Title `Suit Up: 30-Day Hero Workout` (28). Subtitle `The camera counts.
+Lock in.` (27). Icon: thirty ticks around a "30", nine lit — the calendar, not a spider.
+Graphite + volt `#D4FF3F` (the only colour that means "counted") + reject `#FF5F4A`.
+Syne 800 numerals. Voice: second person, short, no guilt. Alternates on record: Round
+One, Proof of Work, Thirty. Full pack in `brand-pack/` (proposed, validates). IP rules
+permanent (`aso.md`).
 
 ## 4. Design
 
-The one great interaction is the **propped-phone live HUD**: remaining time,
-current move, reps in that move, rounds — readable from the bar — while Vision
-counts and the director advances 5 → 10 → 15.
+The one great interaction is the **propped-phone live HUD**: remaining time, day and
+round, current move, reps in that move — readable from the bar — while Vision counts
+and the director advances 5 → 10 → 15. The second is the **calendar day lighting**
+only when the camera saw a finished 20:00.
 
-Screen inventory and screenshot frames: `canvases/aso.html`. No onboarding
-hero. First open → framing gate → session.
+Screens (contract from the listing, `canvases/aso.html` frames 1–6): pick your version
+(day 1) → framing gate → live HUD → not-counted overlay with reason and "+1 · it was
+clean" → day card (rounds + leftovers, day 1 vs today, target bar) → 30-day calendar →
+share card (skeleton replay, no footage). No onboarding hero.
 
-Analytics: activation `session-first-completed`; habit `session-completed`.
+Challenge rules: 30 days · one workout · 5 of 7 days counted (rest is a rule) · scaled
+variants count and are named on the card · score = day-1 vs day-30 rounds, optional
+target (default 27) · share a card, never a rank.
+
+Analytics: activation `session-finished` (early = false); habit `challenge-day-lit`;
+share `card-shared`. Gate 0 attribution before the first post.
 
 ## 5. Architecture
 
-`architecture.md` + `canvases/infra.html`. Delta on the template: pose seam,
-three versioned detectors, AMRAP director, native Vision module, fixture
-replay. Skip-hero pipeline pattern; not the skip-hero repo.
+`architecture.md` (primary; the infra canvas was retired). Delta on the template:
+native Vision module, pose seam with live / fixture / sim adapters, framing gate, six
+versioned detectors (Rx + scaled), AMRAP director, clock as a Cell, ChallengeService
+and calendar projection, card renderer. Skip-hero pipeline pattern; not the repo.
+Open risks ranked in `architecture.md` §18.
+
+## 6. Distribution pilot
+
+This app is the factory's first distribution pilot; the learning is for pace and
+skip-hero as much as for this app. Design in `market-check.md` §6 and `aso.md`:
+Rank 0 → Sep tease → Oct 1 Winter Arc cohort → day-N content → Oct 30 cards → the read
+(installs per 1,000 views by format; continue / reposition / reprice / kill, written
+down before Oct 1).
 
 ## Gate record
 
 - Spec approved by founder: _not yet_
+- Direction chosen by founder: **D — 30-day challenge (Suit Up)**, 2026-09-05
+- Open founder calls: name, cohort date, hero-angle comfort line, free calendar
+  (`aso.md` → Founder calls)
