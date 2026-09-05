@@ -70,3 +70,52 @@ free. Pro: history across arcs, PBs, replay export, extra targets. No hard
 paywall until the *reprice* outcome fires (`market-check.md` §6).
 **Why:** A challenge whose proof sits behind a paywall produces no shared cards
 and no clean view → install → D7 read. The pilot exists to get that read.
+
+## P8 — The native module owns the camera; no expo-camera (2026-09-05)
+
+**Context:** `architecture.md` §3 drew expo-camera feeding pixel buffers to the
+Vision module. Expo's camera does not expose buffers without a frame-processor
+library and a worklets runtime.
+**Decision (proposed):** `AppleVisionPose` runs its own `AVCaptureSession` and
+exports a `PosePreviewView` on the same session. Frames never cross the bridge;
+only a 19-joint `PoseFrame` does, at ≤ 30 fps.
+**Why:** One Swift file replaces two dependencies and a JSI thread. Latest-wins
+frame dropping and orientation/mirroring live where the buffers are.
+
+## P9 — 2D pose only in v1; the chin rule is geometric (2026-09-05)
+
+**Context:** §10 kept the 3D request for pull-ups. Spike 002 recorded that 3D
+hips/root are templated and the request is slower.
+**Decision (proposed):** `VNDetectHumanBodyPoseRequest` only. Chin-over-bar is
+`nose.y` against the wrist line with a margin. Revisit after founder footage.
+**Why:** Elbow angle is the rep signal in both spike clips; 3D would buy nothing
+the goldens can measure yet, and costs frame rate on a 20-minute session.
+
+## P10 — Transition guard in the director, 1.5 s (2026-09-05)
+
+**Context:** The director tests counted phantom reps when the synthetic athlete
+moved from the bar to the floor: the joint swing crosses every threshold once.
+**Decision (proposed):** After `set-completed` the director drops detector
+output for `TRANSITION_GUARD_MS = 1500`. The value is a tuning knob; the
+`transitions.mov` clip in `tuning.md` exists to set it.
+**Why:** The alternative — a "settle" state each detector must reach — moves
+the same guard into six detectors and hides it from tuning.
+
+## P11 — Ship with everything unlocked; entitlement seam only (2026-09-05)
+
+**Context:** P7 defers the paywall. RevenueCat is a Rank 0 task and needs an
+App Store Connect product before it can be tested.
+**Decision (proposed):** `GrantAllEntitlements` in the store build. History and
+PBs are visible. No purchase UI. The `Entitlements` seam stays in the context.
+**Why:** A review build with a paywall that cannot be exercised is a 2.1
+rejection risk for nothing; the pilot's read (P7) does not need the gate.
+
+## P12 — Store copy is the ASO brief, verbatim (2026-09-05)
+
+**Decision (proposed):** `store/metadata/en-US/*` is copied from `aso.md`, not
+re-written. Review notes state on-device processing, no account, no purchases,
+and how to test without a pull-up bar (arms overhead with a full elbow bend
+reads as a pull-up; "+1" always works). The sim source is `__DEV__`-only and is
+not in the store build.
+**Why:** One source of truth for the listing; the checklist item is "paste",
+not "write".

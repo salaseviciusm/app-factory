@@ -1,8 +1,9 @@
 # web-clock (Suit Up) — Architecture
 
-**2026-09-05.** The template delta the tech-lead formalizes after stamp. Nothing here is
-implemented; every interface below is a proposal against `template/` at its current
-state and the pullup spikes. Product intent: `spec.md`, `canvases/aso.html`.
+**2026-09-05.** The template delta the tech-lead formalizes after stamp. Sections 1–18
+are the design as proposed before code. **Section 19 records where the build departed
+from it** — read that first if you are working in `app/`. Product intent: `spec.md`,
+`canvases/aso.html`. Tuning loop: `tuning.md`. Store readiness: `store/`.
 
 ## 1. What we are building, in one paragraph
 
@@ -307,3 +308,44 @@ timer MVP. Film IP on any surface. A mutable sessions table. An onboarding hero.
    label the card "manual" for those sessions.
 4. **Lighting.** WSFU's 1★s say "won't work in anything but great lighting." Framing gate
    must say so before the clock starts, not after.
+
+## 19. As built (2026-09-05, `app/`)
+
+The build follows §3–§14 with these deltas. Where a delta is a scope call it is logged
+in `decisions.md` (P8–P11).
+
+| Proposed | Built | Why |
+|---|---|---|
+| `expo-camera` feeds frames to the module (§3, §4.1) | The module owns its own `AVCaptureSession` (`PoseCaptureSession.swift`) and ships a `PosePreviewView` that shares it. No `expo-camera`. | expo-camera does not hand out `CVPixelBuffer`s without a frame-processor dependency; one session in Swift is smaller and drops frames itself ("latest wins"). |
+| 3D request for pull-ups (§10) | 2D only (`VNDetectHumanBodyPoseRequest`). Chin-over-bar is the nose vs the wrist line with `CHIN_MARGIN` in normalised units. | Spike 002 showed 3D adds latency and templated hips; 2D elbow angle plus the chin rule is enough for a first golden. Revisit when founder footage says the chin rule is the weak point. |
+| `EXPO_PUBLIC_POSE=live\|sim\|fixture` (§11) | A `poseSourceKind` Cell in the composition root; `live` when the module is present, else `sim`. Debug builds expose the switch in Settings. | A runtime switch lets the same dev build drive the HUD from a fixture on a Mac and from the camera on the phone. |
+| `InMemoryEventStore` first, SQLite next (§13) | `SqliteEventStore` on `expo-sqlite` (sync API) from day one; events cached in memory after the first read. | Sessions must survive a relaunch before the founder films with it. |
+| Detector output goes straight to the director (§4.1) | The director ignores detector output for `TRANSITION_GUARD_MS = 1500` after a set advances. | Moving bar → floor → stand produces elbow/knee swings that read as reps. Found by the director tests; length is a tuning knob (`tuning.md` §3). |
+| `pro` gates History etc. (§13) | `GrantAllEntitlements`; nothing is gated in the build. | P7 says no hard paywall until the *reprice* outcome fires. The seam is in place; RevenueCat lands at Rank 0. |
+| Acquisition envelope on every event (§13) | PostHog, anonymous, scalar properties only, no person profiles or replay; envelope not implemented. | AdServices attribution is a store-side task (`store/submission-checklist.md`), not a build blocker. |
+| Goldens as `goldens/<detector>-vN.json` (§12) | `fixtures/<move>/<clip>.json` + `<clip>.expect.json` (`counted`, `maxRejects`, `note`); runner `tests/goldens.test.ts`. | One expectation per clip is what a founder can write after watching the clip; per-rep event goldens can be layered on later. |
+
+What exists and passes `npm run check` (typecheck, prettier, 34 tests):
+
+- `src/domain/pose` — `PoseFrame` (19 joints, normalised top-left), angles, `PoseSource`,
+  `sim-pose` (three moves, start/end interpolation), `fixture`.
+- `src/domain/detectors` — `CycleMachine` (hysteresis, EMA smoothing, `minRepMs`, count
+  at leave-end or return-start), pull-up rx/jumping, push-up rx/knee, squat rx/box,
+  `FramingGate` (rolling window, hysteresis, `too-close`).
+- `src/domain/workout` — `CINDY`, `AmrapClock` (pause-aware), `WorkoutDirector`
+  (framing → ready → running → paused → finished, transition guard, manual +1).
+- `src/domain/challenge` + `projections` — `ChallengeService` (lights a day on a full
+  session with ≥ 1 counted rep), calendar cells, pace, sessions, PB, settings.
+- `modules/apple-vision-pose` — Swift capture + Vision, JS bridge via
+  `requireOptionalNativeModule` so the app boots in Expo Go / simulator without it.
+- `src/impl` — SQLite store, live/sim/fixture sources, `expo-crypto` ids, PostHog.
+- `src/app` — home (landing / calendar / finished), pick, session, summary + share,
+  history, settings. `src/design` — tokens from the brand pack, Syne / Inter / Plex Mono.
+- `app.json` (iOS 17, camera usage string, privacy manifest, `expo-updates`), `eas.json`,
+  icon and splash, `store/metadata/en-US/*`, `store/privacy-policy.md`,
+  `store/submission-checklist.md`, `tuning.md`, `tools/pose-extract.swift`,
+  `tools/csv-to-fixture.mjs`.
+
+What does not exist: an accuracy number, a build that has run on a phone, any fixture of
+the founder. The two goldens are the pullup spike's stock clips. Tomorrow's footage is the
+first real input; the loop is `tuning.md`.
