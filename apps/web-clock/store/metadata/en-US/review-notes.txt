@@ -1,0 +1,11 @@
+Suit Up is a 30-day bodyweight workout challenge. It uses the camera with Apple's on-device Vision framework to count pull-ups, push-ups and squats. No video is recorded, stored or transmitted; only body keypoints are read per frame and discarded.
+
+How to test:
+1. Launch. Tap "Start the 30 days". Pick any version (the scaled options are fine). Tap "Suit up".
+2. Allow camera access. Prop the phone (or hold it) about 2–3 m away so your whole upper body is visible. When the panel turns green ("We can see you"), tap "Start 20:00".
+3. Perform a few pull-ups (or raise and lower your arms overhead with elbows bending fully, as if on a bar). Each counted rep increments the counter; a rep that is not counted shows "Not counted" with a reason. "+1" adds a rep manually.
+4. Tap "Finish" to end early, or let the clock run. The summary shows the day card; "Share the card" opens the system share sheet with a PNG.
+
+No account or purchase is required. There are no in-app purchases in this version. Analytics (if enabled for this build) are anonymous product-interaction events only; see the privacy manifest.
+
+The name "Cindy" in the description refers to a common gym benchmark workout in general use; the app is not affiliated with any brand, film, or person.
