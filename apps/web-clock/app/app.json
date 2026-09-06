@@ -52,7 +52,7 @@
       }
     },
     "updates": {
-      "url": "https://u.expo.dev/00000000-0000-0000-0000-000000000000",
+      "url": "https://u.expo.dev/f726ffe5-0c62-4136-8484-cb59374f19e8",
       "fallbackToCacheTimeout": 0
     },
     "runtimeVersion": {
@@ -84,9 +84,11 @@
       "reactCompiler": true
     },
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "00000000-0000-0000-0000-000000000000"
+        "projectId": "f726ffe5-0c62-4136-8484-cb59374f19e8"
       }
-    }
+    },
+    "owner": "salaseviciusm"
   }
 }
