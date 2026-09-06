@@ -24,10 +24,12 @@ let asset = AVURLAsset(url: URL(fileURLWithPath: path))
 let semaphore = DispatchSemaphore(value: 0)
 var videoTrack: AVAssetTrack?
 var preferredTransform = CGAffineTransform.identity
+var naturalSize = CGSize.zero
 Task {
   if let track = try? await asset.loadTracks(withMediaType: .video).first {
     videoTrack = track
     if let t = try? await track.load(.preferredTransform) { preferredTransform = t }
+    if let s = try? await track.load(.naturalSize) { naturalSize = s }
   }
   semaphore.signal()
 }
@@ -48,6 +50,10 @@ func orientation(for transform: CGAffineTransform) -> CGImagePropertyOrientation
   }
 }
 let imageOrientation = orientation(for: preferredTransform)
+// Size as displayed (after rotation) — pass to csv-to-fixture as --size WxH.
+let displaySize = naturalSize.applying(preferredTransform)
+let sizeArg = "\(Int(abs(displaySize.width)))x\(Int(abs(displaySize.height)))"
+FileHandle.standardError.write("size \(sizeArg) (orientation \(imageOrientation.rawValue))\n".data(using: .utf8)!)
 
 let reader = try AVAssetReader(asset: asset)
 let output = AVAssetReaderTrackOutput(
@@ -102,7 +108,7 @@ while let sample = output.copyNextSampleBuffer() {
   processed += 1
 }
 
-FileHandle.standardError.write("processed \(processed) of \(frameIndex + 1) frames (orientation \(imageOrientation.rawValue))\n".data(using: .utf8)!)
+FileHandle.standardError.write("processed \(processed) of \(frameIndex + 1) frames; next: node tools/csv-to-fixture.mjs <csv> <json> --size \(sizeArg)\n".data(using: .utf8)!)
 if reader.status == .failed {
   FileHandle.standardError.write("reader failed: \(String(describing: reader.error))\n".data(using: .utf8)!)
   exit(1)

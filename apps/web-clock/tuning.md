@@ -48,6 +48,69 @@ npm test
 
 Fixtures hold keypoints only. Commit them. Never commit the `.mov`.
 
+## 2a. Mixed clips (IMG_1159 / IMG_1158 / IMG_1151)
+
+The first footage is three general-workout clips — push-ups, pull-ups, burpees, back rows,
+no Cindy. That is fine, and in one way better: rows and burpees are exactly the movements
+the detectors must *not* count. Workflow, on the Mac, from `apps/web-clock/app`:
+
+```sh
+xcrun swiftc -O tools/pose-extract.swift -o /tmp/pose-extract
+for n in 1159 1158 1151; do
+  /tmp/pose-extract ~/Downloads/IMG_$n.MOV > /tmp/img-$n.csv      # stderr prints "size WxH"
+  node tools/csv-to-fixture.mjs /tmp/img-$n.csv /tmp/img-$n.json --size 1080x1920
+  npm run scan -- /tmp/img-$n.json --bucket 2 > /tmp/img-$n.scan.txt
+done
+```
+
+Use the `--size` the extractor printed (portrait iPhone video is usually `1080x1920`;
+4K is `2160x3840`). Whole-clip fixtures stay in `/tmp` — they are too long to be goldens.
+
+`scan` prints three things per clip:
+
+1. **A timeline** in 2 s buckets: posture guess (`hang` / `plank` / `stand` / `bent`),
+   joint coverage, mean elbow and knee angle, hip-below-knee, nose-above-wrist. `plank`
+   with the elbow oscillating = push-ups (or the push-up half of a burpee); `hang` = on
+   the bar; `bent` with the elbow oscillating = rows.
+2. **Every count/reject from every detector** across the whole clip, with timestamps.
+   Watch the video at those timestamps. A pull-up count during rows is a false positive
+   to fix; a push-up count during a burpee is arguably correct and a judgment call.
+3. **Suggested `--from/--to` windows** where a detector counted a burst of reps.
+
+Then cut snippets. Positive ones go under the move, negatives under `negative/`:
+
+```sh
+node tools/csv-to-fixture.mjs /tmp/img-1159.csv fixtures/pushup/founder-mixed-01.json \
+  --from 42 --to 71 --size 1080x1920 --label "IMG_1159 0:42–1:11, push-ups, phone on floor, side"
+echo '{ "counted": 12, "maxRejects": 2, "note": "counted aloud from the video" }' \
+  > fixtures/pushup/founder-mixed-01.expect.json
+
+node tools/csv-to-fixture.mjs /tmp/img-1158.csv fixtures/negative/rows-01.json \
+  --from 130 --to 165 --size 1080x1920 --label "IMG_1158 2:10–2:45, bent-over rows"
+echo '{ "maxCounted": { "pullup": 0, "pushup": 0, "squat": 0 }, "note": "rows must not count" }' \
+  > fixtures/negative/rows-01.expect.json
+
+npm test
+```
+
+Cut each window with **3 s of stillness before the first rep** when the footage has it —
+the detectors need to see the start position (hang / lockout / standing) before they arm,
+which is why clip A from the spike counts 2 of its 3 visible tops.
+
+What these clips can and cannot settle:
+
+- **Can:** elbow-angle thresholds for push-ups and pull-ups on your body and your camera
+  placement; whether the chin rule and the `too-close` gate fire wrongly; how rows and
+  burpees look to each detector (negative goldens); which reject reasons fire on grinders.
+- **Cannot:** squat thresholds (no squats in the clips — film `squats.mov`), the transition
+  guard length, or anything about a 20:00 under fatigue. Those still need the table in §1.
+
+Known cross-talk to expect in the scan: the push-up detector counts pull-ups (both are
+elbow-angle cycles; on the spike's clip B it counts 2 of 3). In the app only the active
+set's detector runs, so this is not a bug on its own — but if the negatives show the
+pull-up detector counting rows, the fix is a posture gate (wrists above shoulders for
+pull-ups; torso near horizontal for push-ups), not a threshold change.
+
 ## 3. Reading a failure
 
 `tests/goldens.test.ts` says how many reps counted vs how many you did. To see why, dump

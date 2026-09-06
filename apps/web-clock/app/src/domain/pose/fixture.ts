@@ -5,6 +5,8 @@ export interface PoseFixture {
   readonly version: 1;
   readonly source: string;
   readonly label?: string;
+  /** When cut from a longer clip: the source window, so the clip can be found again. */
+  readonly window?: { readonly fromSec: number; readonly toSec: number };
   readonly coords: 'normalized-top-left-y-down';
   readonly width: number;
   readonly height: number;

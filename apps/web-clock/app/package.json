@@ -54,7 +54,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run format:check && npm run test",
-    "fixture": "node tools/csv-to-fixture.mjs"
+    "fixture": "node tools/csv-to-fixture.mjs",
+    "scan": "vite-node tools/scan.ts"
   },
   "private": true
 }

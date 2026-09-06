@@ -17,6 +17,7 @@
     "modules/**/*.ts",
     "modules/**/*.tsx",
     "tests/**/*.ts",
+    "tools/**/*.ts",
     "vitest.config.ts",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
