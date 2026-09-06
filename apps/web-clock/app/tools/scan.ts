@@ -5,13 +5,14 @@
 //   npm run scan -- /tmp/img-1159.json            # 1 s buckets
 //   npm run scan -- /tmp/img-1159.json --bucket 2 # 2 s buckets
 //
-// Columns: posture guess (hang / plank / stand / bent / ?), joint coverage, mean elbow
-// angle, mean knee angle, hip–knee dy (positive = hips below knees), nose–wrist dy
-// (positive = nose above wrists). Then every rep counted or rejected by each detector,
+// Columns: classifyPosture (hang / stand / plank / supine / unknown), joint coverage,
+// mean elbow, mean knee, hip–knee dy (positive = hips below knees), wrist-above-shoulder
+// in torso-lengths. Then every rep counted or rejected by each detector (incl. row),
 // then suggested --from/--to windows per movement.
 import { readFileSync } from 'node:fs';
 import { createDetector } from '../src/domain/detectors/index.js';
 import {
+  MOVES,
   RX_PLAN,
   SCALED_PLAN,
   type Detector,
@@ -21,6 +22,7 @@ import {
 import { elbowAngle } from '../src/domain/detectors/pullup-detector.js';
 import { kneeAngle } from '../src/domain/detectors/squat-detector.js';
 import { fixtureFrames, type PoseFixture } from '../src/domain/pose/fixture.js';
+import { classifyPosture } from '../src/domain/pose/posture.js';
 import { JOINTS, joint, meanDefined, type PoseFrame } from '../src/domain/pose/pose-frame.js';
 
 const [, , input, ...rest] = process.argv;
@@ -42,50 +44,29 @@ console.log(
   `${fixture.source}${fixture.label ? ` — ${fixture.label}` : ''}: ${frames.length} frames, ${durationSec.toFixed(1)} s, ${fixture.width}x${fixture.height}`,
 );
 
-type Posture = 'hang' | 'plank' | 'stand' | 'bent' | '?';
-
 interface Sample {
-  posture: Posture;
+  posture: string;
   coverage: number;
   elbow?: number;
   knee?: number;
   hipKneeDy?: number;
-  noseWristDy?: number;
+  wristAbove?: number;
 }
 
 function sample(frame: PoseFrame): Sample {
   const seen = JOINTS.filter((name) => joint(frame, name) !== undefined).length;
-  const shoulder = mid(frame, 'leftShoulder', 'rightShoulder');
   const hip = mid(frame, 'leftHip', 'rightHip');
   const knee = mid(frame, 'leftKnee', 'rightKnee');
-  const wrist = mid(frame, 'leftWrist', 'rightWrist');
-  const nose = joint(frame, 'nose');
+  const classified = classifyPosture(frame);
   const elbow = meanDefined([elbowAngle(frame, 'left')?.angle, elbowAngle(frame, 'right')?.angle]);
   const kneeA = meanDefined([kneeAngle(frame, 'left')?.angle, kneeAngle(frame, 'right')?.angle]);
-
-  let posture: Posture = '?';
-  if (shoulder && hip) {
-    // Angle of the torso from vertical: 0 = upright, 90 = horizontal (plank).
-    const torso =
-      (Math.atan2(Math.abs(hip.x - shoulder.x), Math.abs(hip.y - shoulder.y)) * 180) / Math.PI;
-    const wristsAboveHead = wrist !== undefined && nose !== undefined && wrist.y < nose.y;
-    if (torso > 60) {
-      posture = 'plank';
-    } else if (torso > 25) {
-      posture = 'bent';
-    } else if (wristsAboveHead) {
-      posture = 'hang';
-    } else {
-      posture = 'stand';
-    }
-  }
   return {
-    posture,
+    posture: classified.posture,
     coverage: seen / JOINTS.length,
     elbow,
     knee: kneeA,
     hipKneeDy: hip && knee ? hip.y - knee.y : undefined,
-    noseWristDy: nose && wrist ? wrist.y - nose.y : undefined,
+    wristAbove: classified.features.wristAboveShoulder,
   };
 }
 
@@ -100,7 +81,7 @@ function mid(frame: PoseFrame, a: Parameters<typeof joint>[1], b: Parameters<typ
 
 // --- timeline -------------------------------------------------------------------------
 
-console.log('\ntime   posture  cover  elbow  knee   hip-knee  nose-wrist');
+console.log('\ntime   posture  cover  elbow  knee   hip-knee  wrist↑sho');
 const buckets = new Map<number, Sample[]>();
 for (const frame of frames) {
   const key = Math.floor(frame.tMs / 1000 / bucketSec);
@@ -117,14 +98,14 @@ for (const [key, samples] of [...buckets.entries()].sort((a, b) => a[0] - b[0]))
     deg(meanDefined(samples.map((s) => s.elbow))).padStart(6),
     deg(meanDefined(samples.map((s) => s.knee))).padStart(6),
     num(meanDefined(samples.map((s) => s.hipKneeDy))).padStart(9),
-    num(meanDefined(samples.map((s) => s.noseWristDy))).padStart(11),
+    num(meanDefined(samples.map((s) => s.wristAbove))).padStart(10),
   ];
   console.log(row.join(' '));
 }
 
 // --- detectors over the whole clip ----------------------------------------------------
 
-const moves: Move[] = ['pullup', 'pushup', 'squat'];
+const moves: Move[] = [...MOVES];
 const hits = new Map<Move, { counted: number[]; rejected: { t: number; reason: string }[] }>();
 console.log('\ndetector events (whole clip, plan ' + (plan === RX_PLAN ? 'rx' : 'scaled') + ')');
 for (const move of moves) {
@@ -190,8 +171,8 @@ function bursts(times: number[], gapMs: number): number[][] {
   return out;
 }
 
-function dominant(values: Posture[]): Posture {
-  const counts = new Map<Posture, number>();
+function dominant(values: string[]): string {
+  const counts = new Map<string, number>();
   for (const v of values) {
     counts.set(v, (counts.get(v) ?? 0) + 1);
   }

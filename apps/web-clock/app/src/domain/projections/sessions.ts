@@ -1,4 +1,9 @@
-import type { Move, RejectReason, VariantPlan } from '../detectors/detector.js';
+import {
+  ZERO_REPS,
+  type Move,
+  type RejectReason,
+  type VariantPlan,
+} from '../detectors/detector.js';
 import type { WorkoutEvent } from '../workout/events.js';
 
 export interface SessionSummary {
@@ -48,7 +53,7 @@ export function foldSessions(events: readonly WorkoutEvent[]): Map<string, Sessi
           repsManual: 0,
           repsRejected: 0,
           rejectsByReason: {},
-          repsByMove: { pullup: 0, pushup: 0, squat: 0 },
+          repsByMove: { ...ZERO_REPS },
           early: false,
           abandoned: false,
           durationMs: 0,

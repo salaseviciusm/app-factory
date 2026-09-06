@@ -6,7 +6,7 @@ Keypoint tracks only — never video. Safe to commit, safe to share.
 fixtures/<move>/<name>.json          # produced by tools/csv-to-fixture.mjs
 fixtures/<move>/<name>.expect.json   # what actually happened in the clip (the golden)
 fixtures/negative/<name>.json        # a movement no detector should count (rows, burpees…)
-fixtures/negative/<name>.expect.json # { "maxCounted": { "pullup": 0, "pushup": 1 }, "note": … }
+fixtures/negative/<name>.expect.json # { "maxCounted": { "pullup": 0, "row": 8 }, "note": … }
 ```
 
 Snippets cut from a longer clip carry a `window` (`fromSec`/`toSec` in the source video)
@@ -27,5 +27,6 @@ for its folder. Expect file shape:
 }
 ```
 
-Current fixtures come from the pullup spike (Coverr CC0 clips). Founder footage lands
-here after the footage session — see `../../tuning.md`.
+Spike clips (Coverr CC0) live under `pullup/clip-*`. Founder snippets from IMG_1151 /
+1158 / 1159 are the first real-body goldens. Whole-clip fixtures stay in `/tmp` — see
+`../../tuning.md`.

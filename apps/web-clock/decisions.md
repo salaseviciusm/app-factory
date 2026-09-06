@@ -119,3 +119,22 @@ reads as a pull-up; "+1" always works). The sim source is `__DEV__`-only and is
 not in the store build.
 **Why:** One source of truth for the listing; the checklist item is "paste",
 not "write".
+
+## P13 — Posture gate before the cycle; multi-angle via 3D project, not AI video (2026-09-06)
+
+**Context:** Founder clips (IMG_1151/1158/1159) showed inverted rows counted as
+both push-ups and pull-ups — both are elbow-angle cycles. A request to generate
+alternate camera angles with AI video, so the engine is not fitted to one patio
+placement.
+**Decision (proposed):** Classify `hang | stand | plank | supine` from
+*relative* geometry (torso tilt, wrists above/below shoulders in torso-lengths,
+torso-to-body-box fraction for foreshortened front views). Each detector only
+steps its cycle machine in its posture. Inverted row is a first-class detector.
+Angle invariance is tested by projecting a 3D canonical athlete through a grid
+of pinhole cameras (`src/domain/pose/project.ts`). Do **not** train goldens on
+AI-generated video: Vision on invented limbs describes the generator, not the
+athlete. AI video stays a listing/demo tool if we want it later.
+**Why:** The 1151 row window went from ~9 false push-up counts and ~9 false
+pull-up counts to zero. The 3D grid covers hip-height, floor, front, side, ¾,
+and rear without a second film day. Cindy is unchanged; row is in the catalogue
+for goldens and a later free-form workout.

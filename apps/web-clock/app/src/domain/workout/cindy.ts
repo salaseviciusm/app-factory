@@ -30,6 +30,7 @@ export const MOVE_LABEL: Record<Move, string> = {
   pullup: 'Pull-ups',
   pushup: 'Push-ups',
   squat: 'Squats',
+  row: 'Inverted rows',
 };
 
 /** Score components from a position in the workout. */

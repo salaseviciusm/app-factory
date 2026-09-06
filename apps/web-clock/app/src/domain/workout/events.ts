@@ -6,7 +6,7 @@ import { z } from 'zod';
  * events carry the detector id so a retune never rewrites history.
  */
 
-const move = z.enum(['pullup', 'pushup', 'squat']);
+const move = z.enum(['pullup', 'pushup', 'squat', 'row']);
 const variant = z.enum(['rx', 'jumping', 'knee', 'box']);
 const rejectReason = z.enum([
   'hang-short',

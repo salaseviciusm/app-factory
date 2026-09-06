@@ -68,13 +68,14 @@ Use the `--size` the extractor printed (portrait iPhone video is usually `1080x1
 
 `scan` prints three things per clip:
 
-1. **A timeline** in 2 s buckets: posture guess (`hang` / `plank` / `stand` / `bent`),
-   joint coverage, mean elbow and knee angle, hip-below-knee, nose-above-wrist. `plank`
-   with the elbow oscillating = push-ups (or the push-up half of a burpee); `hang` = on
-   the bar; `bent` with the elbow oscillating = rows.
+1. **A timeline** in 2 s buckets: `classifyPosture` (`hang` / `stand` / `plank` /
+   `supine` / `unknown`), joint coverage, mean elbow and knee angle, hip-below-knee,
+   wrist-above-shoulder in torso-lengths. `plank` + oscillating elbow = push-ups (or
+   the push-up half of a burpee); `hang` = on the bar; `supine` + oscillating elbow =
+   inverted rows; `stand` + oscillating knee = squats.
 2. **Every count/reject from every detector** across the whole clip, with timestamps.
-   Watch the video at those timestamps. A pull-up count during rows is a false positive
-   to fix; a push-up count during a burpee is arguably correct and a judgment call.
+   Watch the video at those timestamps. A pull-up or push-up count during rows is a
+   gate failure. A push-up count during a burpee is a judgment call.
 3. **Suggested `--from/--to` windows** where a detector counted a burst of reps.
 
 Then cut snippets. Positive ones go under the move, negatives under `negative/`:
@@ -85,10 +86,10 @@ node tools/csv-to-fixture.mjs /tmp/img-1159.csv fixtures/pushup/founder-mixed-01
 echo '{ "counted": 12, "maxRejects": 2, "note": "counted aloud from the video" }' \
   > fixtures/pushup/founder-mixed-01.expect.json
 
-node tools/csv-to-fixture.mjs /tmp/img-1158.csv fixtures/negative/rows-01.json \
-  --from 130 --to 165 --size 1080x1920 --label "IMG_1158 2:10–2:45, bent-over rows"
-echo '{ "maxCounted": { "pullup": 0, "pushup": 0, "squat": 0 }, "note": "rows must not count" }' \
-  > fixtures/negative/rows-01.expect.json
+node tools/csv-to-fixture.mjs /tmp/img-1158.csv fixtures/negative/founder-rows-1158.json \
+  --from 130 --to 165 --size 1080x1920 --label "IMG_1158 2:10–2:45, inverted rows"
+echo '{ "maxCounted": { "pullup": 0, "pushup": 0, "squat": 0, "row": 8 }, "note": "Cindy 0" }' \
+  > fixtures/negative/founder-rows-1158.expect.json
 
 npm test
 ```
@@ -97,19 +98,83 @@ Cut each window with **3 s of stillness before the first rep** when the footage 
 the detectors need to see the start position (hang / lockout / standing) before they arm,
 which is why clip A from the spike counts 2 of its 3 visible tops.
 
+Snippets already cut from these clips:
+
+| Fixture | Source | Window | What it settles |
+|---|---|---|---|
+| `negative/founder-rows-1151` | IMG_1151 | 0:52–1:12 | Inverted rows must not count as Cindy moves |
+| `negative/founder-rows-1158` | IMG_1158 | 2:10–2:45 | Same, second body position |
+| `row/founder-1151` | IMG_1151 | 0:52–1:12 | Row detector may count (currently undercounts) |
+| `pushup/founder-incline-1151` | IMG_1151 | 0:20–0:46 | Incline on the low handles ≠ floor Rx |
+| `squat/founder-1158` | IMG_1158 | 0:07–0:34 | Air squats, phone on the floor |
+| `pullup/founder-rear-1159` | IMG_1159 | 4:00–4:20 | Rear bent-knee pull-ups (`hang-short` on the tuck) |
+
 What these clips can and cannot settle:
 
-- **Can:** elbow-angle thresholds for push-ups and pull-ups on your body and your camera
-  placement; whether the chin rule and the `too-close` gate fire wrongly; how rows and
-  burpees look to each detector (negative goldens); which reject reasons fire on grinders.
-- **Cannot:** squat thresholds (no squats in the clips — film `squats.mov`), the transition
-  guard length, or anything about a 20:00 under fatigue. Those still need the table in §1.
+- **Can:** the posture gate (rows ≠ push-ups ≠ pull-ups); elbow/knee thresholds on this
+  body and this patio; incline vs floor Rx; rear-view pull-ups; squat depth from the floor.
+- **Cannot:** floor Rx push-ups, front/¾ dead-hang pull-ups, the transition guard, or a
+  20:00 under fatigue. Those still need the table in §1. Dips and burpees in 1158 have
+  no detector yet.
 
-Known cross-talk to expect in the scan: the push-up detector counts pull-ups (both are
-elbow-angle cycles; on the spike's clip B it counts 2 of 3). In the app only the active
-set's detector runs, so this is not a bug on its own — but if the negatives show the
-pull-up detector counting rows, the fix is a posture gate (wrists above shoulders for
-pull-ups; torso near horizontal for push-ups), not a threshold change.
+The posture gate (`src/domain/pose/posture.ts`) is what stopped the 1151 row window
+counting as ~18 pull-ups and ~19 push-ups. At the top of a row the shoulders rise to
+the bar and the classifier flips `supine` → `plank`; `PostureArm` holds the row
+detector through that once a cycle has started. Do not loosen Cindy thresholds to
+chase leftover misses — those are lockout (`startAbove`) or a later retune.
+
+Posture features (relative, not pixels):
+
+| Feature | Meaning | Gate |
+|---|---|---|
+| `torsoTilt` | 0° = image-vertical, 90° = horizontal | upright < 48°, horizontal > 55° |
+| `wristAboveShoulder` | wrists toward the top of the frame, in torso-lengths | hang ≥ 0.22; supine ≥ 0.18 |
+| `torsoFraction` | torso length / visible body box | < 0.22 + wrists up = foreshortened row, not hang |
+
+Hips missing (common on rear / floor cameras): wrists above shoulders → hang. Do not
+invent a torso fraction — that misfires as a row and killed the spike's clip A.
+
+## 2b. More camera angles — 3D project, not AI video
+
+The engine must not overfit the patio floor placement. The cheap way to get other
+angles is a 3D stick figure in metres (`athleteAt` in `src/domain/pose/project.ts`)
+projected through `CAMERAS`:
+
+`front-hip`, `front-floor`, `side-hip`, `side-floor`, `rear-hip`, `three-quarter`.
+
+`tests/posture.test.ts` requires the intended detector to count, and the others to
+stay at zero, on every camera except `rear-hip` + push-up (filming a plank from the
+head looks like a stand — a framing fail; do not retune thresholds to pass it). A
+spine-on row (front-floor / rear) is `supine` from stacked hips, not a hang.
+
+**Do not generate goldens from AI video** of the reference clips. Vision run on
+invented limbs describes the generator, not the athlete; a hallucinated elbow angle
+becomes a false threshold. If we want other angles of the *same* activity later:
+
+1. Add a camera to `CAMERAS` and extend the multi-view test (same 3D athlete).
+2. Or film a real clip from that placement and cut a fixture (§2).
+
+AI video is still useful for listing / ASO / demo footage, where the pixels are the
+product. It is not a golden source.
+
+The live framing gate still wants ~75% of required joints. Founder floor placement
+often sits at 40–70% coverage and may refuse to start a session. That is a separate
+cue, not a detector threshold.
+
+## 2c. Debug videos (skip-hero loop)
+
+Same pipeline as skip-hero: pose fixture → detector trace → annotated `.debug.mov`.
+The source clip is never modified. From `apps/web-clock/app`:
+
+```sh
+npm run debug-video -- ~/Downloads/IMG_1151.MOV 30
+# reuses /tmp/img-1151.json when present
+npm run debug-video -- ~/Downloads/IMG_1158.MOV 20 --from 7 --to 40
+```
+
+Writes `<video>.debug.mov` and `<video>.debug-preview.png` next to the input (or
+`--out`). HUD: posture, all four detector counts/phases, count/reject flashes,
+elbow + knee strip. Delete the `.trace.json` after a retune.
 
 ## 3. Reading a failure
 
@@ -132,6 +197,7 @@ Compare against the thresholds in `src/domain/detectors/*-detector.ts`:
 | push-up knee | 150° | 135° | 105° | return to lockout |
 | squat rx | 160° | 140° | 100° + hip ≤ knee | standing up |
 | squat box | 160° | 145° | 120° | standing up |
+| row rx | 150° | 130° | 95° | return to long-arm (gate holds through plank at the top) |
 
 Typical fixes, in order of likelihood:
 
@@ -145,8 +211,9 @@ Typical fixes, in order of likelihood:
    higher than the wrist line by less than expected at your bar height.
 5. **Flicker at the top** → `smoothing` down (0.6 → 0.4) adds lag but kills double-counts.
 
-Bump the detector `id` (`pullup-rx-v1` → `v2`) whenever thresholds change after a build has
-shipped: history keeps the detector that counted each rep.
+Cindy detectors are already `v2` (the posture-arm bump). Bump again (`v2` → `v3`)
+whenever thresholds change after a build has shipped: history keeps the detector that
+counted each rep. Row is still `row-rx-v1`.
 
 ## 4. Shipping a retune
 

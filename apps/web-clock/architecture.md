@@ -328,7 +328,7 @@ in `decisions.md` (P8–P11).
 What exists and passes `npm run check` (typecheck, prettier, 34 tests):
 
 - `src/domain/pose` — `PoseFrame` (19 joints, normalised top-left), angles, `PoseSource`,
-  `sim-pose` (three moves, start/end interpolation), `fixture`.
+  `sim-pose`, `fixture`. Posture, `row`, and the 3D camera grid landed later — see §20.
 - `src/domain/detectors` — `CycleMachine` (hysteresis, EMA smoothing, `minRepMs`, count
   at leave-end or return-start), pull-up rx/jumping, push-up rx/knee, squat rx/box,
   `FramingGate` (rolling window, hysteresis, `too-close`).
@@ -346,6 +346,28 @@ What exists and passes `npm run check` (typecheck, prettier, 34 tests):
   `store/submission-checklist.md`, `tuning.md`, `tools/pose-extract.swift`,
   `tools/csv-to-fixture.mjs`.
 
-What does not exist: an accuracy number, a build that has run on a phone, any fixture of
-the founder. The two goldens are the pullup spike's stock clips. Tomorrow's footage is the
-first real input; the loop is `tuning.md`.
+## 20. Posture gate and multi-angle (2026-09-06)
+
+Founder footage showed every elbow-angle cycle looking like every other. The fix is
+upstream of the cycle machine:
+
+```
+PoseFrame → classifyPosture (relative geometry) → PostureArm → CycleMachine
+```
+
+`hang` / `stand` / `plank` / `supine` / `unknown`. Unknown pauses without reset;
+a run of mismatches resets so a row set cannot leave a push-up detector half-cycled.
+Detector ids bumped to `v2`. `row` is a fourth move; Cindy still uses three.
+
+Angle invariance is `athleteAt(move, depth)` in metres, projected by `CAMERAS`
+(front/side/¾/rear × hip/floor). Tests require the same count from every usable
+camera and zero cross-talk. A plank filmed from the head (`rear-hip`) is excluded
+— it stacks into a stand. A spine-on row is `supine` (stacked hips), not a hang.
+
+AI-generated video from a reference clip is the wrong golden source (compounded
+anatomy error). It can still produce listing or demo footage. The loop for a new
+angle is: add a camera to `CAMERAS`, or film a real clip and cut a fixture.
+
+Offline debug videos (skip-hero loop): `tools/debug-video.sh` traces every detector
+over a fixture and `tools/debug-render.swift` burns skeleton, posture, counts, and
+the elbow/knee strip onto a copy of the source clip. See `tuning.md` §2c.

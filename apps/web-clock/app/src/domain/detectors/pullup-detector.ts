@@ -1,6 +1,13 @@
+import { classifyPosture, PostureArm } from '../pose/posture.js';
 import { angleDeg, joint, meanDefined, type Joint, type PoseFrame } from '../pose/pose-frame.js';
 import { CycleMachine, type CycleThresholds } from './cycle-detector.js';
-import type { Detector, DetectorOutput, PullupVariant, RejectReason } from './detector.js';
+import {
+  NO_OUTPUT,
+  type Detector,
+  type DetectorOutput,
+  type PullupVariant,
+  type RejectReason,
+} from './detector.js';
 
 /**
  * Pull-up on the elbow angle (shoulder–elbow–wrist), averaged over the sides that are
@@ -46,20 +53,25 @@ export class PullupDetector implements Detector {
   ];
   readonly id: string;
   private readonly machine: CycleMachine;
+  private readonly arm = new PostureArm('hang');
 
   constructor(
     readonly variant: PullupVariant,
     thresholds: CycleThresholds = PULLUP_THRESHOLDS[variant],
   ) {
-    this.id = `pullup-${variant}-v1`;
+    this.id = `pullup-${variant}-v2`;
     this.machine = new CycleMachine(thresholds, variant === 'rx' ? chinOverBar : undefined);
   }
 
   reset(): void {
     this.machine.reset();
+    this.arm.reset();
   }
 
   step(frame: PoseFrame): DetectorOutput {
+    if (!this.arm.allow(classifyPosture(frame).posture, this.machine)) {
+      return { ...NO_OUTPUT, phase: this.machine.currentPhase };
+    }
     const sides = [elbowAngle(frame, 'left'), elbowAngle(frame, 'right')];
     const signal = meanDefined(sides.map((s) => s?.angle));
     const confidence = meanDefined(sides.map((s) => s?.confidence)) ?? 0;

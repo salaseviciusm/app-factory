@@ -55,7 +55,10 @@
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run format:check && npm run test",
     "fixture": "node tools/csv-to-fixture.mjs",
-    "scan": "vite-node tools/scan.ts"
+    "scan": "vite-node tools/scan.ts",
+    "posture": "vite-node tools/posture-dump.ts",
+    "trace": "vite-node tools/trace-fixture.ts",
+    "debug-video": "bash tools/debug-video.sh"
   },
   "private": true
 }

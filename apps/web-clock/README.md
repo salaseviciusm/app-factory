@@ -3,8 +3,10 @@
 Factory app and the factory's first distribution pilot: a 30-day challenge on the
 20-minute 5-10-15 (Cindy), counted by on-device Apple Vision. The Expo app is
 stamped and implemented end to end in `app/`; store assets and copy are in
-`store/`. **It has not run on a phone yet and has no accuracy figure.** Founder
-footage (see `tuning.md`) is the next input.
+`store/`. **It has not run on a phone yet and has no published accuracy figure.**
+Founder snippets from the patio clips are in `app/fixtures/`; a posture gate stops
+inverted rows counting as push-ups or pull-ups (`decisions.md` P13). Remaining
+footage is in `tuning.md` §1.
 
 ## Start here
 
@@ -12,9 +14,9 @@ footage (see `tuning.md`) is the next input.
   how to read a failure, how to ship a retune over the air.
 - [`store/submission-checklist.md`](store/submission-checklist.md) — every step
   from Apple Developer account to manual release, with the review risks answered.
-- [`architecture.md`](architecture.md) — design (§1–18) and the as-built deltas
-  (§19).
-- [`decisions.md`](decisions.md) — P1–P12, all proposed until the founder gate.
+- [`architecture.md`](architecture.md) — design (§1–18), as-built (§19), posture
+  gate and multi-angle (§20).
+- [`decisions.md`](decisions.md) — P1–P13, all proposed until the founder gate.
 - [ASO listing — Suit Up](canvases/aso.html) / [`aso.md`](aso.md) — the store page
   and the six-frame UI contract the screens were built to.
 - [`market-check.md`](market-check.md), [`directions.md`](directions.md) — the
@@ -25,7 +27,7 @@ footage (see `tuning.md`) is the next input.
 ```sh
 cd app
 npm ci
-npm run check                 # typecheck, prettier, 34 tests incl. goldens
+npm run check                 # typecheck, prettier, tests incl. goldens
 npx expo prebuild -p ios      # local native module autolinks; needs a Mac
 npx eas build -p ios --profile development
 ```
