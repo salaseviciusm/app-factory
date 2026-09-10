@@ -1022,3 +1022,67 @@ for the *run*. Candidate for the next app-factory bug-fix run.
    marketing calendar is one of the three founder approval gates.
 5. **Still unanswered, twelfth day: skip-hero has no ship date, no v1 scope line, no
    store-submission target.** The GTM pack now presumes a launch that is still unscheduled.
+
+## Today — 2026-09-10 08:00 (posted to #factory-standup)
+
+Engine idle 19 days (last run 2026-08-22); all September work is landing through
+Codex branches by hand. Proposed plan:
+
+1. Green the three failing pace security PRs (#89, #91, #92) — same `react-native` +
+   `server` job failures across all three. DoD: checks passing, mergeable.
+2. Merge-order recommendation for #88 (Apple Watch) and #87 (structured workouts),
+   both passing but large. DoD: one line each, no merge without founder.
+3. Stale-PR cull recommendation: #37 (179d), #44 (31d), #75 (14d) — close or rebase.
+   DoD: list only, no action taken.
+
+Asks: (1) retire or repoint the run engine + the 17d-old self-review gate;
+(2) approve the stale-PR cull; (3) skip-hero ship date + marketing calendar gate,
+still unanswered since 2026-08-22.
+
+## 2026-09-10 11:00 — standup cutoff (no founder reply; posted proposal proceeds)
+
+Channel checked at 11:00: zero founder messages in #factory-standup today, no thread
+replies on either standup block. Cutoff rule applied — the 08:00 proposal proceeds and
+the day's work is dispatched.
+
+### Dispatched (factory-dispatch, sub-agent sessions, not the run engine)
+
+Briefs written to `apps/running-with-pace/tasks/`:
+
+- **`2026-09-10-green-security-prs.md`** → app-engineer, session `pace_security_prs`
+  (`agent:main:subagent:91cf704e`). Diagnose the shared `server` + `react-native` CI
+  failure on #89/#91/#92, fix once, push to all three. DoD: checks green + mergeable,
+  no scope added, no merging. Reports to #factory-pace.
+- **`2026-09-10-pr-triage-and-merge-order.md`** → tech-lead, session `pace_pr_triage`
+  (`agent:main:subagent:0592ee9d`). (A) merge order for #88/#87 with named conflict
+  risk; (B) close-or-rebase call on #37/#44/#75 with evidence. Read-only on GitHub —
+  nothing merged, nothing closed. Reports to #factory-pace.
+
+The engine was deliberately not used: nineteen idle days and both 08-22 runs ended with
+the founder closing the PRs. These went out as sub-agent sessions instead.
+
+### Decision 1 (park the engine) — taken, default applied
+
+- `factory-weekly-self-review` cron **disabled** (`aeb4d2bd`, was Sun 17:00, in `error (2x)`
+  from expired OAuth). Re-enable with `openclaw cron enable aeb4d2bd-…` when runs resume.
+- Plan gate on **`self-weekly-self-review-find-3` rejected** after 17d 17h and $2.96 spent.
+  Reason recorded on the run. This clears the only pending gate.
+
+Both are reversible in under two minutes, which is why they were taken on the default
+rather than held.
+
+### Decisions 2 and 3 — NOT taken
+
+- **Cull the stale PRs:** the proposal's own item 3 says recommendation only, nothing
+  closed today. Holding to that — the tech-lead's triage lands first, then the founder
+  closes. Default (close #37/#44, rebase #75) stands as the presumption.
+- **Skip Hero Day 1 = Mon 21 September:** this is the marketing-calendar approval gate,
+  which is founder-only. Not self-approved on a cutoff. Nineteenth day unanswered.
+
+### New evidence at cutoff (contradicts the 08:00 PR list)
+
+`gh pr list` at 11:00 shows **#88 is CONFLICTING**, not "awaiting your review, passing"
+as posted at 08:00 — it drifted during the morning. #87 is still MERGEABLE. Ten of the
+fourteen open pace PRs are now CONFLICTING (#88, #86, #83, #81, #80, #78, #75, #44, #37,
+#17); only #87 and the three security PRs are mergeable. The stale-PR problem is wider
+than the three named in the standup.
