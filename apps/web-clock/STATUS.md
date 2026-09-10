@@ -5,6 +5,15 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-05
+- **Last verified:** 2026-09-10 18:00 (EOD sync). **This file is out of date on `main`
+  and understates progress by a full pass.** `9463daf` (2026-09-06 — posture gate,
+  inverted-row detector, 3D multi-view goldens) is pushed to
+  `origin/web-clock/posture-multiview` and has **never been merged to `main`**, and it
+  carries the corrected STATUS with it. Specifically: the "In-flight" and "Blocked"
+  sections below still say the founder has yet to film clips — in fact his snippets
+  (IMG_1151 / 1158 / 1159) are already in `app/fixtures/` on that branch. Read the
+  branch's copy, not this one, until the branch lands. Nothing here was rewritten
+  in place because that would collide with the branch on merge.
 - **Codename:** `web-clock` · working name **Suit Up** · bundle `com.salaseviciusm.suitup`
 
 ## In-flight

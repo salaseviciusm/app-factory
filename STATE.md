@@ -54,6 +54,13 @@ Vertical slice of `docs/08-orchestration-layer.md` implemented and live:
 
 ## In flight
 
+> **STALE — DO NOT READ AS CURRENT (flagged 2026-09-10 18:00 EOD).** Everything in this
+> section was verified on 2026-08-06 and has been superseded. As of 2026-09-10 the engine
+> has **zero runs executing and zero gates open**; all September work is landing through
+> Codex branches by hand. For the live picture read the newest dated entry at the end of
+> this file, not this section. `feature-msdpir37` below is still `failed` at 2/11 — that
+> one fact survives, 38 days on.
+
 **Verified 2026-08-06 18:00 against `factory-run list`, `status --json` histories,
 `orchestration/telemetry.db`, git log/branch state and the OpenClaw `subagent_runs`
 table. Zero runs executing, zero gates open, one failed run, no active subagents.**
@@ -1086,3 +1093,124 @@ as posted at 08:00 — it drifted during the morning. #87 is still MERGEABLE. Te
 fourteen open pace PRs are now CONFLICTING (#88, #86, #83, #81, #80, #78, #75, #44, #37,
 #17); only #87 and the three security PRs are mergeable. The stale-PR problem is wider
 than the three named in the standup.
+
+## 2026-09-10 18:00 — EOD sync (git-, GitHub- and engine-verified)
+
+Both dispatched items landed. Two corrections to entries written earlier today, and
+one new single-copy exposure created by the factory's own record-keeping.
+
+### Item 1 — pace security PRs: DONE, and the 08:00 diagnosis was wrong
+
+#89, #91, #92 are all **MERGEABLE with all three checks (`test`, `server`,
+`react-native`) SUCCESS**, green since 10:04–10:10 UTC. Verified via
+`gh pr list --json mergeable,statusCheckRollup`.
+
+The 08:00 standup called this "the same `react-native` + `server` job failures across
+all three" — implying a code defect. It was not. The fix on each branch is a single
+commit, `Merge remote-tracking branch 'origin/main' into wt-<n>`: the branches were
+**stale against main**, not broken. Cost of the real fix: three merges, ~2 minutes.
+Worth remembering the next time three PRs fail identically — check the base before
+diagnosing the code.
+
+Attribution is **not conclusively verified**. The merge commits are authored as
+`Morkus Salasevicius <salaseviciusm@gmail.com>` (the local git identity, which a
+locally-run sub-agent also inherits), and landed 10:02–10:04 UTC, one minute after the
+briefs were written at 11:01 BST. The `wt-89`/`wt-91`/`wt-92` worktree naming matches
+an automated fix agent. Consistent with the app-engineer session, but a founder
+hand-fix in the same minute cannot be ruled out from the artefacts alone.
+
+**The app-engineer never reported.** `#factory-pace` carries no message from it today.
+Its brief's DoD required a report. Outcome achieved, DoD partially missed.
+
+### Item 2 — pace PR triage: DONE, reported 11:04:58 to #factory-pace
+
+Tech-lead delivered both halves, recommendations only, nothing merged or closed:
+
+- **Merge order: #87 before #88.** Simulated `main+#87` then #88 — *zero* new
+  conflicts. #88's two conflicts (`app.config.js`, `RunDashboard.tsx`) come from the
+  Contour commits on main (`9f3b5fc`/`386d0dd`/`467e380`), not from #87. Only genuine
+  #87↔#88 collision is `RunDashboard.tsx`. Event models are in disjoint files and
+  compose. Re-run `flush-events-handlers` + `app-pipeline` after merging.
+- **Stale-PR triage: founder's default confirmed on all three.** #37 → CLOSE (merging
+  it *reverts* main; only albums worth re-cutting). #44 → CLOSE (main moved to Mapbox
+  at `d29bb21`; no code left to patch). #75 → REBASE (~95 of 123 files net-new).
+
+The recommendations are ready. **Nothing has been closed — that is the founder's call
+and it is now the oldest open ask of the three.**
+
+### Correction: "no unpushed commits anywhere" is no longer true
+
+The 08-22 entry's clean bill of health has expired in two places:
+
+1. **`skip-hero` has 5 unpushed commits on `main`** — `3851c12`, `3bf6baf`, `10e0f6e`,
+   `a7dedc8`, `5685bc0`, all written last night 22:55–00:07. Coached workout stages,
+   session-trial failure notes, formatting gate, September retest preview version.
+   ~18 hours old, founder hand-work, single copy on disk.
+2. **Today's own STATE commit was stranded.** `a3369c8` (the 11:00 cutoff entry) was
+   committed onto **`web-clock/posture-multiview`**, not `main`, and never pushed —
+   the factory's canonical record of today existed on one local feature branch only.
+   **Fixed in this sync:** cherry-picked to `main` as `4bde9aa` and pushed.
+
+Also noted: `9463daf` (P13 posture gate, inverted-row detector, multi-view goldens,
+2026-09-06) is pushed to `origin/web-clock/posture-multiview` but **has never been
+merged to main**. Four days on a side branch. Not touched here — merging product work
+is not this sync's call.
+
+### Carried forward, unchanged and getting older
+
+- **Orphaned worktree `feature-android-pose-parity-spike` still holds ~20 modified
+  files uncommitted** (2.1GB). Re-verified today: `.gitignore`, `agent-guide.md`,
+  hip-oscillation-v2 detector + tests, skip-detector, ADR 0007, model-tuning notes,
+  debug-render.swift and more. **Nineteenth day as a single copy.** Its run is `done`
+  and PR #3 merged, so nothing tracks it.
+- **`bug-regression-fresh-non-mid` worktree** (998MB, failed at step 0/7) still safe
+  to delete. The two orphans still hold **3.1GB**.
+- **446MB skip-hero footage library still unbacked-up.** `tmutil latestbackup` fails:
+  *"Failed to mount destination"* — Time Machine is not merely stale, it is broken.
+  **Thirtieth day.**
+- **Harness defect unfixed:** `bug-i-have-sign-app` is still `failed` at 5/7 with its
+  PR #55 merged. `sync` only exits `awaiting-merge`, so the run is permanently
+  mis-stated. Still a candidate for the next app-factory bug-fix run.
+- **Agent workspace still has no remote** (`96e3c67`, unchanged since 08-11).
+
+### Engine and gates — verified clean
+
+`factory-run list`: **zero runs executing, zero gates open.** `self-weekly-self-review-find-3`
+confirmed `rejected` at plan-gate 1/3, matching this morning's entry — the only pending
+gate is genuinely cleared. `factory-weekly-self-review` cron confirmed absent from
+`openclaw cron list`, i.e. disabled as recorded (`aeb4d2bd`). Three runs remain `failed`:
+`feature-msdpir37` (skip-hero, 38 days), `bug-i-have-sign-app`, `bug-regression-fresh-non-mid`.
+
+### Two process defects found by this sync
+
+1. **The top-of-file "In flight" section is 35 days stale.** It still reads
+   *"Verified 2026-08-06 18:00 … `feature-msdpir37` is the only in-flight item"*. The
+   08-22 sync already flagged the 08-11 list as entirely stale but corrected it in a
+   dated entry further down rather than at the top. Anyone reading STATE.md from the
+   top gets an August picture. Marked stale in place below.
+2. **Sub-agent DoDs route reports to channels the EOD sync cannot read.** Verifying
+   item 2 required reading `#factory-pace` by raw channel ID (`C0BPEDXGG00`) out of
+   `~/.openclaw/factory-slack-channels.json`; by name the read is refused
+   (`Slack read target channel is not allowed`). If a brief says "reports to
+   #factory-pace", the sync that checks it must be able to read #factory-pace.
+
+Unrelated but visible in `openclaw cron list`: **`slack-leak-watchdog` (every 10 min)
+has a broken delivery route** — `announce -> last (last -> no route, will fail-closed)`.
+It has been firing every ten minutes with nowhere to deliver.
+
+### For the founder tomorrow
+
+1. **Close #37 and #44, rebase #75.** Tech-lead's evidence backs your own default on
+   all three. This is a one-line yes and it unblocks the cull. Third day of asking.
+2. **Merge order is ready: #87, then #88.** Verified zero added conflict cost. Needs
+   your merge — the factory will not merge for you.
+3. **Three security PRs are green and mergeable now** (#89, #91, #92). They fix a
+   credential leak, a path traversal and a location-privacy bypass. They should not
+   sit overnight.
+4. **~20 files of Android MediaPipe work have now been single-copy for 19 days.** Land
+   it, branch it, or bin it.
+5. **Time Machine is broken, not just behind.** 446MB of irreplaceable footage plus
+   3.1GB of orphaned worktrees have no backup destination that mounts. This is the
+   only item on this list where the downside is permanent.
+6. **Skip-hero ship date, v1 scope and marketing-calendar gate: nineteenth day
+   unanswered.** The GTM pack still presumes a launch that has no date.
