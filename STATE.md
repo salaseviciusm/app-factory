@@ -1086,3 +1086,80 @@ as posted at 08:00 — it drifted during the morning. #87 is still MERGEABLE. Te
 fourteen open pace PRs are now CONFLICTING (#88, #86, #83, #81, #80, #78, #75, #44, #37,
 #17); only #87 and the three security PRs are mergeable. The stale-PR problem is wider
 than the three named in the standup.
+
+## Today — 2026-09-11 08:00 (posted to #factory-standup)
+
+Engine idle 20 days (last run 2026-08-22; zero runs in flight, zero gates, zero
+pending merges, zero held deploys; 7-day engine spend $0). Yesterday was the
+factory's biggest shipping day in three weeks and none of it went through the
+engine: seven PRs merged into running-with-pace by the founder's own hand
+(#87, #89, #91, #92, #93, #94, #95), including all three security PRs the 09-10
+standup had dispatched. The dispatched sub-agents refreshed the three branches
+against main at 11:02–11:04; the substantive fixes and the merges were founder
+commits at 22:04–22:17. The PR-triage/merge-order task left no durable artifact
+in the repo — recorded as a miss.
+
+Proposed plan:
+
+1. Rewrite the standup's data spine to read rig git/PR state first and the engine
+   second. DoD: today's gather step sources "what landed" from merged PRs per rig.
+2. Amend the factory-dispatch brief template so every DoD names an output file
+   path. DoD: template edited, no dispatched task can finish without an artifact.
+3. Re-run the PR triage as a written note at apps/running-with-pace/notes/ —
+   merge order for #88 and #96, close-or-rebase call on #37/#44/#75. DoD: file
+   committed, nothing merged or closed.
+
+Asks: (1) stale-PR cull on #37 (180d), #44 (33d), #75 (15d) — default close;
+(2) approve the dispatch-template edit (two minutes) and whether the standup
+repoint goes through a self-review run while the engine is parked;
+(3) skip-hero ship date + marketing calendar gate, unanswered since 2026-08-22.
+
+## 2026-09-11 11:00 — standup cutoff (no founder reply; posted proposal proceeds)
+
+Channel checked at 11:00: `#factory-standup` has zero founder messages today and no
+thread replies on the 08:02 standup block — the last non-bot message in the fetched
+window is older than 2026-08-23. Cutoff rule applied: the 08:00 proposal proceeds.
+
+### Items 1 and 2 — done by hand, committed `2307c70`
+
+- **Dispatch-template artifact rule.** `openclaw/workspace/skills/factory-dispatch/SKILL.md`
+  step 3 now requires every DoD to name at least one repo-relative output path —
+  code, test, or a committed note under `apps/<app>/notes/<date>-<slug>.md` — and
+  states explicitly that investigation/review tasks are included and that a Slack
+  message is not an artifact. Added a constraint: do not accept "done" without
+  checking the named path exists and is committed. This is the direct fix for
+  yesterday's miss (the PR-triage task answered well in Slack and left nothing behind).
+- **Standup data spine repoint.** `factory-standup/SKILL.md` gains a step 0 ahead of
+  the engine: per-rig `git log --first-parent main` since the last standup plus
+  `factory-run prs --json`, with authorship called out (run vs dispatched sub-agent vs
+  founder's own hand). The engine is now a section, not the spine. Done by hand rather
+  than as a self-review run, as the 08:00 proposal said it would be — the engine is
+  parked and this was a two-file edit. DoD check: tomorrow's "Yesterday" must be
+  sourced from merged PRs per rig.
+
+### Item 3 — dispatched
+
+- Brief `apps/running-with-pace/tasks/2026-09-11-pr-triage-note.md` → tech-lead,
+  sub-agent session `pace_pr_triage_note`
+  (`agent:main:subagent:b36f9332-21e3-4f0f-87dc-f2f0dcfdd37b`, run
+  `bce4e7c0-c31e-46f2-bb78-87ee5ebfc6c6`). Merge order for #88/#96 with simulated
+  conflict evidence; close-or-rebase on #37/#44/#75 re-verified against today's main.
+  Named artifact: `apps/running-with-pace/notes/2026-09-11-pr-triage.md`, committed.
+  Read-only on GitHub. Reports to #factory-pace.
+  This is the first brief written under the new artifact rule.
+
+### Not taken at cutoff
+
+- **Stale-PR cull (#37/#44/#75).** Second day of asking, default is close — but the
+  proposal's own item 3 is recommendation-only, so nothing is closed. The note lands
+  first, then the founder closes.
+- **Skip-hero ship date + marketing calendar.** Founder gate, not self-approvable.
+  Twentieth day unanswered. Stated default: I draft the calendar and put it up as a
+  gate on Monday 2026-09-14.
+
+### PR state at cutoff (`factory-run prs --json`, 11:00)
+
+Eight open pace PRs, all `review-requested`: #96 (0.1d, passing), #88 (2.1d, passing),
+#83 (4.6d, no checks), #80 (6.7d, passing), #78 (6.7d, passing), #75 (15.4d, no
+checks), #44 (32.7d, passing), #37 (180.5d, passing). No other rig has open PRs.
+Engine: idle, 21st day.
