@@ -11,6 +11,16 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
 
 ## Gather (in order)
 
+0. **What actually landed, per rig — the data spine.** Start here, not with the
+   engine. For every rig in `orchestration/rigs.json`, read the rig's repo directly:
+   `git log --since=<last standup> --first-parent main` for merged work (merge
+   commits and direct pushes alike, with author — say plainly whether a change came
+   from a run, a dispatched sub-agent, or the founder's own hand), plus
+   `~/src/app-factory/orchestration/bin/factory-run prs --json` for open PRs.
+   "Yesterday" is composed from this: merged PRs and commits per rig. Most factory
+   output currently arrives outside the engine; a standup that leads with engine
+   state reports an empty pipeline on the busiest days.
+
 1. Runs, gates, costs — from the engine, never from STATE.md:
    `~/src/app-factory/orchestration/bin/factory-run status --json`. Every run carries
    its `state`, a `currentStep` (`{index, total, id, type}`), per-run `usage`
@@ -44,6 +54,8 @@ founder's 30-second read — outcome-first, complete sentences, no jargon.
      didn't-land bucket; give each its one-line cause.
    - **Costs**: per-run `usage` from `status --json`; for aggregates (yesterday's or
      the week's spend) use `factory-run report --days N --json` (telemetry-db digest).
+   The engine is one contributor among several — report it as a section, not as
+   the spine. When it is idle, say so in one line and move on.
 2. Open PRs across all rigs:
    `~/src/app-factory/orchestration/bin/factory-run prs --json`. One entry per open
    non-draft PR: `{rig, number, title, url, createdAt, ageDays, attention, checks}`,
