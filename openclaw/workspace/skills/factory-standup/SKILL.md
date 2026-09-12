@@ -9,6 +9,24 @@ user-invocable: true
 Produce ONE message (threaded sections welcome) for `#factory-standup`. This is the
 founder's 30-second read — outcome-first, complete sentences, no jargon.
 
+## Preflight (before anything else)
+
+Assert the `~/src/app-factory` repo is on `main` and clean before you read or write
+`STATE.md`:
+
+```sh
+cd ~/src/app-factory && git rev-parse --abbrev-ref HEAD && git status --porcelain
+```
+
+- Not on `main` → do NOT write STATE from the branch. Reconcile first (merge the
+  branch into `main`, or check out `main` if the branch is disposable), then proceed.
+  Writing STATE on a feature branch strands the day's record off `main` and creates a
+  second STATE history — this happened on 2026-09-10 and 2026-09-11 and cost a
+  reconciliation pass.
+- Dirty tree → commit or stash the unrelated work before the STATE write, so the
+  standup commit contains only the standup.
+- Same check applies at the 11:00 cutoff write and at the EOD sync.
+
 ## Gather (in order)
 
 0. **What actually landed, per rig — the data spine.** Start here, not with the
