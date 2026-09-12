@@ -16,6 +16,11 @@ Assert the `~/src/app-factory` repo is on `main` and clean before you read or wr
 
 ```sh
 cd ~/src/app-factory && git rev-parse --abbrev-ref HEAD && git status --porcelain
+# then fetch EVERY rig before reading any of their logs
+for r in ~/src/app-factory ~/src/running-with-pace ~/src/skip-hero; do
+  git -C "$r" fetch --quiet origin && \
+  echo "$r $(git -C "$r" rev-parse --short origin/main) behind=$(git -C "$r" rev-list --count main..origin/main)"
+done
 ```
 
 - Not on `main` → do NOT write STATE from the branch. Reconcile first (merge the
@@ -25,16 +30,26 @@ cd ~/src/app-factory && git rev-parse --abbrev-ref HEAD && git status --porcelai
   reconciliation pass.
 - Dirty tree → commit or stash the unrelated work before the STATE write, so the
   standup commit contains only the standup.
+- **Stale clone → you will report a stale day.** Always `git fetch` each rig first
+  and read `origin/main`, never the local `main`. On 2026-09-12 the Pace clone was
+  10 commits behind origin and the local log showed nothing of the seven PRs the
+  founder had merged two days earlier.
 - Same check applies at the 11:00 cutoff write and at the EOD sync.
 
 ## Gather (in order)
 
 0. **What actually landed, per rig — the data spine.** Start here, not with the
    engine. For every rig in `orchestration/rigs.json`, read the rig's repo directly:
-   `git log --since=<last standup> --first-parent main` for merged work (merge
+   `git log --since=<last standup> --first-parent origin/main` for merged work (merge
    commits and direct pushes alike, with author — say plainly whether a change came
    from a run, a dispatched sub-agent, or the founder's own hand), plus
-   `~/src/app-factory/orchestration/bin/factory-run prs --json` for open PRs.
+   **`gh pr list --state open` for open PRs — NOT `factory-run prs --json`.**
+   The engine's `prs` feed reports only PRs in `review-requested` state: on
+   2026-09-12 it showed 9 of the 13 open Pace PRs, hiding the oldest one in the
+   repo (#17, 215 days). Use `gh` for the census; the engine's feed is a view, not
+   a count. Report mergeability (`gh pr list --json mergeable`) alongside checks —
+   they are different axes, and calling a CONFLICTING PR "passing" because its
+   checks are green has misled three standups running.
    "Yesterday" is composed from this: merged PRs and commits per rig. Most factory
    output currently arrives outside the engine; a standup that leads with engine
    state reports an empty pipeline on the busiest days.

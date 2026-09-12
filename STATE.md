@@ -6,7 +6,12 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-08-10 21:31 (EOD sync — host was asleep 07:25–21:26, so the day
+> Last updated: 2026-09-12 18:00 (EOD sync — six stale records corrected; the biggest is
+> that the Pace PR census has been a filtered engine feed, not a census: 13 open PRs, not
+> the 9 reported this morning. Read the newest dated block at the END of this file for the
+> live picture; everything above the 2026-09-10 blocks is historical.)
+>
+> Prior: 2026-08-10 21:31 (EOD sync — host was asleep 07:25–21:26, so the day
 > was dark; in-flight items re-reconciled against GitHub PR state rather than the
 > engine, which was found stale on 4 of 6 `awaiting-merge` entries. Corrections in the
 > 2026-08-10 block at the end of this file.)
