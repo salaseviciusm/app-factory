@@ -1358,3 +1358,182 @@ Nine open Pace PRs, all awaiting founder review; no other rig has any. Engine id
 21st day — no runs, no gates, no held deploys, $0 spend in 7 days. Nothing dispatched
 to sub-agents today, as the 08:00 proposal said (item 3): both of today's items were
 mine by hand and both are done.
+
+## 2026-09-12 18:00 — EOD sync (git-, GitHub- and engine-verified)
+
+Preflight passed: `~/src/app-factory` on `main`, clean, in sync with `origin/main`
+(`b488a2a`). Verified against `gh pr list` per rig, `git status`/`worktree list`/
+`fetch` in all three rigs, `factory-run list` + `status --json`, `openclaw cron list`,
+and `tmutil`. Six stale records corrected, three new items found.
+
+### Correction 1 — the PR census has been wrong for at least two days
+
+Pace has **13 open PRs**, not the nine this morning's cutoff recorded, nor the eight
+the 09-11 cutoff recorded. Three have never appeared in any STATE entry:
+
+- **#17** "add bidirectional incremental sync between server and client storage" —
+  opened 2026-02-09, **215 days old**, older than #37.
+- **#81** "Referral code system" (2026-09-06)
+- **#86** "ASO visuals, splash handoff, and NativeTabs cold-start touches" (2026-09-07)
+
+Cause: `factory-run prs --json` reports only PRs in `review-requested` state — the
+09-11 entry even says so in its own words ("Eight open pace PRs, all
+`review-requested`") without noticing that was a filter, not a census. Every stale-PR
+cull ask made to the founder since 09-10 has therefore been built on a partial list.
+**The PR spine must use `gh pr list --state open`, not the engine's feed.** This is
+the same class of failure as the 09-11 data-spine repoint: the engine was trusted for
+something the rig itself is authoritative on.
+
+### Correction 2 — six PRs called "passing" are now CONFLICTING
+
+The 09-10 merge wave (#87, #89, #91, #92, #93, #94, #95) invalidated the mergeability
+of everything behind it. Current `gh` mergeable state:
+
+| PR | STATE said | Actual now |
+|----|-----------|-----------|
+| #98 | *(absent)* | MERGEABLE, 3/3 checks green |
+| #97 | CLEAN, checks green | MERGEABLE — holds |
+| #96 | passing | MERGEABLE — holds |
+| #88 | "passing, zero added conflict cost after #87" | **CONFLICTING** |
+| #86 | *(absent)* | CONFLICTING |
+| #83 | no checks | CONFLICTING |
+| #81 | *(absent)* | CONFLICTING |
+| #80 | passing | CONFLICTING |
+| #78 | passing | CONFLICTING |
+| #75 | no checks, 22 conflicted files | CONFLICTING — holds |
+| #44 | passing | CONFLICTING |
+| #37 | passing | CONFLICTING |
+| #17 | *(absent)* | CONFLICTING |
+
+Note the axis confusion in the older entries: "passing" was a *checks* verdict being
+read as if it meant mergeable. **Ten of thirteen open Pace PRs will not merge as they
+stand.** The 09-11 triage note's merge order (#87 then #88) is spent: #87 landed, and
+#88 now conflicts. The finished rebase at `4cd874b` in `.worktrees/pr88-rebase` is
+still the fix and is **still unpushed** — third day.
+
+### Correction 3 — there are four failed runs, not three
+
+`factory-run list` shows a fourth that no STATE entry has ever named:
+**`feature-f1-surface-footwork-readout`** (skip-hero, `failed` at step 1/11,
+plan-discussion). The 09-10 entry's "Three runs remain failed" is wrong. Full list:
+`feature-msdpir37` (skip-hero, 40 days), `bug-i-have-sign-app` (pace),
+`bug-regression-fresh-non-mid` (pace), `feature-f1-surface-footwork-readout`
+(skip-hero).
+
+### Correction 4 — Time Machine has no destination at all
+
+The 30-day-old record says *"`tmutil latestbackup` fails: Failed to mount
+destination — Time Machine is broken."* Half right, and the softer half.
+`tmutil destinationinfo` returns **"No destinations configured."** There is nothing
+to mount, and nothing has been configured to mount. This is not a degraded backup;
+it is the **absence of any backup target on the machine**, thirty-second day.
+
+At risk, single copy, no destination: **3.5GB** —
+446MB skip-hero footage (`~/.openclaw/workspace/media/skip-hero-footage/`, 13 files
++ MANIFEST, `IMG_0446.MOV` exists nowhere else), 2.1GB orphaned
+`feature-android-pose-parity-spike` worktree, 998MB `bug-regression-fresh-non-mid`.
+
+### Correction 5 — the new standup data spine reads a stale clone
+
+`~/src/running-with-pace` local `main` is **10 commits behind `origin/main`** (last
+local commit `f32921d`, 2026-09-09; origin carries the seven 09-10 merges plus three
+more). Yesterday's step-0 repoint has the standup source "what landed" from
+`git log --first-parent main` per rig — against this clone that returns a picture
+three days old. **The preflight must `git fetch` every rig before reading its log**,
+and should compare `origin/main`, not `main`. Fix belongs in
+`factory-standup/SKILL.md` Preflight alongside the on-main assertion added today.
+
+### Correction 6 — date slip in this morning's entry
+
+The 09-12 cutoff states the marketing-calendar default as "Monday 2026-09-15".
+Monday is **2026-09-14**. The 09-11 entry had it right. Default date is 09-14.
+
+### New — PR #98 opened after the cutoff
+
+"Bound map history rendering and cancel work on tab changes", opened 13:29 today,
+**MERGEABLE with all three checks green** (test, server, react-native). Not in any
+standup or cutoff entry because it postdates both. With #97 and #96, that is **three
+clean, green, mergeable Pace PRs sitting unreviewed** — the only three of thirteen
+that can merge today.
+
+### New — the Pace main checkout has been dirty since 2026-09-09
+
+13 modified + 6 untracked paths in `~/src/running-with-pace`, every one mtime
+**2026-09-09 21:29**: the Apple Watch work (`pace-watch/`, `modules/`,
+`docs/apple-watch-integration.md`, heart-rate model/tests, device events). Checked
+against `origin/codex/create-apple-watch-integration-branch`: the working tree is
+substantially a **subset** of #88 (diff to the PR head is 39 insertions / 558
+deletions across 20 files), so this is **not** a meaningful single-copy risk — but
+39 lines are not in the PR, and a dirty tree will block any rebase or checkout in
+that rig. Verify the 39 lines, then discard. Also untracked and unignored: 12MB
+`docs/design/`.
+
+### New — the two priority apps have no STATUS.md
+
+`apps/web-clock/STATUS.md` and `apps/pullup/STATUS.md` exist and are accurate.
+**`running-with-pace` and `skip-hero` have none** — neither in `apps/` nor in their
+own repos. All of September's shipping has been in those two, and the only durable
+per-app records the factory keeps are for the app that is store-ready-but-parked and
+the app that is backlogged. The EOD sync's own brief says "verify every app
+STATUS.md"; for the two apps that matter there is nothing to verify.
+
+### Verified correct, no change
+
+- **`apps/web-clock/STATUS.md`** — accurate. Last product commit `9463daf`
+  (2026-09-06); today's merge `9635707` carried it to `main` but added no product
+  work. Stage, blockers (accuracy, device, submission, four founder calls) all hold.
+- **`apps/pullup/STATUS.md`** — accurate. Last touch `b1c21b3` (2026-09-10), an EOD
+  sync editing the file. Zero pullup runs have ever existed. **Dormant 37 days** under
+  D27; nothing in September mentioned it. D27 stands.
+- **Engine** — zero runs executing, zero gates open, zero held deploys.
+  `self-weekly-self-review-find-3` confirmed `rejected` at plan-gate 1/3 with the
+  09-10 parking reason recorded verbatim. `factory-weekly-self-review` cron still
+  absent. 22nd idle day.
+- **skip-hero** — `main` at `5685bc0` (2026-09-10), clean, in sync, no open PRs.
+  Two quiet days.
+- **app-factory** — `main` `b488a2a`, clean, in sync. Today's three commits
+  (`9635707`, `9cfd3e2`, `b488a2a`) all present and pushed.
+- **Today's named artifacts exist and are committed** —
+  `apps/running-with-pace/notes/2026-09-12-pr75-vs-pr97-addendum.md` (3.6KB) and
+  `notes/2026-09-11-pr-triage.md` (15.2KB). The artifact rule added on 09-11 has now
+  survived two days and caught nothing, because nothing was dispatched today.
+
+### Carried forward, unchanged and older
+
+- **Orphaned `feature-android-pose-parity-spike` worktree** — 27 dirty paths
+  (re-counted today, up from ~20: hip-oscillation-v2 detector + tests, skip-detector,
+  ADR 0007 and new ADR 0028, mediapipe module, debug-render.swift, tuning notes).
+  **Twenty-first day as a single copy.** Its run is `done` and PR #3 merged; nothing
+  tracks it.
+- **`bug-regression-fresh-non-mid` worktree** — 998MB, still safe to delete.
+- **Harness defect unfixed** — `bug-i-have-sign-app` still `failed` at 5/7 with PR #55
+  merged; `sync` only exits `awaiting-merge`, so the run is permanently mis-stated.
+- **`slack-leak-watchdog` cron still mis-routed** — `announce -> last (no route, will
+  fail-closed)`, firing every 10 minutes into nothing. Third day since recorded, and
+  it fired again <1m before this sync.
+- **Agent workspace still has no remote** (`96e3c67`), and now carries two untracked
+  files (`memory/2026-08-19.md`, `memory/2026-08-22.md`).
+- **`.agents/` untracked and unignored in all three rigs** since 2026-09-08.
+- **PlaceSheet residue from today's addendum** — `getPoiRoutesHandler` and the
+  `usePoiRoutes`/`usePoiRoute` hooks survive in #97 but no UI calls them, so
+  discovered guided routes are unreachable. Recommended as a small brief on top of
+  #97; **nothing filed yet**, and nothing will be until #97 merges.
+- **Skip-hero ship date, v1 scope, marketing-calendar gate** — 21st day unanswered.
+
+### For the founder tomorrow
+
+1. **Three Pace PRs are clean, green and mergeable right now: #98, #97, #96.** They
+   are the only three of thirteen that will merge without work. #97 is the Places +
+   saved-routes stack that today's addendum says supersedes #75.
+2. **The stale-PR cull list was incomplete every time I asked.** It is #17 (215d),
+   #37 (180d), #44 (33d), #75 (15d) — and #17 is the oldest thing in the repo. Same
+   default: close. Fourth day of asking, first time with the real list.
+3. **#88 needs one word.** The rebase is finished at `4cd874b` and it now genuinely
+   conflicts, so the cost of waiting is rising. I will not push to your remote
+   unattended.
+4. **Time Machine has no destination configured — nothing to fix, something to
+   create.** 3.5GB single-copy, including footage that exists nowhere else. This
+   remains the only item here whose downside is permanent, and it is the one I have
+   raised most often with least effect.
+5. **Twenty-one days of unanswered skip-hero ship date.** Default stands: I draft the
+   marketing calendar and put it up as a gate on **Monday 2026-09-14**.
