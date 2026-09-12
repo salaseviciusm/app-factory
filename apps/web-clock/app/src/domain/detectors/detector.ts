@@ -1,12 +1,13 @@
 import type { Joint, PoseFrame } from '../pose/pose-frame.js';
 
-export type Move = 'pullup' | 'pushup' | 'squat';
+export type Move = 'pullup' | 'pushup' | 'squat' | 'row';
 
 /** Scaled variants are detector variants, not a different workout. */
 export type PullupVariant = 'rx' | 'jumping';
 export type PushupVariant = 'rx' | 'knee';
 export type SquatVariant = 'rx' | 'box';
-export type Variant = PullupVariant | PushupVariant | SquatVariant;
+export type RowVariant = 'rx';
+export type Variant = PullupVariant | PushupVariant | SquatVariant | RowVariant;
 
 export interface VariantPlan {
   readonly pullup: PullupVariant;
@@ -16,6 +17,9 @@ export interface VariantPlan {
 
 export const RX_PLAN: VariantPlan = { pullup: 'rx', pushup: 'rx', squat: 'rx' };
 export const SCALED_PLAN: VariantPlan = { pullup: 'jumping', pushup: 'knee', squat: 'box' };
+
+export const MOVES: readonly Move[] = ['pullup', 'pushup', 'squat', 'row'];
+export const ZERO_REPS: Record<Move, number> = { pullup: 0, pushup: 0, squat: 0, row: 0 };
 
 /**
  * Closed set. Every non-counted rep the detector saw becomes a reject with one of

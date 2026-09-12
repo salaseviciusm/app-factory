@@ -20,6 +20,12 @@ reviewable task.
 3. **Write the task brief** into `apps/<app>/tasks/<date>-<slug>.md`:
    - objective (one sentence), spec/architecture references (file+section)
    - definition of done (code + tests + Maestro flow + analytics events, per profile)
+   - **every DoD names at least one output file path** — the repo-relative path the
+     task must leave behind (code file, test, or a written note under
+     `apps/<app>/notes/<date>-<slug>.md`), committed on a named branch or main.
+     A task whose only output is a Slack message or a chat answer is not done.
+     Investigation and review tasks are included: their artifact is the committed
+     note. If you cannot name a path, the task is not ready to dispatch.
    - reviewer (the profile's `reports_to`/lead) and any boundaries specific to the task
 4. **Spawn the session**: launch a Claude Code session in the app workspace with the
    profile file + task brief as context (per O4: local sessions;
@@ -33,5 +39,7 @@ reviewable task.
 ## Constraints
 
 - One feature-sized task per engineer session. Split anything bigger.
+- Do not accept "done" without the named artifact: check the path exists and is
+  committed before routing to review or reporting in Slack.
 - Never dispatch work touching credentials, store config, or pricing — those are
   founder-gate items, staged not delegated.

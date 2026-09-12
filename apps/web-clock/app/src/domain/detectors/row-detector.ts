@@ -1,15 +1,15 @@
 import { classifyPosture, PostureArm } from '../pose/posture.js';
 import { meanDefined, type Joint, type PoseFrame } from '../pose/pose-frame.js';
 import { CycleMachine, type CycleThresholds } from './cycle-detector.js';
-import { NO_OUTPUT, type Detector, type DetectorOutput, type PushupVariant } from './detector.js';
+import { NO_OUTPUT, type Detector, type DetectorOutput, type RowVariant } from './detector.js';
 import { elbowAngle } from './pullup-detector.js';
 
 /**
- * Push-up on the same elbow angle, inverted: start = lockout (arms straight), end =
- * bottom (elbows bent). Counted on return to lockout. Knee variant has a shallower
- * bottom because the torso angle changes the projected elbow angle.
+ * Inverted row (Australian pull-up): same elbow-angle cycle as a push-up, but the
+ * athlete is *under* the bar. The posture gate (supine: horizontal torso, wrists
+ * above the shoulders) is what stops this being counted as a push-up or a pull-up.
  */
-export const PUSHUP_THRESHOLDS: Record<PushupVariant, CycleThresholds> = {
+export const ROW_THRESHOLDS: Record<RowVariant, CycleThresholds> = {
   rx: {
     startAbove: 150,
     endBelow: 95,
@@ -17,33 +17,30 @@ export const PUSHUP_THRESHOLDS: Record<PushupVariant, CycleThresholds> = {
     minRepMs: 500,
     smoothing: 0.6,
     countAt: 'start',
-    shortReason: 'depth-short',
-    repeatReason: 'lockout-short',
-  },
-  knee: {
-    startAbove: 150,
-    endBelow: 105,
-    attemptBelow: 135,
-    minRepMs: 500,
-    smoothing: 0.6,
-    countAt: 'start',
-    shortReason: 'depth-short',
+    shortReason: 'lockout-short',
     repeatReason: 'lockout-short',
   },
 };
 
-export class PushupDetector implements Detector {
-  readonly move = 'pushup' as const;
-  readonly requires: readonly Joint[] = ['leftShoulder', 'leftElbow', 'leftWrist'];
+export class RowDetector implements Detector {
+  readonly move = 'row' as const;
+  readonly requires: readonly Joint[] = [
+    'leftShoulder',
+    'rightShoulder',
+    'leftElbow',
+    'rightElbow',
+    'leftWrist',
+    'rightWrist',
+  ];
   readonly id: string;
   private readonly machine: CycleMachine;
-  private readonly arm = new PostureArm('plank');
+  private readonly arm = new PostureArm('supine', 10, ['plank']);
 
   constructor(
-    readonly variant: PushupVariant,
-    thresholds: CycleThresholds = PUSHUP_THRESHOLDS[variant],
+    readonly variant: RowVariant = 'rx',
+    thresholds: CycleThresholds = ROW_THRESHOLDS[variant],
   ) {
-    this.id = `pushup-${variant}-v2`;
+    this.id = `row-${variant}-v1`;
     this.machine = new CycleMachine(thresholds);
   }
 
@@ -56,7 +53,6 @@ export class PushupDetector implements Detector {
     if (!this.arm.allow(classifyPosture(frame).posture, this.machine)) {
       return { ...NO_OUTPUT, phase: this.machine.currentPhase };
     }
-    // Side-on, the far arm is often occluded: use whichever side is visible.
     const sides = [elbowAngle(frame, 'left'), elbowAngle(frame, 'right')];
     const signal = meanDefined(sides.map((s) => s?.angle));
     const confidence = meanDefined(sides.map((s) => s?.confidence)) ?? 0;

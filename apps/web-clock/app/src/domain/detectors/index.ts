@@ -1,6 +1,7 @@
 import type { Detector, Move, VariantPlan } from './detector.js';
 import { PullupDetector } from './pullup-detector.js';
 import { PushupDetector } from './pushup-detector.js';
+import { RowDetector } from './row-detector.js';
 import { SquatDetector } from './squat-detector.js';
 
 export function createDetector(move: Move, plan: VariantPlan): Detector {
@@ -11,5 +12,7 @@ export function createDetector(move: Move, plan: VariantPlan): Detector {
       return new PushupDetector(plan.pushup);
     case 'squat':
       return new SquatDetector(plan.squat);
+    case 'row':
+      return new RowDetector('rx');
   }
 }

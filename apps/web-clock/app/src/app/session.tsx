@@ -303,6 +303,8 @@ function framingCopy(state: FramingState, move: Move): string {
           return 'Side on. We need one whole arm, shoulder to hand.';
         case 'squat':
           return 'We need hips, knees and feet in frame. Step back.';
+        case 'row':
+          return 'We need shoulders, elbows and the bar. Lie back under it.';
       }
   }
 }

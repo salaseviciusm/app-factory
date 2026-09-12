@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createDetector } from '../src/domain/detectors/index.js';
 import {
+  MOVES,
   RX_PLAN,
   type Move,
   type RejectReason,
@@ -36,7 +37,7 @@ interface NegativeExpectation {
 }
 
 const root = new URL('../fixtures/', import.meta.url);
-const moves: Move[] = ['pullup', 'pushup', 'squat'];
+const moves: Move[] = [...MOVES];
 
 function goldenNames(folder: string): string[] {
   try {

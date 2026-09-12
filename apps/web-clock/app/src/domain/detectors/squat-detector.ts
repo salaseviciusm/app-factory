@@ -1,6 +1,13 @@
+import { classifyPosture, PostureArm } from '../pose/posture.js';
 import { angleDeg, joint, meanDefined, type Joint, type PoseFrame } from '../pose/pose-frame.js';
 import { CycleMachine, type CycleThresholds } from './cycle-detector.js';
-import type { Detector, DetectorOutput, RejectReason, SquatVariant } from './detector.js';
+import {
+  NO_OUTPUT,
+  type Detector,
+  type DetectorOutput,
+  type RejectReason,
+  type SquatVariant,
+} from './detector.js';
 
 /**
  * Air squat on the knee angle (hip–knee–ankle), 2D only — spike 002 found Vision's 3D
@@ -45,20 +52,25 @@ export class SquatDetector implements Detector {
   ];
   readonly id: string;
   private readonly machine: CycleMachine;
+  private readonly arm = new PostureArm('stand');
 
   constructor(
     readonly variant: SquatVariant,
     thresholds: CycleThresholds = SQUAT_THRESHOLDS[variant],
   ) {
-    this.id = `squat-${variant}-v1`;
+    this.id = `squat-${variant}-v2`;
     this.machine = new CycleMachine(thresholds, variant === 'rx' ? hipBelowKnee : undefined);
   }
 
   reset(): void {
     this.machine.reset();
+    this.arm.reset();
   }
 
   step(frame: PoseFrame): DetectorOutput {
+    if (!this.arm.allow(classifyPosture(frame).posture, this.machine)) {
+      return { ...NO_OUTPUT, phase: this.machine.currentPhase };
+    }
     const sides = [kneeAngle(frame, 'left'), kneeAngle(frame, 'right')];
     const signal = meanDefined(sides.map((s) => s?.angle));
     const confidence = meanDefined(sides.map((s) => s?.confidence)) ?? 0;

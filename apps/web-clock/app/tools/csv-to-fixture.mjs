@@ -27,10 +27,16 @@ const option = (name) => {
 };
 const label = option('--label');
 const fromSec = Number(option('--from') ?? 0);
-const toSec = Number(option('--to') ?? Number.POSITIVE_INFINITY);
+const toRaw = option('--to');
+const toSec = toRaw === undefined ? Number.POSITIVE_INFINITY : Number(toRaw);
 const [width, height] = (option('--size') ?? '1280x720').split('x').map(Number);
-if (!Number.isFinite(fromSec) || !Number.isFinite(toSec) || fromSec >= toSec) {
-  console.error('--from must be less than --to');
+if (
+  !Number.isFinite(fromSec) ||
+  fromSec < 0 ||
+  (toRaw !== undefined && !Number.isFinite(toSec)) ||
+  fromSec >= toSec
+) {
+  console.error('--from must be a number ≥ 0 and less than --to');
   process.exit(2);
 }
 if (!Number.isFinite(width) || !Number.isFinite(height)) {

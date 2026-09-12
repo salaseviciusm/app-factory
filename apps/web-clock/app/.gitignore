@@ -41,3 +41,8 @@ example
 # generated native folders
 /ios
 /android
+
+# debug-video artifacts (H.264 next to a source clip)
+*.debug.mov
+*.debug-preview.png
+*.trace.json
