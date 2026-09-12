@@ -1291,3 +1291,70 @@ Eight open pace PRs, all `review-requested`: #96 (0.1d, passing), #88 (2.1d, pas
 #83 (4.6d, no checks), #80 (6.7d, passing), #78 (6.7d, passing), #75 (15.4d, no
 checks), #44 (32.7d, passing), #37 (180.5d, passing). No other rig has open PRs.
 Engine: idle, 21st day.
+
+## 2026-09-12 11:00 — standup cutoff (no founder reply; posted proposal proceeds)
+
+`#factory-standup` checked at 11:00: zero founder messages today, no thread replies on
+the 08:01 standup block — every message in the fetched window is from the bot. Cutoff
+rule applied: the 08:00 proposal proceeds.
+
+### Item 1 — app-factory repo reconciled (done)
+
+`web-clock/posture-multiview` merged into `main` as `9635707` (no-ff). Two conflicts,
+both resolved by hand:
+
+- `STATE.md` — both sides appended; kept both blocks in date order (09-10 EOD sync,
+  then the 09-11 standup + cutoff blocks). One STATE history again.
+- `apps/web-clock/STATUS.md` — took the branch side, as `main`'s copy explicitly said
+  to ("read the branch's copy, not this one, until the branch lands").
+
+Now on `main`, clean, and `main` carries all of: the harness edits `2307c70` (dispatch
+artifact rule + standup data-spine repoint), both stranded cutoff STATE commits
+(`a3369c8`, `8084365`), the web-clock posture/multi-view work (`9463daf`), the 09-11
+Pace triage note and the 09-10 EOD sync. `main` is 5 ahead of `origin/main`, pushed.
+
+### Introspection change — shipped
+
+`factory-standup/SKILL.md` gains a **Preflight** section ahead of Gather: assert
+`~/src/app-factory` is on `main` and clean before reading or writing STATE; if not on
+`main`, reconcile first. Applies to the 08:00 write, the 11:00 cutoff write and the EOD
+sync. This is the direct fix for the two-STATE-histories failure of 09-10/09-11.
+
+### Item 2 — #75 vs #97 settled: **#75 is superseded, close it**
+
+Addendum committed at `apps/running-with-pace/notes/2026-09-12-pr75-vs-pr97-addendum.md`
+(`9cfd3e2`). Yesterday's "rebase #75" call is withdrawn — it predates #97.
+
+- #97 is **not** a descendant of #75 (`merge-base --is-ancestor` false): a redo, not a
+  follow-on.
+- **122 of #75's 123 files are in #97.** The only #75-only file is `app.config.js`, and
+  the only change there is the Expo bump `1.0.8 → 1.0.9`.
+- **95.2% of #75's 5,143 non-trivial added lines appear verbatim in #97's tree**; 76 of
+  the 122 shared files are byte-identical.
+- The whole Places stack plus a saved-routes layer with three new test files is in #97;
+  #97 is CLEAN with all three checks green, while #75 has 22 conflicted files and CI has
+  **never** run on it.
+- **One residue to re-file:** `PlaceSheet.tsx` shrinks 644 → 293 lines because #97 lists
+  *saved* routes rather than *server-discovered* ones. `getPoiRoutesHandler` and the
+  `usePoiRoutes`/`usePoiRoute` hooks survive in #97 but nothing in its UI calls them, so
+  discovered guided routes are unreachable from the app. Small brief on top of #97 —
+  not a reason to rebase #75.
+
+### Not taken at cutoff
+
+- **The #88 rebase push (Q2).** The 08:00 message said explicitly "it touches your repo's
+  remote, so I won't do it unattended", so silence does not authorise it. The finished
+  rebase still sits at `4cd874b` in `.worktrees/pr88-rebase`, unpushed. Needs one word.
+- **Closing #37 / #44 / #75.** Third day of asking. The evidence is now complete for all
+  three (the triage note for #37/#44, today's addendum for #75), but closing PRs in the
+  founder's repo is his call; nothing closed.
+- **Skip-hero ship date + marketing calendar.** Founder gate, not self-approvable.
+  21st day unanswered. Stated default stands: I draft the calendar and put it up as a
+  gate on Monday 2026-09-15.
+
+### State at cutoff
+
+Nine open Pace PRs, all awaiting founder review; no other rig has any. Engine idle,
+21st day — no runs, no gates, no held deploys, $0 spend in 7 days. Nothing dispatched
+to sub-agents today, as the 08:00 proposal said (item 3): both of today's items were
+mine by hand and both are done.
