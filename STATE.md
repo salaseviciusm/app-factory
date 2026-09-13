@@ -6,10 +6,15 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-09-12 18:00 (EOD sync — six stale records corrected; the biggest is
-> that the Pace PR census has been a filtered engine feed, not a census: 13 open PRs, not
-> the 9 reported this morning. Read the newest dated block at the END of this file for the
-> live picture; everything above the 2026-09-10 blocks is historical.)
+> Last updated: 2026-09-13 18:00 (EOD sync — six corrections. The founder merged #99
+> and #98 after the 11:00 cutoff, so the Pace census is 8 open, not 9; #97 went
+> CONFLICTING as a result and the "three mergeable PRs" item is down to #96 alone;
+> the skip-hero marketing calendar recorded as "drafting today" was never drafted and
+> its gate is due 2026-09-14. Read the newest dated block at the END of this file for
+> the live picture; everything above the 2026-09-10 blocks is historical.)
+>
+> Prior: 2026-09-12 18:00 (EOD sync — six stale records corrected; the biggest is
+> that the Pace PR census has been a filtered engine feed, not a census.)
 >
 > Prior: 2026-08-10 21:31 (EOD sync — host was asleep 07:25–21:26, so the day
 > was dark; in-flight items re-reconciled against GitHub PR state rather than the
@@ -1569,3 +1574,107 @@ The 08:00 proposal proceeded on stated defaults. Actions taken:
 
 Unchanged carried-forward items from the 2026-09-12 block above still stand, minus
 the stale-PR cull, which is now done.
+
+## 2026-09-13 — EOD sync (18:00)
+
+Every in-flight item re-verified against `gh pr list/view` in all three rigs, `git
+log`/`status`/`worktree list`, `factory-run status --json`, the `cron_jobs` and
+`cron_run_logs` tables in `~/.openclaw/state/openclaw.sqlite`, and `tmutil`.
+**Six corrections**, two of them to records that have been repeated for days.
+
+### Correction — the founder merged two PRs after the cutoff; the census is 8, not 9
+
+The 11:00 block says "Pace open PRs: 13 → 9". That was true at 11:00. Since then
+**#99 merged 15:07 UTC** (compress long gaps in analytics charts) and **#98 merged
+16:45 UTC** (bound map history rendering). Neither was mine. Open Pace PRs tonight:
+**8** — #97, #96, #88, #86 (draft), #83, #81 (draft), #80, #78.
+
+The four-PR cull did happen as recorded: #17, #37, #44, #75 are all closed and
+reopenable.
+
+### Correction — "three clean, green, mergeable PRs" is down to one
+
+The 09-12 block's headline item, carried into today, was #98/#97/#96. Tonight:
+
+- **#98 — merged.** Done, no longer an ask.
+- **#97 — CONFLICTING/DIRTY.** It went conflicting *because* #98 and #99 landed;
+  last touched 16:57 UTC. This is the Places + saved-routes stack that supersedes
+  the now-closed #75, so it is the most valuable open PR in the repo and it now
+  needs a rebase before anyone can look at it.
+- **#96 — MERGEABLE/CLEAN.** The only Pace PR that will merge without work.
+
+Worth naming plainly: the thing the `rebase-train` run was proposed to automate
+happened to #97 within six hours of the run being started.
+
+### Correction — the skip-hero marketing calendar was NOT drafted
+
+The 11:00 block says "drafting today so Monday's gate is a yes/no." **It does not
+exist.** `docs/marketing/` is untouched since 2026-08-11; nothing dated 09-13
+anywhere in the repo except STATE.md and the rebase-train run directory. The gate
+is due **tomorrow, Monday 2026-09-14**, on a provisional ship date that is now on
+day 22 unanswered. This is the one item tonight where the record claimed work that
+did not occur, and it is due in under 24 hours.
+
+### Correction — `factory-weekly-self-review` is disabled, not absent
+
+Multiple prior blocks record this cron as "still absent". It **exists**:
+`0 17 * * 0`, isolated target, `enabled = 0`. Today is Sunday and 17:00 was its
+slot; it did not fire because it is switched off, not because it is missing. The
+distinction matters — re-enabling is one flag, not a rebuild.
+
+### Correction — `slack-leak-watchdog` runs fine; it is the delivery that is dead
+
+Prior wording ("firing every 10 minutes into nothing", "will fail-closed") is
+pessimistic in the wrong direction. Every run today returned `status = ok`; the
+failure is `delivery_status = not-delivered` on all of them, including 18:00:00.
+The script works. **If it ever detected a real leak, the alert would go nowhere.**
+Still not touched — I do not edit the founder's schedulers unasked.
+
+### Correction — the idle-day counter is broken, and the orphan worktree is 2.1GB
+
+- **Not an idle day.** `self-build-rebase-train-workflow` is live: `awaiting-approval`
+  at plan-gate 1/3, **6h 52m** on the gate, $4.70 spent, a substantive
+  `improvement-plan.md` on disk. Prior blocks' "22nd idle day" tallies stop here.
+- The orphaned **`feature-android-pose-parity-spike`** worktree has been recorded by
+  dirty-path count (27, unchanged) but never by size: it is **2.1GB**. With
+  `bug-regression-fresh-non-mid` (998MB) that is **3.1GB of stale worktrees**, and
+  the pose-parity one is still a single copy on its twenty-second day.
+
+### Verified correct, no change
+
+- **`apps/web-clock/STATUS.md`** and **`apps/pullup/STATUS.md`** — both still
+  accurate; no commits touched either app today. Pullup dormant 38 days under D27.
+- **`running-with-pace` and `skip-hero` still have no STATUS.md** — not in `apps/`,
+  not in their own repos. Second day recorded, unchanged. `apps/running-with-pace/`
+  holds only `notes/` and `tasks/`; there is no `apps/skip-hero/` at all.
+- **Pace main dirty since 2026-09-09** — identical set, 13 modified + 12 untracked,
+  all still mtime 09-09 21:29. **Day 5.** Verify the 39 lines against #88, discard.
+- **#88** — still `CONFLICTING/DIRTY`; the finished rebase is still parked at
+  `4cd874b` in `.worktrees/pr88-rebase`. Unpushed, as stated.
+- **app-factory** — `main` at `31df058`, clean, in sync, today's commit pushed.
+- **skip-hero** — `main` at `5685bc0` (2026-09-10), no open PRs, three quiet days.
+  Only `.agents/` and `.codex/` untracked.
+- **Time Machine** — `tmutil: No destinations configured.` Unchanged. 3.5GB single-copy.
+- **Agent workspace** — still no remote (`96e3c67`), still two untracked memory files.
+- **`.agents/` untracked and unignored in all three rigs** — sixth day.
+- **PlaceSheet residue** — unchanged and now more awkward: it rides on #97, which is
+  conflicting. Nothing filed, nothing will be until #97 lands.
+
+### For the founder tomorrow
+
+1. **The marketing-calendar gate is due tomorrow and the draft does not exist.**
+   Today's record says otherwise; the record was wrong. I will draft it first thing
+   Monday against the provisional ship date unless you give me a real one — but the
+   gate will land later in the day than planned.
+2. **A gate has been open for seven hours: `self-build-rebase-train-workflow`.**
+   `factory-run approve self-build-rebase-train-workflow` or `reject ... "reason"`.
+   Two of the last three self-reviews died parked at exactly this gate; the plan
+   itself argues rebasing is the bottleneck, and #97 proved it today.
+3. **#97 needs a rebase to be reviewable at all** — it is the supersede-#75 stack and
+   it broke on your own merges. #96 is the only Pace PR that will merge as-is.
+4. **Time Machine still has no destination.** Unchanged, still the only item on this
+   board whose downside is permanent.
+5. **3.1GB of stale worktrees**, 2.1GB of it the single-copy pose-parity spike whose
+   run is `done` and PR merged. Say the word and I delete the 998MB one and hand you
+   a diff of the 2.1GB one.
+6. **Twenty-two days of unanswered skip-hero ship date.**
