@@ -1542,3 +1542,30 @@ STATUS.md"; for the two apps that matter there is nothing to verify.
    raised most often with least effect.
 5. **Twenty-one days of unanswered skip-hero ship date.** Default stands: I draft the
    marketing calendar and put it up as a gate on **Monday 2026-09-14**.
+
+## 2026-09-13 — standup cutoff (11:00, no founder reply)
+
+The 08:00 proposal proceeded on stated defaults. Actions taken:
+
+- **Four stale Pace PRs closed** (fifth day of asking, default was close):
+  #17 (216d, bidirectional incremental sync), #37 (183d, user profiles),
+  #44 (35d, live-run map stall), #75 (17d, Places discovery — formally superseded
+  by #97). Each closed with a comment citing this cutoff; all four are reopenable.
+  Pace open PRs: 13 → 9.
+- **`rebase-train` self-review run started** — run `self-build-rebase-train-workflow`,
+  rig `app-factory`, workflow `self-review`, queued at 11:0x. Brief: a workflow that
+  takes a PR number, rebases onto `main`, runs rig checks, force-pushes, stops short
+  of merging; validate on #88. The plan will land in #factory-builds as a gate —
+  that gate is the founder's, not mine. Budget expectation $10–20.
+- **No specialists dispatched.** The proposal deliberately dispatched none; the only
+  other item today is mine (skip-hero marketing calendar draft), and everything else
+  in the backlog is gated on a founder answer.
+- **Skip-hero marketing calendar** — drafting today so Monday's gate is a yes/no.
+  Day 22 of the unanswered ship date; provisional date goes in the draft.
+- **Not touched, deliberately:** the mis-routed `slack-leak-watchdog` cron (I do not
+  edit the founder's schedulers unasked) and Time Machine (nothing to fix — a
+  destination has to be created; 3.5GB single-copy, still the only permanent-downside
+  item on the board).
+
+Unchanged carried-forward items from the 2026-09-12 block above still stand, minus
+the stale-PR cull, which is now done.
