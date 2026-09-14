@@ -1776,3 +1776,137 @@ founder decision, not a default.
 Machine (still `No destinations configured`, 3.5GB single copy — still the only item
 on this board whose downside is permanent), `.agents/` untracked in all three rigs
 (seventh day), and the skip-hero ship date (day 23).
+
+## 2026-09-14 18:00 — EOD sync (git-, GitHub-, engine- and cron-verified)
+
+Every in-flight item re-verified against `gh pr list/view` in all three rigs,
+`git log`/`status`/`worktree list`/`for-each-ref`, `factory-run status --json`, the
+`cron_jobs` and `cron_run_logs` tables in `~/.openclaw/state/openclaw.sqlite`, and
+`tmutil`. **Both dispatched tasks delivered.** Four corrections, one of them to a
+claim made at this morning's cutoff.
+
+### Both 11:00 dispatches landed — verified, not assumed
+
+- **`skiphero_week_one_calendar` — done.** `docs/marketing/apps/skip-hero-week-one-calendar.md`
+  exists (18.6KB), committed `59fd17f`, pushed. Week-one calendar D-3 → D+7 against a
+  provisional launch day of 2026-09-28, every entry expressed D-n/D+n so a real date
+  slides it intact; §7 lists the assets that do not exist yet and what they cost by
+  D-3, and explicitly says the honest output may be a later date rather than a
+  compressed calendar. **The marketing-calendar gate is now a real yes/no.** This is
+  the item last night's sync flagged as claimed-but-not-done; today it is done.
+- **`pace_rebase_prep_83_80_78` — done.** `apps/running-with-pace/notes/2026-09-14-rebase-prep.md`
+  (13.6KB), committed `d791a29`, pushed. Per-PR verdicts, checks recorded verbatim,
+  and the hard boundary held: **nothing pushed, no force-push, no PR comments, no
+  merges.** Verdicts: **#83 ready to push** (`pr83-rebase` @ `71ee06d`, zero conflicts
+  after scoping, clean and green); **#80 needs the author** (13 conflict hunks across
+  the 4 integration files — the art, component and specs are conflict-free, only the
+  wiring is stale); **#78 should be closed** (66 conflict hunks across 12 files), with
+  the worthwhile part already rebased clean and green at `pr78-salvage` @ `37efb30`.
+
+### Correction 1 — the pose-parity branch did not exist, and I restored it
+
+This morning's cutoff block says the 27 dirty paths were "**committed locally** on
+`factory/feature-android-pose-parity-spike` as `893ab34`". At this sync, `893ab34`
+existed as a commit object but **no ref pointed at it** — the local branch was gone
+(lost with the worktree removal), leaving the work reachable only as a dangling
+commit and eligible for garbage collection. `git branch --contains 893ab34` returned
+nothing. **Restored:** the branch ref now points at `893ab34` again; `--contains` now
+resolves. Nothing was rewritten and nothing deleted.
+
+**The risk was never as bad as the missing ref made it look**, and this is worth
+stating plainly rather than dramatising: the 90KB diff and stat copied to
+`apps/skip-hero/notes/2026-09-14-pose-parity-spike.{diff,stat.txt}` were committed
+and **pushed** in app-factory, and the recorded stat matches the commit exactly —
+38 files, +2071/-169. The work has been off-machine since 11:03. What was wrong was
+the record, not the backup.
+
+### Correction 2 — the Pace local `main` checkout never caught up
+
+The 08:00 block reads "Pace `main` now `913a257`; local clone was 13 behind before
+this standup's fetch", which reads as resolved. It is not. `origin/main` is
+`913a257`; the **local checkout is still `f32921d`, 13 behind**, and it cannot
+fast-forward while the tree is dirty. No harm done today — the rebase work correctly
+used the `main-baseline` worktree at `913a257` — but the dirty tree now blocks the
+checkout as well as its own resolution. Day 6.
+
+### Correction 3 — `.agents/` is untracked in two rigs, not three
+
+Recorded as "untracked and unignored in all three rigs" since 2026-09-08. **app-factory
+is clean** as of today's commits. It remains untracked in `running-with-pace` and
+`skip-hero` only. Seventh day, two rigs.
+
+### Correction 4 — the parked gate is at 30h 53m, and the workflow edit did not unpark it
+
+`self-build-rebase-train-workflow` is still `awaiting-approval` at plan-gate 1/3,
+**30h 53m**, $4.70, `currentStep` 1 of 2. This morning's caveat was right and is now
+confirmed by the engine: dropping the plan gate from `self-review.json` changed the
+workflow definition, **not the live run**. It stays the founder's call.
+
+### Verified correct, no change
+
+- **Pace PR census: 8 open — 6 non-draft + 2 draft.** #97 and #96 MERGEABLE/CLEAN;
+  #88, #83, #80, #78 CONFLICTING; #86 and #81 draft. Identical to 08:00 — **the
+  founder merged nothing today**, after three merges yesterday.
+- **Pace dirty tree** — 13 modified + 14 untracked, all still mtime 2026-09-09 21:29.
+  The Q2 override holds: 128 of 213 added lines are unique to the working tree, so
+  the "verify then discard" default remains wrong. Founder decision, day 6.
+- **#88** — still CONFLICTING; finished rebase still parked at `4cd874b`, unpushed.
+- **app-factory** — `main` at `d791a29`, clean, in sync with origin.
+- **skip-hero** — `main` at `5685bc0` (2026-09-10), clean, in sync, **no open PRs,
+  fifth quiet day**.
+- **`factory-weekly-self-review`** — exists, `0 17 * * 0`, **`enabled = 0`**. Still
+  disabled, not absent. Re-enabling is one flag.
+- **`slack-leak-watchdog`** — `enabled = 1`, `*/10 * * * *`, `last_run_status = ok`,
+  `last_delivery_status = not-delivered`, destination `last:-` (no route). The script
+  works; the alert would go nowhere. **Fourth day**, still not touched — I do not edit
+  the founder's schedulers unasked.
+- **Time Machine** — `tmutil: No destinations configured.` Unchanged. 3.5GB
+  single-copy. Still the only item on this board whose downside is permanent.
+- **Agent workspace** — still no remote (`96e3c67`), still two untracked memory files.
+- **PlaceSheet residue** — unchanged. Rides on #97; nothing filed until #97 lands.
+
+### Fixed by this sync
+
+- **`apps/running-with-pace/STATUS.md` and `apps/skip-hero/STATUS.md` now exist.**
+  Recorded as missing for the two priority apps on 09-12 and 09-13 and carried
+  without action; written today from verified evidence rather than recorded again.
+- **`apps/pullup/STATUS.md`** — re-verified, still accurate, dormant **39 days** under
+  D27; verification date refreshed and the 09-10 line kept as prior verification.
+- **`apps/web-clock/STATUS.md`** — re-verified, still accurate; last commit touching
+  the app is `9635707` (09-12), a reconcile, not product work. Verification line added.
+
+### Carried forward, unchanged and older
+
+- **Pace dirty `main`** — day 6, deliberately, awaiting a founder decision.
+- **Time Machine, no destination** — 3.5GB single-copy.
+- **`slack-leak-watchdog` delivery dead** — fourth day.
+- **`.agents/` untracked** in two rigs — seventh day.
+- **Agent workspace has no remote.**
+- **`feature-msdpir37`** — failed at implement 2/11 since 2026-08-03, $31.70 sunk;
+  neither resolved nor killed.
+- **Skip-hero ship date** — day 23.
+
+### For the founder tomorrow
+
+1. **The marketing-calendar gate is live and it is a yes/no.** The draft exists this
+   time. It is built on a launch day the factory picked (2026-09-28) because yours has
+   been unanswered for 23 days; §7 says outright that the honest answer may be a later
+   date. Approve, reject, or give me the real date and the calendar slides intact.
+2. **#83 is one push from being a clean, green, correctly-scoped PR** (`71ee06d`). I
+   will not push to your remote unattended — same stance that has parked #88's finished
+   rebase at `4cd874b` since the 9th. One word unblocks both.
+3. **#78 should be closed, not rebased** — 66 conflict hunks across 12 files, and the
+   part worth keeping is already rebased, clean and green at `37efb30`. **#80 needs its
+   author**, not me.
+4. **Your dirty Pace tree is day 6 and I am still not touching it.** 128 of 213 added
+   lines exist nowhere else — including the watch-inbox drain, the navy splash bridge
+   and the device-attribution SQL. It is also now blocking your local `main` from
+   catching up 13 commits.
+5. **The rebase-train gate has been open 31 hours.** `factory-run approve
+   self-build-rebase-train-workflow` or `reject ... "reason"`. I dropped the plan gate
+   from the workflow today, which helps the *next* run and does nothing for this one.
+6. **Time Machine still has no destination.** Unchanged, and today I found a local
+   branch ref quietly missing under exactly the conditions where a backup is what
+   saves you. The diff had been pushed, so nothing was lost — that was the redundancy
+   working, and Time Machine is the redundancy that is absent.
+7. **Twenty-three days of unanswered skip-hero ship date.**
