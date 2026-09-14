@@ -1678,3 +1678,43 @@ Still not touched — I do not edit the founder's schedulers unasked.
    run is `done` and PR merged. Say the word and I delete the 998MB one and hand you
    a diff of the 2.1GB one.
 6. **Twenty-two days of unanswered skip-hero ship date.**
+
+## 2026-09-14 — standup (08:00)
+
+**Yesterday (since 09-13 08:00), verified against origin/main + `gh` + engine:**
+- Pace: three PRs merged by the founder's own hand — #99 (16:07), #98 (17:45),
+  #100 (20:27, interval coaching/voice prompts/pace charts). Pace `main` now
+  `913a257`; local clone was 13 behind before this standup's fetch.
+- Pace #97 (Places + saved routes) was **rebased/reworked by the founder overnight**
+  — three commits 23:03 → 00:09, head `49cc8ff` on `codex/saved-routes-v1`. It is
+  now MERGEABLE/CLEAN with three green checks. Last night's record ("CONFLICTING")
+  is superseded.
+- skip-hero: no commits, no PRs — fourth quiet day.
+- app-factory: two STATE commits only (`31df058` cutoff, `e55fbfe` EOD).
+- Engine: one run, no movement. `self-build-rebase-train-workflow` still
+  `awaiting-approval` at plan-gate 1/3, now **20h 52m** on the gate, $4.70.
+- **Marketing calendar still not drafted.** `docs/marketing/` untouched since
+  2026-08-11. Gate due today; drafting it is today's first item.
+
+**Pace open PR census (gh, not the engine feed): 6 non-draft + 2 draft.**
+Mergeable/clean: #97, #96. Conflicting/dirty: #88, #83, #80, #78. Drafts: #86, #81.
+
+**Today (plan posted 08:00, defaults proceed at 11:00 with no reply):**
+1. Draft the skip-hero marketing calendar against a provisional ship date and put
+   it up as a gate — day 23 of the unanswered real date. Mine, no specialist.
+2. Prepare local rebases of #83, #80, #78 onto `main` and hand the founder diffs.
+   No force-push to his remote unattended (unchanged stance, also covers #88's
+   finished rebase parked at `4cd874b`).
+3. No specialists dispatched. Everything else on the board is gated on a founder
+   answer.
+4. Not touched, deliberately: the `slack-leak-watchdog` cron (delivery dead, script
+   fine — his scheduler), Time Machine (no destination configured, 3.5GB
+   single-copy), and the 3.1GB of stale worktrees pending his word.
+
+**Introspection proposed today:** self-review dies at its plan gate — three runs
+(`self-weekly-self-review-find` rejected, `find-3` rejected after 18 days parked,
+`rebase-train` parked now), ~$11.20 of `analyze` paid, nothing shipped. Proposal is
+to drop the plan gate from the `self-review` workflow on the app-factory rig and let
+the PR be the review point (D29/D31 already make every rig PR-gated). Not started —
+it is a founder yes/no, and it does not conflict with D32 (deliberate removal, not
+expiry).
