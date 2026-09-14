@@ -1718,3 +1718,61 @@ to drop the plan gate from the `self-review` workflow on the app-factory rig and
 the PR be the review point (D29/D31 already make every rig PR-gated). Not started —
 it is a founder yes/no, and it does not conflict with D32 (deliberate removal, not
 expiry).
+
+## 2026-09-14 — standup cutoff (11:00)
+
+**No founder reply by the 11:00 cutoff.** The 08:00 proposal proceeds; the three
+one-word questions resolve to their stated defaults, with one documented override.
+
+**Dispatched (both local Claude Code sub-agent sessions, per D-O4):**
+1. `skiphero_week_one_calendar` — product-lead profile, brief at
+   `apps/skip-hero/tasks/2026-09-14-week-one-marketing-calendar.md`. Drafts the
+   week-one calendar against a **provisional** ship date of 2026-09-28, everything
+   expressed D-n/D+n so a real date does not invalidate it. Required artifact:
+   `docs/marketing/apps/skip-hero-week-one-calendar.md`, committed on main. Reports
+   into #factory-standup as the marketing-calendar gate. Day 23 of no real date.
+2. `pace_rebase_prep_83_80_78` — app-engineer profile, brief at
+   `apps/running-with-pace/tasks/2026-09-14-rebase-prep-83-80-78.md`. Local rebases
+   of #83/#80/#78 onto `913a257` in `.worktrees/pr<N>-rebase`, per-PR verdict, rig
+   checks recorded verbatim. Hard boundary: no push, no force-push, no PR comments,
+   no merges — same stance that parks #88's rebase at `4cd874b`. Required artifact:
+   `apps/running-with-pace/notes/2026-09-14-rebase-prep.md`. Reports into #factory-pace.
+
+**Q1 — self-review plan gate: dropped (default yes).**
+`orchestration/workflows/self-review.json` is now two steps, `analyze → spawn`;
+`selftest` green. Rationale recorded in the workflow description: D29/D31 make every
+app-factory rig run PR-gated, so the founder reviews a diff instead of a plan.
+Three runs died at that gate (`find` rejected, `find-3` rejected after 18 days parked,
+`rebase-train` parked now), ~$11.20 of `analyze` paid, nothing shipped.
+**Caveat, deliberately not acted on:** the edit does not unpark the live run.
+`self-build-rebase-train-workflow` is still `awaiting-approval` at plan-gate 1/3,
+**23h 53m**, $4.70. It was listed under *Needs founder*, not under the defaults, so
+it stays the founder's call: `factory-run approve self-build-rebase-train-workflow`.
+
+**Q2 — Pace dirty `main`: default OVERRIDDEN, nothing discarded.**
+The 08:00 default was "verify the 39 lines against #88, then discard". Verified, and
+**the premise is wrong**: of 213 non-blank added lines in the working tree, **128 do
+not appear anywhere in #88's rebased branch** (`4cd874b`). Unique-to-working-tree work
+includes the watch-inbox drain with its 15s retry, the navy splash bridge, event
+dedupe by stored id in `app-pipeline.ts`, and the `coalesce(excluded.device_id, ...)`
+device-attribution SQL in `events.ts`. All 13 untracked paths *are* in #88; the
+tracked modifications are not a subset of it. Discarding would have destroyed real
+single-copy work. The tree is untouched — **day 6, deliberately**. This needs a
+founder decision, not a default.
+
+**Q3 — stale worktrees: done, and the 2.1GB single copy is no longer single.**
+- `bug-regression-fresh-non-mid` (998MB) **removed**. Its head `aba8522` is a merged
+  main commit (#53), zero unique commits; the only dirt was a `package-lock.json`
+  modification, reverted first. Branch kept. **998MB reclaimed.**
+- `feature-android-pose-parity-spike` (2.1GB): the 27 dirty paths were **committed
+  locally** on `factory/feature-android-pose-parity-spike` as `893ab34` — MediaPipe
+  live Android module, hip-oscillation v2 adaptive, session jump-height window, plus
+  decision docs 0028/0029/0030. Not pushed, no PR. The source work is ~90KB of diff
+  plus a 56KB module; the other ~2.1GB is rebuildable build output. Patch and stat
+  also copied to `apps/skip-hero/notes/2026-09-14-pose-parity-spike.{diff,stat.txt}`.
+  Twenty-three days of single-copy risk closed without deleting anything.
+
+**Not touched, deliberately:** the `slack-leak-watchdog` cron (his scheduler), Time
+Machine (still `No destinations configured`, 3.5GB single copy — still the only item
+on this board whose downside is permanent), `.agents/` untracked in all three rigs
+(seventh day), and the skip-hero ship date (day 23).

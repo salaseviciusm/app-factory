@@ -1,0 +1,50 @@
+commit 893ab34b12dddb257e9f3fb424132a432ae2050f
+Author: Morkus Salasevicius <salaseviciusm@gmail.com>
+Date:   Mon Sep 14 11:03:34 2026 +0100
+
+    spike: preserve uncommitted android pose-parity work (MediaPipe live module, hip-oscillation v2 adaptive, jump-height window)
+    
+    Committed by the chief of staff 2026-09-14 at the standup cutoff. This work had
+    sat as a single uncommitted copy in a 2.1GB worktree for 23 days. Local only --
+    not pushed, no PR. The founder can review, amend, or drop the commit; the point
+    is that it now exists as a git object rather than only as working-tree state.
+
+ .gitignore                                         |   3 +
+ agent-guide.md                                     |   6 +-
+ apps/mobile/app.json                               |   2 +
+ .../skip-hero-mediapipe/android/build.gradle       |  64 ++++
+ .../skip-hero-mediapipe/android/proguard-rules.pro |   2 +
+ .../android/src/main/AndroidManifest.xml           |   5 +
+ .../android/src/main/assets/.gitkeep               |   0
+ .../java/com/skiphero/mediapipe/LandmarkMapper.kt  |  75 ++++
+ .../main/java/com/skiphero/mediapipe/PoseCamera.kt | 381 +++++++++++++++++++++
+ .../skiphero/mediapipe/SkipHeroMediapipeModule.kt  |  84 +++++
+ .../mediapipe/SkipHeroMediapipePreviewView.kt      |  40 +++
+ .../android/src/main/res/values/strings.xml        |   3 +
+ .../skip-hero-mediapipe/expo-module.config.json    |   6 +
+ apps/mobile/modules/skip-hero-mediapipe/index.ts   |  47 +++
+ .../modules/skip-hero-mediapipe/package.json       |   7 +
+ apps/mobile/src/app/settings.tsx                   | 104 +++++-
+ apps/mobile/src/components/camera-preview.ts       |  20 +-
+ apps/mobile/src/context/app-context.ts             |  29 +-
+ apps/mobile/src/impl/device-env.ts                 |  18 +-
+ apps/mobile/src/impl/mediapipe-pose-source.ts      |  81 +++++
+ apps/mobile/src/state/settings.ts                  |  37 +-
+ .../mobile/tests/session-recording-dispose.test.ts |   9 +
+ apps/mobile/tests/session-runtime-r1.test.ts       |   9 +
+ .../0007-skip-v2-full-revolution-gates.md          |   4 +
+ .../decisions/0028-hip-oscillation-v2-adaptive.md  |  59 ++++
+ .../0029-android-live-mediapipe-module.md          |  76 ++++
+ .../decisions/0030-session-jump-height-window.md   |  62 ++++
+ documents/mobile-app.md                            |  37 +-
+ documents/model-tuning-notes.md                    |  16 +
+ documents/todo-summary.md                          |  52 ++-
+ .../core/src/skip/hip-oscillation-v2-detector.ts   | 338 ++++++++++++++----
+ packages/core/src/skip/skip-detector.ts            |   7 +
+ .../core/tests/hip-oscillation-v2-detector.test.ts | 144 +++++++-
+ scripts/debug-video.sh                             | 194 +++++++++--
+ scripts/trace-recording.ts                         |  48 ++-
+ tools/debug-render/debug-render.swift              |  88 ++++-
+ tools/pose-extract-mediapipe/README.md             |  18 +-
+ tools/pose-extract-mediapipe/extract.py            |  65 +++-
+ 38 files changed, 2071 insertions(+), 169 deletions(-)

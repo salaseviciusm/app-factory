@@ -1,0 +1,1945 @@
+diff --git a/.gitignore b/.gitignore
+index f36acfd..15adedd 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -35,3 +35,6 @@ tools/debug-render/debug-render
+ # python env + downloaded model assets (pinned URLs in extract.py)
+ tools/pose-extract-mediapipe/.venv/
+ tools/pose-extract-mediapipe/models/
++
++# MediaPipe .task bundled into the Android module at build time (same URL)
++apps/mobile/modules/skip-hero-mediapipe/android/src/main/assets/*.task
+diff --git a/agent-guide.md b/agent-guide.md
+index a6300ba..4a2d11d 100644
+--- a/agent-guide.md
++++ b/agent-guide.md
+@@ -18,10 +18,10 @@ map, not the encyclopedia.
+ | `apps/mobile`                         | Expo app: full screen set under `src/app` (Home, session, tile-rush, lesson, summary, history, debug, settings), design system in `src/design`, live pipeline in `src/session`. Composition root: `src/context/app-context.ts`. See `documents/mobile-app.md`.                                                                                                                                                                                                                                                                                 |
+ | `services/sync-server`                | Zero-dependency `node:http` dump server: events/recordings/video → local disk. No auth, debug only. See `documents/sync-server.md`.                                                                                                                                                                                                                                                                                                                                                                                                            |
+ | `tools/pose-extract`                  | macOS Swift CLI: video → `SignalRecording` JSON via Apple Vision. Reference implementation for the iOS `skip-hero-vision` module.                                                                                                                                                                                                                                                                                                                                                                                                              |
+-| `tools/pose-extract-mediapipe`        | Python CLI: video → `SignalRecording` JSON via MediaPipe pose-landmarker (BlazePose-33 → canonical 19, synthesized neck/root). Reference implementation for the future Android pose module; model choice rationale in ADR 0027.                                                                                                                                                                                                                                                                                                                |
++| `tools/pose-extract-mediapipe`        | Python CLI: video → `SignalRecording` JSON via MediaPipe pose-landmarker (BlazePose-33 → canonical 19, synthesized neck/root). Reference implementation for the Android `skip-hero-mediapipe` module; model choice rationale in ADR 0027.                                                                                                                                                                                                                                                                                                      |
+ | `scripts/analyze-recording.ts`        | Recording → skip-detection debug log (`npx tsx scripts/analyze-recording.ts <recording.json>`).                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+ | `scripts/analyze-landings.ts`         | Recording → landing-pattern distribution (`npx tsx scripts/analyze-landings.ts <recording.json>`).                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+-| `scripts/debug-video.sh`              | One command: video → annotated debug video (skeleton, skip counter, hip-signal plot). Chains pose-extract → `trace-recording.ts` → `tools/debug-render`.                                                                                                                                                                                                                                                                                                                                                                                       |
++| `scripts/debug-video.sh`              | One command: video → annotated debug video (skeleton, skip counter, hip-signal plot). `--stack vision` (default) / `mediapipe` / `both`. `--detector v1` / `v2` (default) / `adaptive` (ADR 0028; writes `*.adaptive.debug.mov`). Chains the matching extractor → `trace-recording.ts` → `tools/debug-render`.                                                                                                                                                                                                                                 |
+ | `examples/`                           | Real test footage + extracted recordings. `IMG_0446` = 133 s garden session; 104 skips under `hip-oscillation-v1`, 83 under `hip-oscillation-v2` (the current default). `IMG_0502` = 132 s session; 75 skips, 140 landings, 1 `rope-catch` trip. `IMG_0508` = 99 s session; 49 skips, 113 landings, 2 trips. `IMG_0509` = 102 s session; 69 skips, 101 landings, 1 trip. `device-*` = live-iPhone captures preserving the broken orientation path as bug data (ADR 0026) — exempt from the confidence gate, never a template for new fixtures. |
+ 
+ ## Commands
+@@ -72,7 +72,7 @@ must be able to swap without touching the rest of the application.
+ - When we need a package or platform capability, define an interface in core
+   and implement it in an adapter — a dedicated package (`packages/data-*`) or
+   an isolated set of files in the consuming app (`apps/*/src/impl/`).
+-  - `PoseSource` (core) → `VisionPoseSource` (Swift/Apple Vision adapter in `apps/mobile`)
++  - `PoseSource` (core) → `VisionPoseSource` (Swift/Apple Vision, iOS) / `MediaPipePoseSource` (Kotlin/MediaPipe, Android) in `apps/mobile`
+   - `EventStore` (core) → `SqliteEventStore` (`packages/data-sqlite`, wraps expo-sqlite)
+ - Adapters translate vendor types into our canonical types at the boundary.
+   Vendor names, units, coordinate systems, and error shapes never cross it
+diff --git a/apps/mobile/app.json b/apps/mobile/app.json
+index 1307907..8eeb4be 100644
+--- a/apps/mobile/app.json
++++ b/apps/mobile/app.json
+@@ -17,6 +17,7 @@
+       "bundleIdentifier": "com.salaseviciusm.skip-hero"
+     },
+     "android": {
++      "package": "com.salaseviciusm.skiphero",
+       "adaptiveIcon": {
+         "backgroundColor": "#161826",
+         "foregroundImage": "./assets/images/android-icon-foreground.png",
+@@ -25,6 +26,7 @@
+       },
+       "predictiveBackGestureEnabled": false,
+       "permissions": [
++        "android.permission.CAMERA",
+         "android.permission.RECORD_AUDIO",
+         "android.permission.MODIFY_AUDIO_SETTINGS",
+         "android.permission.FOREGROUND_SERVICE",
+diff --git a/apps/mobile/src/app/settings.tsx b/apps/mobile/src/app/settings.tsx
+index 4796bc9..593b642 100644
+--- a/apps/mobile/src/app/settings.tsx
++++ b/apps/mobile/src/app/settings.tsx
+@@ -14,7 +14,7 @@ import {
+   space,
+   type as typeScale,
+ } from '../design';
+-import { appVersion } from '../impl/device-env';
++import { appVersion, liveCameraEngineLabel } from '../impl/device-env';
+ import { getUpdateInfo, type UpdateInfo } from '../impl/update-info';
+ import { useCell } from '../lib/observable';
+ import {
+@@ -23,6 +23,7 @@ import {
+   type Difficulty,
+   type PersistenceKind,
+   type PoseSourceKind,
++  type SkipDetectorKind,
+ } from '../state/settings';
+ 
+ const DIFFICULTIES: Difficulty[] = ['easy', 'medium', 'hard'];
+@@ -81,7 +82,11 @@ export default function SettingsScreen() {
+         {(
+           [
+             ['simulated', 'Simulated', 'bundled garden replay — default on simulator / Expo Go'],
+-            ['camera', 'Camera', 'Apple Vision · default on device (dev/prod build)'],
++            [
++              'camera',
++              'Camera',
++              `${liveCameraEngineLabel()} · default on device (dev/prod build)`,
++            ],
+           ] as [PoseSourceKind, string, string][]
+         ).map(([kind, label, hint]) => (
+           <Pressable
+@@ -112,6 +117,101 @@ export default function SettingsScreen() {
+         ))}
+       </View>
+ 
++      <MicroLabel style={{ marginTop: space.xxl, marginBottom: space.sm }}>
++        Skip detector
++      </MicroLabel>
++      <View style={{ flexDirection: 'row', gap: space.sm }}>
++        {(
++          [
++            ['v2', 'v2', 'stock 0.3 torso / 320 ms gates — goldens and device default'],
++            [
++              'adaptive',
++              'Adaptive',
++              'relax count gates after 6 accepted skips (ADR 0028) — debug overlay',
++            ],
++          ] as [SkipDetectorKind, string, string][]
++        ).map(([kind, label, hint]) => (
++          <Pressable
++            key={kind}
++            onPress={() => updateSettings({ skipDetector: kind })}
++            style={{
++              flex: 1,
++              borderWidth: 1,
++              borderRadius: radius.md,
++              borderColor: settings.skipDetector === kind ? color.accent : color.divider,
++              padding: space.md,
++            }}
++          >
++            <Text
++              style={[
++                typeScale.label,
++                { color: settings.skipDetector === kind ? color.accentBright : color.text },
++              ]}
++            >
++              {label}
++            </Text>
++            <Text
++              style={[typeScale.caption, { color: color.textMuted, marginTop: 2, fontSize: 11 }]}
++            >
++              {hint}
++            </Text>
++          </Pressable>
++        ))}
++      </View>
++      <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.md }}>
++        <View style={{ flex: 1 }}>
++          <TextInput
++            value={settings.heightMinTorso}
++            onChangeText={(heightMinTorso) => updateSettings({ heightMinTorso })}
++            placeholder="min"
++            placeholderTextColor={color.textFaint}
++            keyboardType="decimal-pad"
++            autoCapitalize="none"
++            autoCorrect={false}
++            style={[
++              typeScale.body,
++              {
++                color: color.text,
++                backgroundColor: color.surface,
++                borderWidth: 1,
++                borderColor: color.divider,
++                borderRadius: radius.md,
++                paddingHorizontal: space.md,
++                paddingVertical: space.md,
++              },
++            ]}
++          />
++        </View>
++        <View style={{ flex: 1 }}>
++          <TextInput
++            value={settings.heightMaxTorso}
++            onChangeText={(heightMaxTorso) => updateSettings({ heightMaxTorso })}
++            placeholder="max"
++            placeholderTextColor={color.textFaint}
++            keyboardType="decimal-pad"
++            autoCapitalize="none"
++            autoCorrect={false}
++            style={[
++              typeScale.body,
++              {
++                color: color.text,
++                backgroundColor: color.surface,
++                borderWidth: 1,
++                borderColor: color.divider,
++                borderRadius: radius.md,
++                paddingHorizontal: space.md,
++                paddingVertical: space.md,
++              },
++            ]}
++          />
++        </View>
++      </View>
++      <Text
++        style={[typeScale.caption, { color: color.textMuted, marginTop: space.sm, fontSize: 11 }]}
++      >
++        min/max skip height in torso units; blank = detector default.
++      </Text>
++
+       <MicroLabel style={{ marginTop: space.xxl, marginBottom: space.sm }}>Persistence</MicroLabel>
+       <View style={{ flexDirection: 'row', gap: space.sm }}>
+         {(
+diff --git a/apps/mobile/src/components/camera-preview.ts b/apps/mobile/src/components/camera-preview.ts
+index 4bb7537..73e90c8 100644
+--- a/apps/mobile/src/components/camera-preview.ts
++++ b/apps/mobile/src/components/camera-preview.ts
+@@ -1,20 +1,28 @@
+ import type { ComponentType } from 'react';
++import { Platform } from 'react-native';
+ 
++import { getSkipHeroMediapipePreviewView } from '../../modules/skip-hero-mediapipe';
+ import { getSkipHeroVisionPreviewView } from '../../modules/skip-hero-vision';
+ 
+ /**
+  * The native camera preview view, resolved once at module load: it exists
+- * only in dev builds where the skip-hero-vision module is compiled in; in
+- * Expo Go / simulator replay mode the lookup throws and consumers fall back
+- * to skeleton-only rendering.
++ * only in dev builds where the matching pose module is compiled in (Vision
++ * on iOS, MediaPipe on Android); in Expo Go / simulator replay mode the
++ * lookup throws and consumers fall back to skeleton-only rendering.
+  *
+- * The Swift module hosts a single shared AVCaptureVideoPreviewLayer that the
+- * view re-parents, so at most one CameraPreview may be mounted at a time —
++ * Each native module hosts a single shared preview surface that the view
++ * re-parents, so at most one CameraPreview may be mounted at a time —
+  * mount either the PiP or the full-screen preview, never both (ADR 0020).
+  */
+ export const CameraPreview: ComponentType<{ style?: object }> | null = (() => {
+   try {
+-    return getSkipHeroVisionPreviewView();
++    if (Platform.OS === 'android') {
++      return getSkipHeroMediapipePreviewView();
++    }
++    if (Platform.OS === 'ios') {
++      return getSkipHeroVisionPreviewView();
++    }
++    return null;
+   } catch {
+     return null;
+   }
+diff --git a/apps/mobile/src/context/app-context.ts b/apps/mobile/src/context/app-context.ts
+index 9b6f884..385dc36 100644
+--- a/apps/mobile/src/context/app-context.ts
++++ b/apps/mobile/src/context/app-context.ts
+@@ -1,4 +1,4 @@
+-import { AppState } from 'react-native';
++import { AppState, Platform } from 'react-native';
+ 
+ import {
+   createAnkleLandingDetector,
+@@ -36,10 +36,12 @@ import { newExpoCryptoId } from '../impl/expo-crypto-ids';
+ import { createExpoHaptics } from '../impl/expo-haptics';
+ import { createExpoSpeech } from '../impl/expo-speech';
+ import { createExpoWakeLock } from '../impl/expo-wake-lock';
++import { MEDIAPIPE_POSE_MODEL, MediaPipePoseSource } from '../impl/mediapipe-pose-source';
+ import { MockLeaderboardSource } from '../impl/mock-leaderboard';
+ import { SimulatedPoseSource } from '../impl/simulated-pose-source';
+ import { VISION_POSE_MODEL, VisionPoseSource } from '../impl/vision-pose-source';
+ import { Cell } from '../lib/observable';
++import { getSkipHeroMediapipeModule } from '../../modules/skip-hero-mediapipe';
+ import { getSkipHeroVisionModule } from '../../modules/skip-hero-vision';
+ import type { CuePlayer, Haptics, InstructionSpeaker, NewId, WakeLock } from '../ports';
+ import { EventLogQueryLayer } from '../projections/event-log-query-layer';
+@@ -48,7 +50,7 @@ import { attachSignalRecorder } from '../session/signal-recorder';
+ import { SessionRuntime } from '../session/session-runtime';
+ import { createVideoNotices } from '../session/video-notices';
+ import { attachVideoRecorder } from '../session/video-recorder';
+-import { settingsCell } from '../state/settings';
++import { settingsCell, parseOptionalTorsoHeight } from '../state/settings';
+ 
+ /**
+  * Composition root: the only place in the app that constructs concrete
+@@ -268,7 +270,12 @@ async function createAppContext(): Promise<AppContext> {
+ 
+   function createPoseSource(): { source: PoseSource; poseModel: PoseModel } {
+     if (settingsCell.get().poseSource === 'camera') {
+-      return { source: new VisionPoseSource(), poseModel: VISION_POSE_MODEL };
++      if (Platform.OS === 'android') {
++        return { source: new MediaPipePoseSource(), poseModel: MEDIAPIPE_POSE_MODEL };
++      }
++      if (Platform.OS === 'ios') {
++        return { source: new VisionPoseSource(), poseModel: VISION_POSE_MODEL };
++      }
+     }
+     bundledRecording ??= loadBundledRecording();
+     const source = new SimulatedPoseSource(bundledRecording);
+@@ -277,7 +284,12 @@ async function createAppContext(): Promise<AppContext> {
+ 
+   function createSessionRuntime(): SessionRuntime {
+     const { source: poseSource, poseModel } = createPoseSource();
+-    const skipDetector = createHipOscillationV2Detector();
++    const settings = settingsCell.get();
++    const skipDetector = createHipOscillationV2Detector({
++      adaptive: settings.skipDetector === 'adaptive',
++      heightMinTorso: parseOptionalTorsoHeight(settings.heightMinTorso),
++      heightMaxTorso: parseOptionalTorsoHeight(settings.heightMaxTorso),
++    });
+     const landingDetector = createAnkleLandingDetector();
+     const tripDetector = createCadenceCollapseDetector();
+     const machine = createSessionMachine({
+@@ -342,7 +354,10 @@ async function createAppContext(): Promise<AppContext> {
+     // Simulator / SimulatedPoseSource skip attach; missing native module
+     // inside the recorder is still a graceful no-op. Flush before camera
+     // stop so stopRecording isn't raced by PoseCamera.stop() (ADR 0017).
+-    if (mediaStore !== null && poseSource instanceof VisionPoseSource) {
++    if (
++      mediaStore !== null &&
++      (poseSource instanceof VisionPoseSource || poseSource instanceof MediaPipePoseSource)
++    ) {
+       const store = mediaStore;
+       let flushVideo: () => Promise<void> = async () => undefined;
+       runtime.onStart(() => {
+@@ -351,7 +366,9 @@ async function createAppContext(): Promise<AppContext> {
+           store,
+           getCapture: () => {
+             try {
+-              return getSkipHeroVisionModule();
++              return Platform.OS === 'android'
++                ? getSkipHeroMediapipeModule()
++                : getSkipHeroVisionModule();
+             } catch (error: unknown) {
+               noteVideoIssue(`video recorder: native module unavailable: ${String(error)}`);
+               return null;
+diff --git a/apps/mobile/src/impl/device-env.ts b/apps/mobile/src/impl/device-env.ts
+index 66a223d..da43629 100644
+--- a/apps/mobile/src/impl/device-env.ts
++++ b/apps/mobile/src/impl/device-env.ts
+@@ -1,5 +1,6 @@
+ import Constants, { ExecutionEnvironment } from 'expo-constants';
+ import * as Device from 'expo-device';
++import { Platform } from 'react-native';
+ 
+ /**
+  * Physical device vs simulator/emulator. Adapter over expo-device so the
+@@ -26,13 +27,22 @@ export function appVersion(): string {
+ }
+ 
+ /**
+- * First-launch pose source: camera on a real iPhone running a dev/prod
+- * build (Vision module present); simulated replay in the simulator and in
+- * Expo Go where the native camera pipeline isn't available.
++ * First-launch pose source: camera on a real iPhone or Android phone running
++ * a dev/prod build (matching native module present); simulated replay in the
++ * simulator/emulator and in Expo Go where the native camera pipeline isn't
++ * available.
+  */
+ export function defaultPoseSourceKind(): 'simulated' | 'camera' {
+   if (!isPhysicalDevice() || isExpoGo()) {
+     return 'simulated';
+   }
+-  return 'camera';
++  if (Platform.OS === 'ios' || Platform.OS === 'android') {
++    return 'camera';
++  }
++  return 'simulated';
++}
++
++/** Settings caption for the live-camera pose source — platform-aware. */
++export function liveCameraEngineLabel(): string {
++  return Platform.OS === 'android' ? 'MediaPipe' : 'Apple Vision';
+ }
+diff --git a/apps/mobile/src/state/settings.ts b/apps/mobile/src/state/settings.ts
+index df72e49..a661c30 100644
+--- a/apps/mobile/src/state/settings.ts
++++ b/apps/mobile/src/state/settings.ts
+@@ -2,12 +2,29 @@ import { defaultPoseSourceKind } from '../impl/device-env';
+ import { Cell } from '../lib/observable';
+ 
+ export type PoseSourceKind = 'simulated' | 'camera';
++export type SkipDetectorKind = 'v2' | 'adaptive';
+ export type Difficulty = 'easy' | 'medium' | 'hard';
+ export type PersistenceKind = 'sqlite' | 'memory';
+ 
+ export interface Settings {
+-  /** simulated = bundled garden recording; camera = native Vision module (dev/prod build). */
++  /** simulated = bundled garden recording; camera = native pose module (Vision on iOS, MediaPipe on Android). */
+   poseSource: PoseSourceKind;
++  /**
++   * Skip detector overlay. `v2` (default) is uncalibrated hip-oscillation-v2
++   * so goldens and device parity stay put. `adaptive` enables the
++   * only-relax count-gate overlay (ADR 0028) after 6 accepted skips.
++   */
++  skipDetector: SkipDetectorKind;
++  /**
++   * Optional pinned session-min skip height in torso units. Empty = detector
++   * default (0.3 / adaptive only-relax). A pin wins over adaptive (ADR 0030).
++   */
++  heightMinTorso: string;
++  /**
++   * Optional pinned session-max skip height in torso units. Empty = no
++   * ceiling. Hops above this do not count (precision window).
++   */
++  heightMaxTorso: string;
+   /**
+    * Base URL of the local no-auth sync server (documents/sync-server.md).
+    * Defaults to our reserved ngrok domain (skip.ngrok.app → Mac :4787, via
+@@ -28,12 +45,15 @@ export interface Settings {
+ 
+ /**
+  * Initial defaults. `poseSource` is device-aware (simulator / Expo Go →
+- * simulated; physical iPhone in a dev/prod build → camera). When a
++ * simulated; physical iOS or Android in a dev/prod build → camera). When a
+  * persistence adapter lands behind this cell, only seed `poseSource` when
+  * no stored preference exists — never overwrite a user override.
+  */
+ export const DEFAULT_SETTINGS: Settings = {
+   poseSource: defaultPoseSourceKind(),
++  skipDetector: 'v2',
++  heightMinTorso: '',
++  heightMaxTorso: '',
+   syncServerUrl: 'https://skip.ngrok.app',
+   persistence: 'sqlite',
+   tileRushDifficulty: 'medium',
+@@ -49,3 +69,16 @@ export const settingsCell = new Cell<Settings>(DEFAULT_SETTINGS);
+ export function updateSettings(patch: Partial<Settings>): void {
+   settingsCell.set({ ...settingsCell.get(), ...patch });
+ }
++
++/** Empty / non-numeric → null (detector default). Negative → null. */
++export function parseOptionalTorsoHeight(raw: string): number | null {
++  const trimmed = raw.trim();
++  if (trimmed === '') {
++    return null;
++  }
++  const value = Number(trimmed);
++  if (!Number.isFinite(value) || value < 0) {
++    return null;
++  }
++  return value;
++}
+diff --git a/apps/mobile/tests/session-recording-dispose.test.ts b/apps/mobile/tests/session-recording-dispose.test.ts
+index 4e28ef6..51cc3e4 100644
+--- a/apps/mobile/tests/session-recording-dispose.test.ts
++++ b/apps/mobile/tests/session-recording-dispose.test.ts
+@@ -92,6 +92,15 @@ const EMPTY_SKIP_STATE: HipOscillationV2State = {
+   wristEma: null,
+   wristSign: 0,
+   wristCrossings: 0,
++  peakEma: null,
++  airEma: null,
++  warmupCount: 0,
++  countGate: null,
++  minPeakTorso: 0.3,
++  minAirborneMs: 320,
++  heightMinY: null,
++  heightMaxY: null,
++  heightMaxTorso: null,
+ };
+ 
+ const IDLE_FEEDBACK: GestureFeedback = { armed: false, gesture: null, dwellProgress: 0 };
+diff --git a/apps/mobile/tests/session-runtime-r1.test.ts b/apps/mobile/tests/session-runtime-r1.test.ts
+index 16e0d0e..3287876 100644
+--- a/apps/mobile/tests/session-runtime-r1.test.ts
++++ b/apps/mobile/tests/session-runtime-r1.test.ts
+@@ -81,6 +81,15 @@ const EMPTY_SKIP_STATE: HipOscillationV2State = {
+   wristEma: null,
+   wristSign: 0,
+   wristCrossings: 0,
++  peakEma: null,
++  airEma: null,
++  warmupCount: 0,
++  countGate: null,
++  minPeakTorso: 0.3,
++  minAirborneMs: 320,
++  heightMinY: null,
++  heightMaxY: null,
++  heightMaxTorso: null,
+ };
+ 
+ function emptyFrame(t: number): PoseFrame {
+diff --git a/documents/decisions/0007-skip-v2-full-revolution-gates.md b/documents/decisions/0007-skip-v2-full-revolution-gates.md
+index 855abc6..e238254 100644
+--- a/documents/decisions/0007-skip-v2-full-revolution-gates.md
++++ b/documents/decisions/0007-skip-v2-full-revolution-gates.md
+@@ -2,6 +2,10 @@
+ 
+ **Status:** accepted · Aug 2026
+ 
++**See also:** [0030](0030-session-jump-height-window.md) — 0.3 torso is the
++default session height min (config, not identity). IMG_0446 stutters are
++hops below that min, not a separate detector class.
++
+ ## Context
+ 
+ hip-oscillation-v1 counts every hip excursion over 0.1 torso / 100 ms, which
+diff --git a/documents/mobile-app.md b/documents/mobile-app.md
+index 5d18da9..5f4e1e3 100644
+--- a/documents/mobile-app.md
++++ b/documents/mobile-app.md
+@@ -17,7 +17,10 @@ implementations. It wires, from `@skip-hero/core`:
+ - `InMemoryEventBus` + `InMemoryEventStore` (swap point for
+   `@skip-hero/data-sqlite` later),
+ - `createSessionMachine` — the concrete session state machine,
+-- `createHipOscillationV2Detector` — skip detection,
++- `createHipOscillationV2Detector` — skip detection (Settings may pass
++  `{ adaptive: true }` for the ADR 0028 overlay and/or pinned
++  `heightMinTorso` / `heightMaxTorso` for the ADR 0030 session height
++  window; default is stock v2 with no window pins),
+ - `createAnkleLandingDetector` — leg-landing patterns,
+ - `createBodyGestureRecognizer` + `createGestureEngine` — body gestures
+   (raise arm to pause, both arms to finish, wrist swipes to navigate),
+@@ -39,19 +42,30 @@ or in core (`PoseSource`):
+ | Interface    | Implementation                                              | Wraps                                                                           |
+ | ------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
+ | `PoseSource` | `SimulatedPoseSource` (`src/impl/simulated-pose-source.ts`) | Replays a bundled 45 s recording at wall-clock pace — the dev/simulator default |
+-| `PoseSource` | `VisionPoseSource` (`src/impl/vision-pose-source.ts`)       | The `skip-hero-vision` native module (below)                                    |
++| `PoseSource` | `VisionPoseSource` (`src/impl/vision-pose-source.ts`)       | The `skip-hero-vision` native module (iOS)                                      |
++| `PoseSource` | `MediaPipePoseSource` (`src/impl/mediapipe-pose-source.ts`) | The `skip-hero-mediapipe` native module (Android)                               |
+ | `CuePlayer`  | `src/impl/expo-audio-cues.ts`                               | `expo-audio`, playing small synthesized WAVs                                    |
+ | `Haptics`    | `src/impl/expo-haptics.ts`                                  | `expo-haptics`                                                                  |
+ | `NewId`      | `src/impl/expo-crypto-ids.ts`                               | `expo-crypto` UUIDs                                                             |
+ 
+ `modules/skip-hero-vision` is a local Expo Module (TypeScript wrapper +
+-Swift). The Swift side owns an `AVCaptureSession` on the front camera, runs
+-`VNDetectHumanBodyPoseRequest` per frame, maps Apple joint names to the
+-canonical `BodyLandmark` enum with normalized top-left coordinates (the same
+-mapping as `tools/pose-extract`), and emits frames as events to JS. It also
+-exposes a camera preview view used by the in-session PiP. Apple's vocabulary
+-never crosses the module boundary. It requires a dev build (`expo prebuild`)
+-— in Expo Go or the simulator the module is absent and the app runs on the
++Swift, `platforms: ["apple"]`). The Swift side owns an `AVCaptureSession` on
++the front camera, runs `VNDetectHumanBodyPoseRequest` per frame, maps Apple
++joint names to the canonical `BodyLandmark` enum with normalized top-left
++coordinates (the same mapping as `tools/pose-extract`), and emits frames as
++events to JS. It also exposes a camera preview view used by the in-session
++PiP. Apple's vocabulary never crosses the module boundary.
++
++`modules/skip-hero-mediapipe` is the Android sibling (TypeScript wrapper +
++Kotlin, `platforms: ["android"]`, ADR 0029). CameraX + MediaPipe Tasks
++pose-landmarker, the same pinned `.task` asset and BlazePose→canonical
++mapping as `tools/pose-extract-mediapipe`, same ADR 0026 coordinate
++contract. BlazePose names never cross the module boundary. The composition
++root picks Vision on iOS and MediaPipe on Android when Settings = camera;
++nothing else constructs either adapter.
++
++Both modules require a dev build (`expo prebuild`) — in Expo Go or the
++simulator/emulator the native module is absent and the app runs on the
+ simulated source.
+ 
+ ### The live pipeline (`src/session/session-runtime.ts`)
+@@ -119,6 +133,11 @@ npm run mobile:ios                                # or: npx expo start --ios in
+   (`VisionPoseSource` via `skip-hero-vision`). Needs a dev build:
+   `npx expo prebuild -p ios && npx expo run:ios --device` in `apps/mobile`.
+   Settings still lets you force simulated replay.
++- **Physical Android (dev/prod build)**: defaults to the live camera
++  (`MediaPipePoseSource` via `skip-hero-mediapipe`, ADR 0029). Needs a
++  native build: `npx expo prebuild -p android && npx expo run:android --device`
++  in `apps/mobile`, or an EAS Android development client. Settings still
++  lets you force simulated replay.
+ - **Sync**: run the sync server (`npm run start --workspace
+ @skip-hero/sync-server`), enter its URL on the Settings screen, and each
+   finished session's events upload automatically. See
+diff --git a/documents/model-tuning-notes.md b/documents/model-tuning-notes.md
+index 6073bfb..472d66a 100644
+--- a/documents/model-tuning-notes.md
++++ b/documents/model-tuning-notes.md
+@@ -3,6 +3,22 @@
+ Why v2 exists, what it measures, its effect on the reference footage, its
+ limits, and researched directions for the next detector generations.
+ 
++**Adaptive overlay (ADR 0028).** Stock v2 stays the default. An optional
++`hip-oscillation-v2-adaptive` flag relaxes _count gates only_ after 6
++accepted skips (asymmetric EMA, only-relax, floors 0.22 torso / 260 ms)
++so a decaying bout like IMG_0502 can keep counting without retuning the
++0.3 / 320 defaults that reject IMG_0446 stutters. Enable with
++`createHipOscillationV2Detector({ adaptive: true })`, Settings → Adaptive,
++or `--detector adaptive`. Do not re-baseline goldens for this overlay.
++
++**Session height window (ADR 0030).** Stutters are hops _below the session
++min_, not a separate detector. v2's 0.3 torso default **is** that min
++(so goldens stay put). A session can pin `heightMinTorso` /
++`heightMaxTorso` (`null` = unset): below min is not counted, above max
++is not counted (precision). Adaptive only-relax still applies when min
++is unpinned; a pinned min or max wins (training goal). Settings → Skip
++detector exposes the two fields (blank = detector default).
++
+ ## The problem: v1 counts stutter hops
+ 
+ The user reviewed `examples/IMG_0446.MOV` (133 s garden session) and reported
+diff --git a/documents/todo-summary.md b/documents/todo-summary.md
+index 2ebad20..5bfcae8 100644
+--- a/documents/todo-summary.md
++++ b/documents/todo-summary.md
+@@ -7,7 +7,51 @@ Short version of everything agreed so far. Full detail lives in
+ skip detections and gesture commands; commands and detections become events
+ on an append-only log; everything the user sees is a projection of that log.
+ 
+-## Current state — updated 2026-08-11
++## Current state — updated 2026-08-19
++
++**Session jump-height window** (ADR 0030): hip-oscillation-v2 now
++separates revolution-candidate gates (airborne / low physical floor) from
++a session height window `[min, max]`. Default min is still 0.3 torso so
++IMG_0446 stutters stay rejected and goldens do not move. Pin
++`heightMinTorso` / `heightMaxTorso` on the detector (Settings under Skip
++detector, empty = default) to bring stutters back or set a precision
++ceiling. A pin wins over adaptive only-relax. `peakTorso` lives on the
++detection object / trace, not on `skip-detected` events. Debug-render
++draws height min/max lines on the hip strip next to the cyan count gate.
++
++**Adaptive skip-count overlay** (ADR 0028): `hip-oscillation-v2-adaptive`
++is an optional only-relax of v2's count gates (not a v3 rewrite). After 6
++accepted v2-gated skips, min-peak / min-airborne may ease toward the
++session's accepted-skip EMA (floors 0.22 torso / 260 ms) but never above
++stock 0.3 / 320. Rise, fall, refractory, maxAirborne, and baseline α are
++unchanged. Default detector remains uncalibrated v2 so goldens and device
++parity stay put; Settings (next to pose source) and
++`--detector adaptive` on `trace-recording` / `debug-video.sh` opt in.
++Debug-render reads per-frame `countGate` so the cyan line can move after
++warmup. Founder review of IMG_0502 adaptive debug video is the gate
++before considering it as a live default.
++
++**Live Android pose module** (ADR 0029): `apps/mobile/modules/skip-hero-mediapipe`
++is the Android sibling of `skip-hero-vision` — Kotlin + CameraX + MediaPipe
++Tasks pose-landmarker, same pinned `.task` asset / BlazePose→canonical
++mapping / ADR 0026 orientation contract as `tools/pose-extract-mediapipe`.
++`MediaPipePoseSource` implements core `PoseSource`; the composition root
++picks Vision on iOS + camera, MediaPipe on Android + camera, simulated
++otherwise. Settings captions the camera option with the live engine name.
++`CAMERA` permission is declared. Core detectors and goldens are unchanged
++(live sessions stay on uncalibrated `hip-oscillation-v2`). Needs a new
++Android dev/prod client (native module; OTA cannot ship it). Hardware
++confirmation on a physical phone is still pending.
++
++**Debug-video MediaPipe overlay** (`scripts/debug-video.sh --stack`): the
++one-command debug pipeline can burn a MediaPipe (Android-model) overlay as
++well as Apple Vision, so the two stacks can be compared on the same footage.
++`--stack vision` (default) is unchanged; `mediapipe` writes
++`*.mediapipe.debug.mov`; `both` writes the pair. The MediaPipe extractor
++accepts the same `--orientation` EXIF names as the Swift tool;
++`debug-render` stamps an `iOS · Vision` / `Android · MediaPipe` badge on
++the overlay. Existing `examples/*.mediapipe.recording.json` fixtures are
++reused, so a comparison on the garden videos skips re-extraction.
+ 
+ **Android pose parity spike** (ADR 0027): MediaPipe Tasks
+ `pose-landmarker` is the recommended Android pose model — ML Kit is
+@@ -245,8 +289,10 @@ on device instead of "check Metro".
+ - Debug video pipeline (`scripts/debug-video.sh`): annotated copy of any
+   skipping video — skeleton, skip counter (v2), landing-pattern flashes and
+   per-foot tallies (ankle-landing-v1), detector phase, wrist trails,
+-  hip-signal plot. Verified frame-accurate against IMG_0446 (83 skips,
+-  113 landings).
++  hip-signal plot, pose-model badge. `--stack vision` (default, Apple
++  Vision), `mediapipe` (Android-model desktop extractor), or `both` for a
++  side-by-side pair (`*.debug.mov` vs `*.mediapipe.debug.mov`). Verified
++  frame-accurate against IMG_0446 (83 skips, 113 landings) on Vision.
+ - Goals & progress feature set: `goal-set` / `goal-archived` /
+   `lesson-completed` events in the core catalog, pure core projections for
+   goal progress, daily totals + streaks, and the activity feed (all via
+diff --git a/packages/core/src/skip/hip-oscillation-v2-detector.ts b/packages/core/src/skip/hip-oscillation-v2-detector.ts
+index f3626c9..958c9a0 100644
+--- a/packages/core/src/skip/hip-oscillation-v2-detector.ts
++++ b/packages/core/src/skip/hip-oscillation-v2-detector.ts
+@@ -5,6 +5,17 @@ import type { SkipDetection, SkipDetector } from './skip-detector.js';
+  * Second skip detection algorithm: v1's hip-oscillation hysteresis, plus
+  * flight-quality gates so only FULL jump cycles (rope revolutions) count.
+  *
++ * Two questions that v2 originally conflated (ADR 0030):
++ *
++ *   A. Is this a rope-revolution candidate? Cadence / airborne / not a
++ *      shuffle. A *low* physical floor (the 0.1-torso rise that armed
++ *      airborne) plus minAirborneMs — not 0.3 torso as "not a skip".
++ *   B. Does this hop fall in the session height window [min, max]?
++ *      That is the training goal. IMG_0446 stutters are hops below the
++ *      session min, not a separate detector. Default min is 0.3 torso
++ *      so goldens and stock v2 counts stay put; a session can pin a
++ *      different min (bring stutters back) and/or a max (precision).
++ *
+  * v1 counted every airborne excursion over 100ms, which also counted
+  * "stutter" mini-hops — little double-bounces where the rope never comes
+  * around. On IMG_0446 the two populations separate cleanly:
+@@ -12,14 +23,23 @@ import type { SkipDetection, SkipDetector } from './skip-detector.js';
+  *   genuine skips:  airborne ~370-500ms, displacement ~0.40-0.60 torso
+  *   stutter hops:   airborne ≤ 300ms,    displacement ≤ ~0.30 torso
+  *
+- * so v2 requires a minimum airborne time AND a minimum peak displacement,
+- * plus a refractory interval after each accepted skip (no plausible rope
+- * cadence lands two full revolutions closer than that). An optional wrist
+- * gate corroborates the rope swing (one wrist oscillation per revolution,
+- * measured as detrended zero crossings of wrist-minus-hip height); it is
+- * off by default because wrist tracking in the reference footage loses the
+- * swing during exactly the stutter sections and would reject genuine skips.
+- * See documents/model-tuning-notes.md for the measurements.
++ * so v2 requires a minimum airborne time AND a session-min peak (0.3 by
++ * default), plus a refractory interval after each accepted skip (no
++ * plausible rope cadence lands two full revolutions closer than that).
++ * An optional wrist gate corroborates the rope swing (one wrist
++ * oscillation per revolution, measured as detrended zero crossings of
++ * wrist-minus-hip height); it is off by default because wrist tracking
++ * in the reference footage loses the swing during exactly the stutter
++ * sections and would reject genuine skips. See
++ * documents/model-tuning-notes.md for the measurements.
++ *
++ * Optional overlay (`adaptive: true`, version `hip-oscillation-v2-adaptive`):
++ * after 6 accepted v2-gated skips, count gates may relax toward the session's
++ * accepted-skip EMA (asymmetric α_up=0.15 / α_down=0.10) but never above the
++ * stock 0.3 torso / 320 ms v2 defaults (only-relax). A pinned
++ * `heightMinTorso` / `heightMaxTorso` wins over adaptive (training goal).
++ * Rejected flights do not update the EMA. Rise, fall, refractory,
++ * maxAirborne, and baseline α stay at v2 values. See ADR 0028, ADR 0030.
+  */
+ export interface HipOscillationV2Config {
+   /** Keypoints below this confidence are ignored. */
+@@ -37,10 +57,26 @@ export interface HipOscillationV2Config {
+   /** A full jump cycle spends at least this long airborne. */
+   minAirborneMs: number;
+   maxAirborneMs: number;
+-  /** Peak hip rise a full jump must reach, as a fraction of torso length. */
++  /**
++   * Default session-min peak (torso fraction) when `heightMinTorso` is
++   * null. Stock v2 / golden default is 0.3 — the stutter filter, not
++   * "this is not a skip". Adaptive only-relax may lower this when min
++   * is unpinned.
++   */
+   minPeakDisplacementTorso: number;
+   /** Absolute peak displacement used until a torso estimate exists. */
+   fallbackMinPeakDisplacement: number;
++  /**
++   * Pinned session-min hop height (torso fraction). `null` = use
++   * `minPeakDisplacementTorso` / adaptive only-relax. A pin wins over
++   * adaptive (ADR 0030).
++   */
++  heightMinTorso: number | null;
++  /**
++   * Pinned session-max hop height (torso fraction). `null` = no ceiling.
++   * Hops above this do not count (precision). A pin wins over adaptive.
++   */
++  heightMaxTorso: number | null;
+   /** Minimum interval between two accepted skips (one rope revolution). */
+   refractoryMs: number;
+   /** Require wrist-swing evidence between accepted skips. */
+@@ -53,6 +89,26 @@ export interface HipOscillationV2Config {
+   minWristCrossings: number;
+   /** Signal gaps longer than this reset the detector (person left frame). */
+   maxFrameGapMs: number;
++  /**
++   * When true, count gates (min peak / min airborne) may relax after a
++   * warmup of accepted v2-gated skips. Rise/fall/refractory/baseline are
++   * unchanged. Version becomes `hip-oscillation-v2-adaptive`.
++   */
++  adaptive: boolean;
++  /** EMA α when the new accepted-skip sample is above the current EMA. */
++  adaptiveAlphaUp: number;
++  /** EMA α when the new accepted-skip sample is at or below the current EMA. */
++  adaptiveAlphaDown: number;
++  /** Accepted v2-gated skips before adaptive gates apply. */
++  adaptiveWarmupSkips: number;
++  /** Adaptive min-peak = min(v2, max(floor, k × peakEma)). */
++  adaptivePeakK: number;
++  /** Adaptive min-air = min(v2, max(floor, k × airEma)). */
++  adaptiveAirK: number;
++  /** Lowest min-peak (torso fraction) adaptive is allowed to reach. */
++  adaptivePeakFloor: number;
++  /** Lowest min-airborne (ms) adaptive is allowed to reach. */
++  adaptiveAirFloorMs: number;
+ }
+ 
+ export const DEFAULT_HIP_OSCILLATION_V2_CONFIG: HipOscillationV2Config = {
+@@ -66,12 +122,22 @@ export const DEFAULT_HIP_OSCILLATION_V2_CONFIG: HipOscillationV2Config = {
+   maxAirborneMs: 1200,
+   minPeakDisplacementTorso: 0.3,
+   fallbackMinPeakDisplacement: 0.03,
++  heightMinTorso: null,
++  heightMaxTorso: null,
+   refractoryMs: 300,
+   wristSwingGate: false,
+   wristDetrendAlpha: 0.08,
+   wristDeadbandTorso: 0.035,
+   minWristCrossings: 1,
+   maxFrameGapMs: 500,
++  adaptive: false,
++  adaptiveAlphaUp: 0.15,
++  adaptiveAlphaDown: 0.1,
++  adaptiveWarmupSkips: 6,
++  adaptivePeakK: 0.65,
++  adaptiveAirK: 0.75,
++  adaptivePeakFloor: 0.22,
++  adaptiveAirFloorMs: 260,
+ };
+ 
+ export interface HipOscillationV2State {
+@@ -92,23 +158,121 @@ export interface HipOscillationV2State {
+   wristEma: number | null;
+   wristSign: -1 | 0 | 1;
+   wristCrossings: number;
++  /** EMA of accepted-skip peak displacement (torso units); null until the first accept. */
++  peakEma: number | null;
++  /** EMA of accepted-skip airborne time (ms); null until the first accept. */
++  airEma: number | null;
++  /** Accepted skips so far (warmup completes at adaptiveWarmupSkips). */
++  warmupCount: number;
++  /** Frame-y of the count gate (cyan line): baseline − current minPeak. */
++  countGate: number | null;
++  /** Count-gate min peak currently in effect, torso fraction. */
++  minPeakTorso: number;
++  /** Count-gate min airborne currently in effect, ms. */
++  minAirborneMs: number;
++  /** Frame-y of the session height-min line; same as countGate in this slice. */
++  heightMinY: number | null;
++  /** Frame-y of the session height-max line; null when no max is set. */
++  heightMaxY: number | null;
++  /** Session-max peak currently in effect, torso fraction; null = no ceiling. */
++  heightMaxTorso: number | null;
+ }
+ 
+-const INITIAL_STATE: HipOscillationV2State = {
+-  window: [],
+-  baseline: null,
+-  torsoEma: null,
+-  phase: 'grounded',
+-  airborneSince: null,
+-  peakY: null,
+-  peakT: null,
+-  peakConfidence: 0,
+-  lastSampleT: null,
+-  lastSkipT: null,
+-  wristEma: null,
+-  wristSign: 0,
+-  wristCrossings: 0,
+-};
++function freshState(config: HipOscillationV2Config): HipOscillationV2State {
++  return {
++    window: [],
++    baseline: null,
++    torsoEma: null,
++    phase: 'grounded',
++    airborneSince: null,
++    peakY: null,
++    peakT: null,
++    peakConfidence: 0,
++    lastSampleT: null,
++    lastSkipT: null,
++    wristEma: null,
++    wristSign: 0,
++    wristCrossings: 0,
++    peakEma: null,
++    airEma: null,
++    warmupCount: 0,
++    countGate: null,
++    minPeakTorso: config.heightMinTorso ?? config.minPeakDisplacementTorso,
++    minAirborneMs: config.minAirborneMs,
++    heightMinY: null,
++    heightMaxY: null,
++    heightMaxTorso: config.heightMaxTorso,
++  };
++}
++
++function asymmetricEma(
++  ema: number | null,
++  sample: number,
++  alphaUp: number,
++  alphaDown: number,
++): number {
++  if (ema === null) {
++    return sample;
++  }
++  const alpha = sample > ema ? alphaUp : alphaDown;
++  return ema * (1 - alpha) + sample * alpha;
++}
++
++function resolveCountGates(
++  config: HipOscillationV2Config,
++  peakEma: number | null,
++  airEma: number | null,
++  warmupCount: number,
++): { minPeakTorso: number; minAirborneMs: number; heightMaxTorso: number | null } {
++  let minPeakTorso = config.minPeakDisplacementTorso;
++  let minAirborneMs = config.minAirborneMs;
++  if (
++    config.adaptive &&
++    warmupCount >= config.adaptiveWarmupSkips &&
++    peakEma !== null &&
++    airEma !== null
++  ) {
++    minPeakTorso = Math.min(
++      config.minPeakDisplacementTorso,
++      Math.max(config.adaptivePeakFloor, config.adaptivePeakK * peakEma),
++    );
++    minAirborneMs = Math.min(
++      config.minAirborneMs,
++      Math.max(config.adaptiveAirFloorMs, config.adaptiveAirK * airEma),
++    );
++  }
++  return {
++    // Pinned session min wins over adaptive only-relax (training goal).
++    minPeakTorso: config.heightMinTorso ?? minPeakTorso,
++    minAirborneMs,
++    heightMaxTorso: config.heightMaxTorso,
++  };
++}
++
++function withGateSnapshot(
++  state: HipOscillationV2State,
++  config: HipOscillationV2Config,
++): HipOscillationV2State {
++  const gates = resolveCountGates(config, state.peakEma, state.airEma, state.warmupCount);
++  const minPeak =
++    state.torsoEma !== null
++      ? gates.minPeakTorso * state.torsoEma
++      : config.fallbackMinPeakDisplacement;
++  const maxPeak =
++    gates.heightMaxTorso !== null && state.torsoEma !== null
++      ? gates.heightMaxTorso * state.torsoEma
++      : null;
++  const heightMinY = state.baseline === null ? null : state.baseline - minPeak;
++  return {
++    ...state,
++    minPeakTorso: gates.minPeakTorso,
++    minAirborneMs: gates.minAirborneMs,
++    countGate: heightMinY,
++    heightMinY,
++    heightMaxY: state.baseline === null || maxPeak === null ? null : state.baseline - maxPeak,
++    heightMaxTorso: gates.heightMaxTorso,
++  };
++}
+ 
+ function meanPoint(points: Keypoint[]): { y: number; confidence: number } | null {
+   if (points.length === 0) {
+@@ -125,10 +289,10 @@ export function createHipOscillationV2Detector(
+   const config: HipOscillationV2Config = { ...DEFAULT_HIP_OSCILLATION_V2_CONFIG, ...overrides };
+ 
+   return {
+-    version: 'hip-oscillation-v2',
++    version: config.adaptive ? 'hip-oscillation-v2-adaptive' : 'hip-oscillation-v2',
+ 
+     initial(): HipOscillationV2State {
+-      return INITIAL_STATE;
++      return freshState(config);
+     },
+ 
+     step(frame: PoseFrame, state: HipOscillationV2State) {
+@@ -142,14 +306,14 @@ export function createHipOscillationV2Detector(
+       if (hip === null) {
+         const gap =
+           state.lastSampleT !== null && frame.t - state.lastSampleT > config.maxFrameGapMs;
+-        return { state: gap ? INITIAL_STATE : state, skips: [] };
++        return { state: gap ? freshState(config) : state, skips: [] };
+       }
+ 
+       // Reset after a gap even when the signal comes back — the person may
+       // reappear anywhere in frame, so the old baseline is meaningless.
+       const s: HipOscillationV2State =
+         state.lastSampleT !== null && frame.t - state.lastSampleT > config.maxFrameGapMs
+-          ? INITIAL_STATE
++          ? freshState(config)
+           : state;
+ 
+       // Torso length estimate (shoulder mid to hip mid), EMA-smoothed.
+@@ -199,31 +363,40 @@ export function createHipOscillationV2Detector(
+         torsoEma !== null ? config.riseThresholdTorso * torsoEma : config.fallbackRiseThreshold;
+       const fall =
+         torsoEma !== null ? config.fallThresholdTorso * torsoEma : config.fallbackRiseThreshold / 2;
++      const gates = resolveCountGates(config, s.peakEma, s.airEma, s.warmupCount);
++      // A: low physical floor (the rise that armed airborne) — not 0.3 torso.
++      const physicalFloor = rise;
++      // B: session height window. minPeak is the effective session min
++      // (stock 0.3 / adaptive only-relax / pinned heightMinTorso).
+       const minPeak =
+-        torsoEma !== null
+-          ? config.minPeakDisplacementTorso * torsoEma
+-          : config.fallbackMinPeakDisplacement;
++        torsoEma !== null ? gates.minPeakTorso * torsoEma : config.fallbackMinPeakDisplacement;
++      const maxPeak =
++        gates.heightMaxTorso !== null && torsoEma !== null ? gates.heightMaxTorso * torsoEma : null;
+ 
+       const skips: SkipDetection[] = [];
+ 
+       if (s.baseline === null) {
+         return {
+-          state: {
+-            ...s,
+-            window,
+-            torsoEma,
+-            baseline: smoothedY,
+-            phase: 'grounded',
+-            lastSampleT: frame.t,
+-            wristEma,
+-            wristSign,
+-            wristCrossings,
+-          },
++          state: withGateSnapshot(
++            {
++              ...s,
++              window,
++              torsoEma,
++              baseline: smoothedY,
++              phase: 'grounded',
++              lastSampleT: frame.t,
++              wristEma,
++              wristSign,
++              wristCrossings,
++            },
++            config,
++          ),
+           skips,
+         };
+       }
+ 
+       let { baseline, phase, airborneSince, peakY, peakT, peakConfidence, lastSkipT } = s;
++      let { peakEma, airEma, warmupCount } = s;
+ 
+       if (phase === 'grounded') {
+         // Track the ground level slowly; jumps are too brief to drag it up.
+@@ -250,18 +423,50 @@ export function createHipOscillationV2Detector(
+           peakY = null;
+           peakT = null;
+         } else if (smoothedY >= baseline - fall) {
+-          // Landed. Count it only if the excursion looks like a FULL jump
+-          // cycle: long enough airborne, high enough, past the refractory
+-          // interval, and (optionally) corroborated by a wrist swing.
++          // Landed. A: revolution candidate (airborne long enough, past a
++          // low physical floor, refractory, optional wrist). B: session
++          // height window [min, max] — below min is a stutter when min is
++          // 0.3; above max is a precision miss.
+           const displacement = peakY === null ? 0 : baseline - peakY;
+-          const fullFlight = airborneMs >= config.minAirborneMs && displacement >= minPeak;
++          const peakTorso = torsoEma !== null && torsoEma > 0 ? displacement / torsoEma : undefined;
++          const revolutionCandidate =
++            airborneMs >= gates.minAirborneMs && displacement >= physicalFloor;
++          const inHeightWindow =
++            displacement >= minPeak && (maxPeak === null || displacement <= maxPeak);
+           const pastRefractory =
+             lastSkipT === null || peakT === null || peakT - lastSkipT >= config.refractoryMs;
+           const wristOk = !config.wristSwingGate || wristCrossings >= config.minWristCrossings;
+-          if (fullFlight && pastRefractory && wristOk && peakT !== null) {
+-            skips.push({ frameT: peakT, confidence: peakConfidence });
++          if (
++            revolutionCandidate &&
++            inHeightWindow &&
++            pastRefractory &&
++            wristOk &&
++            peakT !== null
++          ) {
++            skips.push({
++              frameT: peakT,
++              confidence: peakConfidence,
++              ...(peakTorso === undefined ? {} : { peakTorso }),
++            });
+             lastSkipT = peakT;
+             wristCrossings = 0;
++            if (config.adaptive) {
++              if (torsoEma !== null && torsoEma > 0) {
++                peakEma = asymmetricEma(
++                  peakEma,
++                  displacement / torsoEma,
++                  config.adaptiveAlphaUp,
++                  config.adaptiveAlphaDown,
++                );
++              }
++              airEma = asymmetricEma(
++                airEma,
++                airborneMs,
++                config.adaptiveAlphaUp,
++                config.adaptiveAlphaDown,
++              );
++              warmupCount += 1;
++            }
+           }
+           phase = 'grounded';
+           airborneSince = null;
+@@ -271,21 +476,28 @@ export function createHipOscillationV2Detector(
+       }
+ 
+       return {
+-        state: {
+-          window,
+-          baseline,
+-          torsoEma,
+-          phase,
+-          airborneSince,
+-          peakY,
+-          peakT,
+-          peakConfidence,
+-          lastSampleT: frame.t,
+-          lastSkipT,
+-          wristEma,
+-          wristSign,
+-          wristCrossings,
+-        },
++        state: withGateSnapshot(
++          {
++            ...s,
++            window,
++            baseline,
++            torsoEma,
++            phase,
++            airborneSince,
++            peakY,
++            peakT,
++            peakConfidence,
++            lastSampleT: frame.t,
++            lastSkipT,
++            wristEma,
++            wristSign,
++            wristCrossings,
++            peakEma,
++            airEma,
++            warmupCount,
++          },
++          config,
++        ),
+         skips,
+       };
+     },
+diff --git a/packages/core/src/skip/skip-detector.ts b/packages/core/src/skip/skip-detector.ts
+index 5b14549..4902a34 100644
+--- a/packages/core/src/skip/skip-detector.ts
++++ b/packages/core/src/skip/skip-detector.ts
+@@ -6,6 +6,13 @@ export interface SkipDetection {
+   frameT: number;
+   /** Detector's own confidence in this detection, [0, 1]. */
+   confidence: number;
++  /**
++   * Peak hip displacement of this hop, as a fraction of torso length.
++   * Omitted when no torso estimate exists. Kept on the detection object
++   * (trace / later UI) rather than on skip-detected events so goldens
++   * do not churn (ADR 0030).
++   */
++  peakTorso?: number;
+ }
+ 
+ /**
+diff --git a/packages/core/tests/hip-oscillation-v2-detector.test.ts b/packages/core/tests/hip-oscillation-v2-detector.test.ts
+index 8e114e5..e80e113 100644
+--- a/packages/core/tests/hip-oscillation-v2-detector.test.ts
++++ b/packages/core/tests/hip-oscillation-v2-detector.test.ts
+@@ -22,6 +22,10 @@ interface JumpSpec {
+   kind: 'full' | 'stutter' | 'ground';
+   /** Wrist swing synchronized with the jump (one cycle per jump). */
+   wristSwing?: boolean;
++  /** Override the kind's default hip dip (frame-y). */
++  amplitude?: number;
++  /** Override the kind's default airborne frame count. */
++  airFrames?: number;
+ }
+ 
+ const FULL = { amplitude: 0.12, airFrames: 14 };
+@@ -62,7 +66,9 @@ function sequenceFrames(specs: JumpSpec[], options: { confidence?: number } = {}
+       for (let g = 0; g < GROUND_FRAMES; g += 1) push(0, spec.wristSwing ?? false);
+       continue;
+     }
+-    const { amplitude, airFrames } = spec.kind === 'full' ? FULL : STUTTER;
++    const profile = spec.kind === 'full' ? FULL : STUTTER;
++    const amplitude = spec.amplitude ?? profile.amplitude;
++    const airFrames = spec.airFrames ?? profile.airFrames;
+     for (let a = 0; a < airFrames; a += 1) {
+       push(amplitude * Math.sin((Math.PI * (a + 1)) / (airFrames + 1)), spec.wristSwing ?? false);
+     }
+@@ -188,4 +194,140 @@ describe('hip-oscillation-v2 detector', () => {
+     const custom = createHipOscillationV2Detector({ minAirborneMs: 250 });
+     expect(custom.version).toBe('hip-oscillation-v2');
+   });
++
++  it('uncalibrated factory stays hip-oscillation-v2; adaptive is a new version id', () => {
++    expect(createHipOscillationV2Detector().version).toBe('hip-oscillation-v2');
++    expect(createHipOscillationV2Detector({ adaptive: true }).version).toBe(
++      'hip-oscillation-v2-adaptive',
++    );
++  });
++});
++
++describe('hip-oscillation-v2-adaptive overlay', () => {
++  const adaptive = () => createHipOscillationV2Detector({ adaptive: true });
++  /** Just above v2 gates (~0.36 torso, ~400 ms) so the EMA can relax. */
++  const warmupJump: JumpSpec = { kind: 'full', amplitude: 0.09, airFrames: 12 };
++  /** IMG_0502-style decay: ~0.27 torso unsmoothed (~0.23 after the 3-sample
++   *  window), ~333 ms airborne — below stock v2, above adaptive floors. */
++  const decayJump: JumpSpec = { kind: 'full', amplitude: 0.0675, airFrames: 13 };
++
++  it('still rejects 0446-style stutter hops in a full/stutter alternation', () => {
++    const specs: JumpSpec[] = [];
++    for (let n = 0; n < 8; n += 1) {
++      specs.push({ kind: 'full' }, { kind: 'stutter' });
++    }
++    const detections = detectSkips(adaptive(), recordingFrom(sequenceFrames(specs)));
++    expect(detections).toHaveLength(8);
++  });
++
++  it('after 6 accepted skips, counts a 0502-style decay bout that v2 rejects', () => {
++    const specs: JumpSpec[] = [
++      ...Array.from({ length: 6 }, () => warmupJump),
++      ...Array.from({ length: 4 }, () => decayJump),
++    ];
++    const recording = recordingFrom(sequenceFrames(specs));
++    expect(detectSkips(createHipOscillationV2Detector(), recording)).toHaveLength(6);
++    const adaptiveDetections = detectSkips(adaptive(), recording);
++    expect(adaptiveDetections.length).toBeGreaterThan(6);
++    expect(adaptiveDetections).toHaveLength(10);
++  });
++
++  it('keeps stock v2 gates until warmup completes, so a decay bout alone is rejected', () => {
++    const decayOnly: JumpSpec[] = Array.from({ length: 4 }, () => decayJump);
++    expect(detectSkips(adaptive(), recordingFrom(sequenceFrames(decayOnly)))).toHaveLength(0);
++  });
++
++  it('does not feed rejected flights into the EMA', () => {
++    const detector = adaptive();
++    const specs: JumpSpec[] = [
++      ...Array.from({ length: 6 }, () => warmupJump),
++      ...Array.from({ length: 8 }, () => ({ kind: 'stutter' as const })),
++    ];
++    let state = detector.initial();
++    let accepted = 0;
++    let minPeakAfterWarmup: number | null = null;
++    for (const frame of sequenceFrames(specs)) {
++      const result = detector.step(frame, state);
++      state = result.state;
++      accepted += result.skips.length;
++      if (accepted === 6 && minPeakAfterWarmup === null) {
++        minPeakAfterWarmup = state.minPeakTorso;
++      }
++    }
++    expect(accepted).toBe(6);
++    expect(minPeakAfterWarmup).not.toBeNull();
++    expect(state.minPeakTorso).toBe(minPeakAfterWarmup);
++    expect(state.warmupCount).toBe(6);
++  });
++});
++
++describe('hip-oscillation-v2 session height window', () => {
++  /**
++   * Below stock 0.3 / 320 but above a lowered session min: ~0.26 torso
++   * after smoothing, ~10 airborne frames. Default v2 rejects it; a
++   * session that asks for stutters counts it.
++   */
++  const smallHop: JumpSpec = { kind: 'stutter', amplitude: 0.075, airFrames: 10 };
++
++  it('default config still rejects IMG_0446-style stutter hops (min 0.3 / 320)', () => {
++    const specs: JumpSpec[] = [];
++    for (let n = 0; n < 5; n += 1) {
++      specs.push({ kind: 'full' }, { kind: 'stutter' });
++    }
++    const detections = detectSkips(
++      createHipOscillationV2Detector(),
++      recordingFrom(sequenceFrames(specs)),
++    );
++    expect(detections).toHaveLength(5);
++    for (const detection of detections) {
++      expect(detection.peakTorso).toBeGreaterThan(0.3);
++    }
++  });
++
++  it('counts the small hop in a full/stutter pair when heightMinTorso is lowered and minAirborne is relaxed', () => {
++    const specs: JumpSpec[] = [];
++    for (let n = 0; n < 4; n += 1) {
++      specs.push({ kind: 'full' }, smallHop);
++    }
++    const recording = recordingFrom(sequenceFrames(specs));
++    expect(detectSkips(createHipOscillationV2Detector(), recording)).toHaveLength(4);
++    const openWindow = createHipOscillationV2Detector({
++      heightMinTorso: 0.22,
++      minAirborneMs: 220,
++    });
++    expect(detectSkips(openWindow, recording)).toHaveLength(8);
++  });
++
++  it('rejects full jumps above a pinned heightMaxTorso (precision ceiling)', () => {
++    const recording = recordingFrom(sequenceFrames(fullJumps(6)));
++    expect(detectSkips(createHipOscillationV2Detector(), recording)).toHaveLength(6);
++    const ceiling = createHipOscillationV2Detector({ heightMaxTorso: 0.35 });
++    expect(detectSkips(ceiling, recording)).toHaveLength(0);
++  });
++
++  it('pinned heightMinTorso disables adaptive lowering below that pin', () => {
++    const warmupJump: JumpSpec = { kind: 'full', amplitude: 0.09, airFrames: 12 };
++    const decayJump: JumpSpec = { kind: 'full', amplitude: 0.0675, airFrames: 13 };
++    const specs: JumpSpec[] = [
++      ...Array.from({ length: 6 }, () => warmupJump),
++      ...Array.from({ length: 4 }, () => decayJump),
++    ];
++    const recording = recordingFrom(sequenceFrames(specs));
++    expect(detectSkips(createHipOscillationV2Detector({ adaptive: true }), recording)).toHaveLength(
++      10,
++    );
++
++    const pinned = createHipOscillationV2Detector({
++      adaptive: true,
++      heightMinTorso: 0.3,
++    });
++    expect(detectSkips(pinned, recording)).toHaveLength(6);
++
++    let state = pinned.initial();
++    for (const frame of recording.frames) {
++      state = pinned.step(frame, state).state;
++    }
++    expect(state.minPeakTorso).toBe(0.3);
++    expect(state.heightMaxY).toBeNull();
++  });
+ });
+diff --git a/scripts/debug-video.sh b/scripts/debug-video.sh
+index c942e0a..0d14cb2 100755
+--- a/scripts/debug-video.sh
++++ b/scripts/debug-video.sh
+@@ -3,77 +3,197 @@
+ #
+ # Takes any video of someone skipping and produces an annotated copy with the
+ # pose skeleton, skip counter, detector phase, landing/trip flashes, and
+-# hip-signal plot burned in. The input video is never modified. Intermediate
+-# artifacts (recording + trace JSON) are written next to the input and reused
+-# if already present (re-trace after detector changes by deleting the .trace).
++# hip-signal plot burned in (baseline, jump threshold, cyan count gate,
++# dashed height min / height max when the trace supplies them; ADR 0030).
++# The input video is never modified. Intermediate artifacts (recording +
++# trace JSON) are written next to the input and reused if already present
++# (re-trace after detector changes by deleting the .trace).
+ #
+-# Usage: ./scripts/debug-video.sh <video> [preview-seconds] [--orientation <name>]
++# Usage: ./scripts/debug-video.sh <video> [--stack vision|mediapipe|both]
++#                                 [--detector v1|v2|adaptive]
++#                                 [preview-seconds] [--orientation <name>]
++#                                 [--variant lite|full|heavy]
+ #
+-#   --orientation  forwarded to pose-extract and debug-render for files whose
+-#                  metadata lies about their orientation. Session movies
+-#                  exported by the PRE-fix iOS build (sideways, no rotation
+-#                  metadata) need `--orientation leftMirrored`; post-fix
+-#                  exports carry honest metadata and need nothing.
++#   --stack        pose extractor. `vision` (default) is Apple Vision / iOS;
++#                  `mediapipe` is the Android-model desktop extractor
++#                  (ADR 0027); `both` writes two debug videos so the
++#                  overlays can be compared before a live Android module.
++#   --detector     skip detector for the trace. `v2` (default) is stock
++#                  hip-oscillation-v2; `adaptive` is the only-relax overlay
++#                  (ADR 0028) and writes `*.adaptive.debug.mov` so it does
++#                  not overwrite the v2 overlay; `v1` is the frozen original.
++#   --orientation  forwarded to the extractor and debug-render for files
++#                  whose metadata lies about their orientation. Session
++#                  movies exported by the PRE-fix iOS build (sideways, no
++#                  rotation metadata) need `--orientation leftMirrored`;
++#                  post-fix exports carry honest metadata and need nothing.
++#                  Same EXIF names on both extractors.
++#   --variant      MediaPipe pose-landmarker variant (default: full). Ignored
++#                  for `--stack vision`. Re-extract (delete the .mediapipe
++#                  recording) after changing variant.
+ 
+ set -euo pipefail
+ 
++usage() {
++  echo "usage: $0 <video> [--stack vision|mediapipe|both] [--detector v1|v2|adaptive] [preview-seconds] [--orientation <name>] [--variant lite|full|heavy]" >&2
++}
++
+ if [[ $# -lt 1 ]]; then
+-  echo "usage: $0 <video> [preview-seconds] [--orientation <name>]" >&2
++  usage
+   exit 1
+ fi
++if [[ "$1" == "-h" || "$1" == "--help" ]]; then
++  usage
++  exit 0
++fi
+ 
+ VIDEO="$1"
+ shift
+ PREVIEW_SEC="25"
++STACK="vision"
++VARIANT="full"
++DETECTOR="v2"
+ ORIENTATION_ARGS=()
+ while [[ $# -gt 0 ]]; do
+   case "$1" in
++    --stack)
++      STACK="$2"
++      shift 2
++      ;;
++    --detector)
++      DETECTOR="$2"
++      shift 2
++      ;;
+     --orientation)
+       ORIENTATION_ARGS=(--orientation "$2")
+       shift 2
+       ;;
++    --variant)
++      VARIANT="$2"
++      shift 2
++      ;;
+     *)
+       PREVIEW_SEC="$1"
+       shift
+       ;;
+   esac
+ done
++
++case "$STACK" in
++  vision | mediapipe | both) ;;
++  *)
++    echo "error: --stack must be vision, mediapipe, or both (got '$STACK')" >&2
++    usage
++    exit 1
++    ;;
++esac
++case "$VARIANT" in
++  lite | full | heavy) ;;
++  *)
++    echo "error: --variant must be lite, full, or heavy (got '$VARIANT')" >&2
++    usage
++    exit 1
++    ;;
++esac
++case "$DETECTOR" in
++  v1 | v2 | adaptive) ;;
++  *)
++    echo "error: --detector must be v1, v2, or adaptive (got '$DETECTOR')" >&2
++    usage
++    exit 1
++    ;;
++esac
++
+ BASE="${VIDEO%.*}"
+ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
++MP_PYTHON="$ROOT/tools/pose-extract-mediapipe/.venv/bin/python"
++MP_EXTRACT="$ROOT/tools/pose-extract-mediapipe/extract.py"
+ 
+-RECORDING="${BASE}.recording.json"
+-TRACE="${BASE}.trace.json"
+-OUTPUT="${BASE}.debug.mov"
+-PREVIEW="${BASE}.debug-preview.png"
++DONE_LINES=()
+ 
+-# 1. Compile the Swift tools if needed (or if their source is newer).
+-for tool in pose-extract debug-render; do
+-  SRC="$ROOT/tools/$tool/$tool.swift"
+-  BIN="$ROOT/tools/$tool/$tool"
+-  if [[ ! -x "$BIN" || "$SRC" -nt "$BIN" ]]; then
++compile_tool() {
++  local tool="$1"
++  local src="$ROOT/tools/$tool/$tool.swift"
++  local bin="$ROOT/tools/$tool/$tool"
++  if [[ ! -x "$bin" || "$src" -nt "$bin" ]]; then
+     echo "==> compiling $tool"
+-    swiftc -O "$SRC" -o "$BIN"
++    swiftc -O "$src" -o "$bin"
+   fi
+-done
++}
+ 
+-# 2. Video -> pose recording (Apple Vision), skipped if already extracted.
+-if [[ -f "$RECORDING" ]]; then
+-  echo "==> reusing $RECORDING"
+-else
+-  echo "==> extracting poses (Apple Vision)"
+-  "$ROOT/tools/pose-extract/pose-extract" "$VIDEO" "$RECORDING" ${ORIENTATION_ARGS[@]+"${ORIENTATION_ARGS[@]}"}
+-fi
++run_stack() {
++  local stack="$1"
++  local recording trace output preview label suffix detector_args
++  suffix=""
++  if [[ "$DETECTOR" == "adaptive" ]]; then
++    suffix=".adaptive"
++  elif [[ "$DETECTOR" == "v1" ]]; then
++    suffix=".v1"
++  fi
++  detector_args=()
++  if [[ "$DETECTOR" != "v2" ]]; then
++    detector_args=(--detector "$DETECTOR")
++  fi
++  if [[ "$stack" == "mediapipe" ]]; then
++    recording="${BASE}.mediapipe.recording.json"
++    trace="${BASE}.mediapipe${suffix}.trace.json"
++    output="${BASE}.mediapipe${suffix}.debug.mov"
++    preview="${BASE}.mediapipe${suffix}.debug-preview.png"
++    label="Android · MediaPipe"
++  else
++    recording="${BASE}.recording.json"
++    trace="${BASE}${suffix}.trace.json"
++    output="${BASE}${suffix}.debug.mov"
++    preview="${BASE}${suffix}.debug-preview.png"
++    label="iOS · Vision"
++  fi
++
++  if [[ -f "$recording" ]]; then
++    echo "==> reusing $recording"
++  elif [[ "$stack" == "mediapipe" ]]; then
++    echo "==> extracting poses (MediaPipe pose-landmarker, variant $VARIANT)"
++    "$MP_PYTHON" "$MP_EXTRACT" "$VIDEO" "$recording" --variant "$VARIANT" \
++      ${ORIENTATION_ARGS[@]+"${ORIENTATION_ARGS[@]}"}
++  else
++    echo "==> extracting poses (Apple Vision)"
++    "$ROOT/tools/pose-extract/pose-extract" "$VIDEO" "$recording" \
++      ${ORIENTATION_ARGS[@]+"${ORIENTATION_ARGS[@]}"}
++  fi
+ 
+-# 3. Recording -> detector trace (runs the current SkipDetector).
+-echo "==> tracing detector"
+-npx tsx "$ROOT/scripts/trace-recording.ts" "$RECORDING" "$TRACE"
++  echo "==> tracing detector ($label, $DETECTOR)"
++  npx tsx "$ROOT/scripts/trace-recording.ts" "$recording" "$trace" \
++    ${detector_args[@]+"${detector_args[@]}"}
+ 
+-# 4. Render the annotated video (+ a preview PNG for quick inspection).
+-echo "==> rendering debug video"
+-"$ROOT/tools/debug-render/debug-render" "$VIDEO" "$RECORDING" "$TRACE" "$OUTPUT" \
+-  --preview "$PREVIEW_SEC" "$PREVIEW" ${ORIENTATION_ARGS[@]+"${ORIENTATION_ARGS[@]}"}
++  echo "==> rendering debug video ($label)"
++  "$ROOT/tools/debug-render/debug-render" "$VIDEO" "$recording" "$trace" "$output" \
++    --preview "$PREVIEW_SEC" "$preview" ${ORIENTATION_ARGS[@]+"${ORIENTATION_ARGS[@]}"}
++
++  DONE_LINES+=("$label")
++  DONE_LINES+=("  video:   $output")
++  DONE_LINES+=("  preview: $preview")
++}
++
++compile_tool debug-render
++if [[ "$STACK" == "vision" || "$STACK" == "both" ]]; then
++  compile_tool pose-extract
++fi
++if [[ "$STACK" == "mediapipe" || "$STACK" == "both" ]]; then
++  if [[ ! -x "$MP_PYTHON" ]]; then
++    echo "error: MediaPipe extractor venv missing. Set up with:" >&2
++    echo "  cd tools/pose-extract-mediapipe && python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
++    exit 1
++  fi
++fi
++
++if [[ "$STACK" == "vision" || "$STACK" == "both" ]]; then
++  run_stack vision
++fi
++if [[ "$STACK" == "mediapipe" || "$STACK" == "both" ]]; then
++  run_stack mediapipe
++fi
+ 
+ echo ""
+ echo "done:"
+-echo "  video:   $OUTPUT"
+-echo "  preview: $PREVIEW"
++for line in "${DONE_LINES[@]}"; do
++  echo "  $line"
++done
+diff --git a/scripts/trace-recording.ts b/scripts/trace-recording.ts
+index 1c20c9b..bc44755 100644
+--- a/scripts/trace-recording.ts
++++ b/scripts/trace-recording.ts
+@@ -4,7 +4,7 @@
+  * (smoothed hip signal, baseline, phase, thresholds, cumulative count, trip
+  * markers). Consumed by tools/debug-render to burn debug overlays into a video.
+  *
+- * Usage: npx tsx scripts/trace-recording.ts <recording.json> [out.trace.json] [--detector v1|v2]
++ * Usage: npx tsx scripts/trace-recording.ts <recording.json> [out.trace.json] [--detector v1|v2|adaptive]
+  * Defaults to the current detector (v2). Trip detector is always trip-v1;
+  * per-frame skips are fed into trip.step the same way SessionRuntime (R1) will.
+  */
+@@ -37,9 +37,12 @@ const positional = args.filter(
+ );
+ 
+ const inputPath = positional[0];
+-if (inputPath === undefined || (detectorChoice !== 'v1' && detectorChoice !== 'v2')) {
++if (
++  inputPath === undefined ||
++  (detectorChoice !== 'v1' && detectorChoice !== 'v2' && detectorChoice !== 'adaptive')
++) {
+   console.error(
+-    'usage: tsx scripts/trace-recording.ts <recording.json> [out.trace.json] [--detector v1|v2]',
++    'usage: tsx scripts/trace-recording.ts <recording.json> [out.trace.json] [--detector v1|v2|adaptive]',
+   );
+   process.exit(1);
+ }
+@@ -59,10 +62,18 @@ interface TraceableState {
+   baseline: number | null;
+   torsoEma: number | null;
+   phase: 'grounded' | 'airborne';
++  countGate?: number | null;
++  minPeakTorso?: number;
++  heightMinY?: number | null;
++  heightMaxY?: number | null;
+ }
+ 
+ const detector: SkipDetector<TraceableState> =
+-  detectorChoice === 'v1' ? createHipOscillationDetector() : createHipOscillationV2Detector();
++  detectorChoice === 'v1'
++    ? createHipOscillationDetector()
++    : detectorChoice === 'adaptive'
++      ? createHipOscillationV2Detector({ adaptive: true })
++      : createHipOscillationV2Detector();
+ const config =
+   detectorChoice === 'v1' ? DEFAULT_HIP_OSCILLATION_CONFIG : DEFAULT_HIP_OSCILLATION_V2_CONFIG;
+ 
+@@ -86,6 +97,14 @@ interface TraceFrame {
+   land: string | null;
+   /** Compact trip label when trip-v1 fired on this frame, else null. */
+   trip: string | null;
++  /** Frame-y of the count gate (cyan line); omitted on v1 traces. */
++  countGate?: number | null;
++  /** Count-gate min peak in torso units; omitted on v1 traces. */
++  minPeak?: number | null;
++  /** Frame-y of the session height-min line; omitted on v1 traces. */
++  heightMin?: number | null;
++  /** Frame-y of the session height-max line; null when no max is set. */
++  heightMax?: number | null;
+ }
+ 
+ /** Compact overlay label, e.g. "LEFT ONLY" or "BOTH·SIM·CLOSE". */
+@@ -159,7 +178,7 @@ for (const frame of recording.frames) {
+       : config.fallbackRiseThreshold;
+   const cadenceFresh = lastSkipT !== null && lastIntervalMs !== null && frame.t - lastSkipT <= 3000;
+ 
+-  trace.push({
++  const entry: TraceFrame = {
+     t: frame.t,
+     y: y === null ? null : Math.round(y * 10_000) / 10_000,
+     b: state.baseline === null ? null : Math.round(state.baseline * 10_000) / 10_000,
+@@ -176,7 +195,24 @@ for (const frame of recording.frames) {
+       tripResult.trips.length > 0
+         ? tripLabel(tripResult.trips[tripResult.trips.length - 1]!.kind)
+         : null,
+-  });
++  };
++  if ('countGate' in state) {
++    entry.countGate =
++      state.countGate === null || state.countGate === undefined
++        ? null
++        : Math.round(state.countGate * 10_000) / 10_000;
++    entry.minPeak =
++      state.minPeakTorso === undefined ? null : Math.round(state.minPeakTorso * 10_000) / 10_000;
++    entry.heightMin =
++      state.heightMinY === null || state.heightMinY === undefined
++        ? null
++        : Math.round(state.heightMinY * 10_000) / 10_000;
++    entry.heightMax =
++      state.heightMaxY === null || state.heightMaxY === undefined
++        ? null
++        : Math.round(state.heightMaxY * 10_000) / 10_000;
++  }
++  trace.push(entry);
+ }
+ 
+ writeFileSync(
+diff --git a/tools/debug-render/debug-render.swift b/tools/debug-render/debug-render.swift
+index 0866a33..604fcce 100644
+--- a/tools/debug-render/debug-render.swift
++++ b/tools/debug-render/debug-render.swift
+@@ -4,7 +4,10 @@
+ // video with debug overlays burned in: pose skeleton (confidence-colored),
+ // wrist trails (gesture debugging), skip counter HUD, detector phase, landing
+ // flashes, trip-v1 rope-catch markers, and a rolling hip-signal plot with
+-// baseline/threshold. The input video is never modified.
++// baseline, jump threshold (0.1 torso), the count gate (stock v2 = 0.3
++// torso; adaptive traces supply a per-frame `countGate` y so the cyan line
++// can move after warmup), and session height-window min/max lines (ADR 0030;
++// max may be absent). The input video is never modified.
+ //
+ // Usage: debug-render <input-video> <recording.json> <trace.json> <output.mov>
+ //                     [--preview <seconds> <preview.png>]
+@@ -118,6 +121,12 @@ struct TraceFrame {
+   let land: String?
+   /// Compact trip label ("TRIP·ROPE", ...) or nil when trip-v1 fired.
+   let trip: String?
++  /// Frame-y of the count gate (cyan line). Nil on old traces → 3 × rise.
++  let countGate: Double?
++  /// Frame-y of the session height-min line. Nil on old traces.
++  let heightMin: Double?
++  /// Frame-y of the session height-max line. Nil when no max is set.
++  let heightMax: Double?
+ }
+ 
+ func loadJSON(_ url: URL) throws -> [String: Any] {
+@@ -153,15 +162,34 @@ let traceFrames: [TraceFrame] = (traceJSON["frames"] as? [[String: Any]] ?? []).
+     skip: raw["skip"] as? Bool ?? false,
+     cadence: raw["cadence"] as? Int ?? 0,
+     land: raw["land"] as? String,
+-    trip: raw["trip"] as? String)
++    trip: raw["trip"] as? String,
++    countGate: raw["countGate"] as? Double,
++    heightMin: raw["heightMin"] as? Double,
++    heightMax: raw["heightMax"] as? Double)
+ }
+ 
+ let detectorVersion = traceJSON["detectorVersion"] as? String ?? "unknown"
+ let tripDetectorVersion = traceJSON["tripDetectorVersion"] as? String ?? "none"
+ let totalTripsMeta = traceJSON["totalTrips"] as? Int ?? 0
++let poseModel = recordingJSON["poseModel"] as? [String: Any]
++let poseModelId = poseModel?["id"] as? String ?? ""
++let poseModelVersion = poseModel?["version"] as? String ?? ""
++let poseBadge: String = {
++  switch poseModelId {
++  case "mediapipe-pose-landmarker":
++    let variant = poseModelVersion.split(separator: "-").first.map(String.init) ?? "full"
++    return "Android · MediaPipe · \(variant)"
++  case "apple-vision-body":
++    return "iOS · Vision"
++  case "":
++    return ""
++  default:
++    return poseModelId
++  }
++}()
+ FileHandle.standardError.write(
+   Data(
+-    "loaded: \(recFrames.count) recording frames, \(traceFrames.count) trace frames, detector \(detectorVersion), trip \(tripDetectorVersion) (\(totalTripsMeta) trips)\n"
++    "loaded: \(recFrames.count) recording frames, \(traceFrames.count) trace frames, detector \(detectorVersion), trip \(tripDetectorVersion) (\(totalTripsMeta) trips)\(poseBadge.isEmpty ? "" : ", \(poseBadge)")\n"
+       .utf8))
+ 
+ // ---------------------------------------------------------------------------
+@@ -191,7 +219,7 @@ func confidenceColor(_ confidence: Double) -> CGColor {
+ 
+ func drawText(
+   _ ctx: CGContext, _ text: String, x: CGFloat, top: CGFloat, size: CGFloat,
+-  color: CGColor, bold: Bool = true, centered: Bool = false
++  color: CGColor, bold: Bool = true, centered: Bool = false, rightAligned: Bool = false
+ ) {
+   let font = CTFontCreateWithName((bold ? "HelveticaNeue-Bold" : "HelveticaNeue") as CFString, size, nil)
+   let attributes: [CFString: Any] = [
+@@ -206,7 +234,15 @@ func drawText(
+   // The context CTM is flipped for top-left drawing; flip the text matrix
+   // back so glyphs render upright.
+   ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+-  ctx.textPosition = CGPoint(x: centered ? x - width / 2 : x, y: top + ascent)
++  let originX: CGFloat
++  if centered {
++    originX = x - width / 2
++  } else if rightAligned {
++    originX = x - width
++  } else {
++    originX = x
++  }
++  ctx.textPosition = CGPoint(x: originX, y: top + ascent)
+   CTLineDraw(line, ctx)
+   ctx.restoreGState()
+ }
+@@ -468,6 +504,21 @@ while let sample = readerOutput.copyNextSampleBuffer() {
+       ? CGColor(red: 1.0, green: 0.35, blue: 0.3, alpha: 0.95)
+       : CGColor(red: 0.75, green: 0.75, blue: 0.75, alpha: 0.9))
+ 
++  // --- pose-model badge (top-right) so Vision vs MediaPipe overlays differ ----
++  if !poseBadge.isEmpty {
++    let badgeSize = 36 * scale
++    let badgeWidth = CGFloat(poseBadge.count) * badgeSize * 0.55 + 40 * scale
++    let badgeHeight = 56 * scale
++    let badgeRect = CGRect(
++      x: W - pad - badgeWidth, y: pad, width: badgeWidth, height: badgeHeight)
++    ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 0.55))
++    ctx.fill(badgeRect)
++    drawText(
++      ctx, poseBadge, x: badgeRect.maxX - 20 * scale, top: badgeRect.minY + 10 * scale,
++      size: badgeSize, color: CGColor(red: 1, green: 1, blue: 1, alpha: 0.95),
++      rightAligned: true)
++  }
++
+   // --- trip flash (red TRIP banner) ------------------------------------------
+   let sinceTrip = t - lastTripT
+   if sinceTrip <= 1200, !lastTripLabel.isEmpty {
+@@ -512,17 +563,40 @@ while let sample = readerOutput.copyNextSampleBuffer() {
+       .suffix(Int(windowMs / 1000 * Double(max(fps, 1))) + 5)
+       .filter { $0.t >= t - windowMs }
+ 
+-    // baseline (yellow) and rise threshold (green)
++    // Horizontal gates in pose-y (smaller y = higher on screen):
++    // yellow = grounded baseline, green = jump/airborne arm (0.1 torso),
++    // cyan = count gate (per-frame `countGate` if present, else 3 × rise),
++    // orange dashed = session height min, magenta dashed = session height max.
++    let countGateY = trace.countGate ?? (baseline - 3 * rise)
+     for (value, color) in [
+       (baseline, CGColor(red: 1, green: 0.85, blue: 0.2, alpha: 0.9)),
+       (baseline - rise, CGColor(red: 0.15, green: 0.95, blue: 0.45, alpha: 0.9)),
++      (countGateY, CGColor(red: 0.35, green: 0.85, blue: 1.0, alpha: 0.95)),
+     ] {
+       ctx.setStrokeColor(color)
+       ctx.setLineWidth(3 * scale)
++      ctx.setLineDash(phase: 0, lengths: [])
+       ctx.move(to: CGPoint(x: strip.minX, y: mapY(value)))
+       ctx.addLine(to: CGPoint(x: strip.maxX, y: mapY(value)))
+       ctx.strokePath()
+     }
++    if let heightMin = trace.heightMin {
++      ctx.setStrokeColor(CGColor(red: 1.0, green: 0.55, blue: 0.2, alpha: 0.95))
++      ctx.setLineWidth(3 * scale)
++      ctx.setLineDash(phase: 0, lengths: [8 * scale, 6 * scale])
++      ctx.move(to: CGPoint(x: strip.minX, y: mapY(heightMin)))
++      ctx.addLine(to: CGPoint(x: strip.maxX, y: mapY(heightMin)))
++      ctx.strokePath()
++    }
++    if let heightMax = trace.heightMax {
++      ctx.setStrokeColor(CGColor(red: 0.95, green: 0.4, blue: 0.85, alpha: 0.95))
++      ctx.setLineWidth(3 * scale)
++      ctx.setLineDash(phase: 0, lengths: [8 * scale, 6 * scale])
++      ctx.move(to: CGPoint(x: strip.minX, y: mapY(heightMax)))
++      ctx.addLine(to: CGPoint(x: strip.maxX, y: mapY(heightMax)))
++      ctx.strokePath()
++    }
++    ctx.setLineDash(phase: 0, lengths: [])
+     // skip markers
+     for f in visible where f.skip {
+       ctx.setStrokeColor(CGColor(red: 0.15, green: 0.95, blue: 0.45, alpha: 0.7))
+@@ -554,7 +628,7 @@ while let sample = readerOutput.copyNextSampleBuffer() {
+     }
+     ctx.strokePath()
+     drawText(
+-      ctx, "hip signal · baseline · jump threshold   \(detectorVersion)",
++      ctx, "hip signal · baseline · jump threshold · count gate · height min · height max   \(detectorVersion)",
+       x: strip.minX + 20 * scale, top: strip.minY + 12 * scale, size: 32 * scale,
+       color: CGColor(red: 0.85, green: 0.85, blue: 0.85, alpha: 1), bold: false)
+   }
+diff --git a/tools/pose-extract-mediapipe/README.md b/tools/pose-extract-mediapipe/README.md
+index 6cf2dc2..b73cc35 100644
+--- a/tools/pose-extract-mediapipe/README.md
++++ b/tools/pose-extract-mediapipe/README.md
+@@ -2,8 +2,9 @@
+ 
+ Video → `SignalRecording` JSON via MediaPipe Tasks `pose-landmarker`
+ (BlazePose-33). The MediaPipe counterpart of `tools/pose-extract`
+-(Apple Vision), and the reference implementation for a future Android pose
+-module: same canonical landmark mapping, same coordinate convention
++(Apple Vision), and the reference implementation for the Android pose
++module (`apps/mobile/modules/skip-hero-mediapipe`): same canonical landmark
++mapping, same coordinate convention
+ (ADR 0026), run off-device with the exact versioned `.task` model asset an
+ Android build would ship. Why MediaPipe and not ML Kit: ADR 0027.
+ 
+@@ -23,9 +24,15 @@ its pinned Google storage URL on first run.
+ ```bash
+ .venv/bin/python extract.py <input-video> <output.recording.json> \
+   [--variant lite|full|heavy] [--model <path>] \
++  [--orientation up|upMirrored|down|downMirrored|left|leftMirrored|right|rightMirrored] \
+   [--rotation 0|90|180|270] [--mirrored]
+ ```
+ 
++`--orientation` uses the same EXIF names as `tools/pose-extract` and
++`scripts/debug-video.sh`; it cannot be combined with `--rotation` /
++`--mirrored`. `./scripts/debug-video.sh <video> --stack mediapipe` (or
++`--stack both`) is the one-command overlay path.
++
+ The committed `examples/*.mediapipe.recording.json` fixtures were produced
+ with the default `full` variant. Output is validated end-to-end by the
+ scripts that consume it — `npm run golden:check` and `npm run parity:models`
+@@ -37,9 +44,10 @@ parse every recording under `signalRecordingSchema` from `@skip-hero/core`.
+   origin top-left, y down. Video rotation is resolved explicitly from the
+   container's rotation metadata (`CAP_PROP_ORIENTATION_META`, backend
+   auto-rotation disabled) and applied to the pixels before detection;
+-  `--rotation` overrides it for files whose metadata lies, and `--mirrored`
+-  un-mirrors physically-mirrored pixels (the Swift tool's
+-  `--orientation leftMirrored` analog).
++  `--rotation` / `--mirrored` override metadata for files that lie, and
++  `--orientation` is the Swift-compatible form of both (same eight EXIF
++  names as `tools/pose-extract`; cannot combine with `--rotation` /
++  `--mirrored`). Pre-fix iOS session movies need `--orientation leftMirrored`.
+ - BlazePose landmark names/indices never leave the extractor: the 17
+   shared joints map to canonical `BODY_LANDMARKS` names; `neck` and `root`
+   (Apple Vision provides these, BlazePose does not) are synthesized at the
+diff --git a/tools/pose-extract-mediapipe/extract.py b/tools/pose-extract-mediapipe/extract.py
+index 8f8d6d2..5b840bd 100644
+--- a/tools/pose-extract-mediapipe/extract.py
++++ b/tools/pose-extract-mediapipe/extract.py
+@@ -21,17 +21,22 @@ BlazePose landmark names/indices never leave this file. Confidence is
+ BlazePose `visibility` clamped to [0, 1].
+ 
+ Usage: extract.py <input-video> <output-json> [--variant lite|full|heavy]
+-                  [--model <path>] [--rotation 0|90|180|270] [--mirrored]
+-
+-  --variant   pose_landmarker model variant (default: full). Downloaded to
+-              models/ from the pinned Google storage URL on first use.
+-  --model     explicit .task file path (overrides --variant's model file).
+-  --rotation  override the metadata-derived clockwise rotation, for files
+-              whose metadata lies (the Swift tool's --orientation analog).
+-  --mirrored  declare the (post-rotation) pixels display-mirrored: frames
+-              are un-mirrored before detection so coordinates land in the
+-              canonical un-mirrored scene and BlazePose's anatomical
+-              left/right labels stay truthful.
++                  [--model <path>] [--orientation <name>]
++                  [--rotation 0|90|180|270] [--mirrored]
++
++  --variant      pose_landmarker model variant (default: full). Downloaded
++                 to models/ from the pinned Google storage URL on first use.
++  --model        explicit .task file path (overrides --variant's model file).
++  --orientation  up|upMirrored|down|downMirrored|left|leftMirrored|
++                 right|rightMirrored — same names as tools/pose-extract.
++                 Overrides metadata-derived rotation and mirroredness.
++                 Cannot combine with --rotation / --mirrored.
++  --rotation     override the metadata-derived clockwise rotation, for
++                 files whose metadata lies.
++  --mirrored     declare the (post-rotation) pixels display-mirrored:
++                 frames are un-mirrored before detection so coordinates
++                 land in the canonical un-mirrored scene and BlazePose's
++                 anatomical left/right labels stay truthful.
+   --max-frames <n>  stop after n frames (smoke tests only).
+ """
+ 
+@@ -90,6 +95,19 @@ ROTATIONS = {
+     270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+ }
+ 
++# Same EXIF names as tools/pose-extract. Value is (clockwise degrees to
++# apply to stored pixels to stand them upright, then un-mirror).
++ORIENTATIONS = {
++    "up": (0, False),
++    "upMirrored": (0, True),
++    "down": (180, False),
++    "downMirrored": (180, True),
++    "right": (90, False),
++    "rightMirrored": (90, True),
++    "left": (270, False),
++    "leftMirrored": (270, True),
++}
++
+ 
+ def round4(value: float) -> float:
+     return round(value * 10_000) / 10_000
+@@ -131,11 +149,15 @@ def main() -> None:
+     parser.add_argument("output", help="output SignalRecording JSON path")
+     parser.add_argument("--variant", choices=sorted(MODEL_URLS), default="full")
+     parser.add_argument("--model", help="explicit .task model path")
++    parser.add_argument("--orientation", choices=sorted(ORIENTATIONS))
+     parser.add_argument("--rotation", type=int, choices=[0, 90, 180, 270])
+     parser.add_argument("--mirrored", action="store_true")
+     parser.add_argument("--max-frames", type=int)
+     args = parser.parse_args()
+ 
++    if args.orientation is not None and (args.rotation is not None or args.mirrored):
++        sys.exit("error: --orientation cannot be combined with --rotation or --mirrored")
++
+     model_path = resolve_model(args.variant, args.model)
+ 
+     capture = cv2.VideoCapture(args.input)
+@@ -147,16 +169,29 @@ def main() -> None:
+     # overridable, never assumed.
+     capture.set(cv2.CAP_PROP_ORIENTATION_AUTO, 0)
+     meta_rotation = int(capture.get(cv2.CAP_PROP_ORIENTATION_META)) % 360
+-    rotation = meta_rotation if args.rotation is None else args.rotation
++    if args.orientation is not None:
++        rotation, mirrored = ORIENTATIONS[args.orientation]
++        rotation_overridden = True
++    else:
++        rotation = meta_rotation if args.rotation is None else args.rotation
++        mirrored = args.mirrored
++        rotation_overridden = args.rotation is not None
+     if rotation not in (0, *ROTATIONS):
+         sys.exit(f"error: unsupported rotation {rotation}° (expected 0/90/180/270)")
+     fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
++    orientation_note = (
++        f"orientation {args.orientation} (override)"
++        if args.orientation is not None
++        else (
++            f"rotation {rotation}°{' (override)' if rotation_overridden else ''}"
++            f"{', mirrored' if mirrored else ''}"
++        )
++    )
+     print(
+         f"video: {Path(args.input).name} — {width}x{height} @ {fps:.1f}fps, "
+-        f"rotation {rotation}°{' (override)' if args.rotation is not None else ''}"
+-        f"{', mirrored' if args.mirrored else ''} — model {model_path.name}",
++        f"{orientation_note} — model {model_path.name}",
+         file=sys.stderr,
+     )
+ 
+@@ -188,7 +223,7 @@ def main() -> None:
+ 
+             if rotation != 0:
+                 frame = cv2.rotate(frame, ROTATIONS[rotation])
+-            if args.mirrored:
++            if mirrored:
+                 frame = cv2.flip(frame, 1)
+ 
+             # detect_for_video needs strictly increasing integer ms.
