@@ -1910,3 +1910,55 @@ workflow definition, **not the live run**. It stays the founder's call.
    saves you. The diff had been pushed, so nothing was lost — that was the redundancy
    working, and Time Machine is the redundancy that is absent.
 7. **Twenty-three days of unanswered skip-hero ship date.**
+
+## 2026-09-15 — the missing record (written retroactively 2026-09-16 11:00)
+
+No record existed for 09-15 until now. The day produced no plan, no dispatch and no
+artefact, and the factory's own machinery is why.
+
+- **Zero commits in all three rigs.** `app-factory` `75c4f50` (09-14 18:02),
+  `running-with-pace` `origin/main` `913a257`, `skip-hero` `5685bc0` (09-10).
+  Zero engine runs moved.
+- **`factory-daily-standup` failed 08:18** — `FailoverError: CLI produced no output
+  for 600s and was terminated`. No proposal was posted, so the founder had nothing to
+  steer and the day had no plan.
+- **`factory-standup-cutoff` timed out 11:26**, retried, and at 11:37 correctly posted
+  "nothing to proceed with".
+- **The 18:00 EOD sync reported `ok` at 18:12 and wrote nothing** — no 09-15 block, no
+  commit. A successful-looking run with no artefact is the worst of the three failures:
+  it is the one that raises no alarm.
+- **The skip-hero marketing-calendar gate was due and went unasked** — overdue, not
+  declined.
+
+## 2026-09-16 — standup cutoff (11:00, no founder reply)
+
+Standup posted 08:22. No founder reply by 11:00 — the channel holds only bot messages
+since (two `factory-standup-cutoff` timeout warnings, 09:26 and 09:53, before this run
+landed). The posted proposal's own silence clause was explicit: **write the record,
+push nothing, dispatch nothing.** That is what happened.
+
+- **Done:** the 09-15 block above; this block.
+- **Re-verified, holds:** `factory/feature-android-pose-parity-spike` still resolves to
+  `893ab34` in `skip-hero` and `--contains` returns the branch. The ref that went
+  missing on 09-14 has stayed restored.
+- **Not done, deliberately, all three awaiting one word each:**
+  1. *Skip-hero week-one marketing calendar* — `docs/marketing/apps/skip-hero-week-one-calendar.md`
+     (`59fd17f`), built on a provisional 2026-09-28 launch. Ship date now **day 25**.
+  2. *Push `pr83-rebase` (`71ee06d`) and #88's parked rebase (`4cd874b`)* — both clean
+     and green, both still unpushed. #88's rebase is **day 10** parked.
+  3. *Cutoff self-watch* — touches the founder's scheduler surface, so silence is no.
+     Not edited.
+- **No dispatch.** The engine stays idle; the conflict backlog is unchanged.
+
+### Verified state at this cutoff
+
+- **Rebase-train gate** — `self-build-rebase-train-workflow`, `awaiting-approval`
+  (plan gate) since 2026-09-13T10:07Z, **3d 0h open**, $4.70 spent. This is the run
+  that would clear the CONFLICTING Pace PRs.
+- **Pace `main` dirty** — day 7, untouched, still blocking local `main` from catching up.
+- **Pace PRs** — #97, #96 mergeable and green, awaiting founder review; #88, #83, #80,
+  #78 CONFLICTING; #86, #81 drafts. #78's salvage remains clean and green at `37efb30`.
+- **Carried, unchanged:** Time Machine has no destination (3.5GB single-copy) — still
+  the only item here whose downside is permanent. `slack-leak-watchdog` delivery still
+  dead. `factory-weekly-self-review` still `enabled = 0`. `feature-msdpir37` still
+  failed at implement 2/11 since 2026-08-03, $31.70 sunk.
