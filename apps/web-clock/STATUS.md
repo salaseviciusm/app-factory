@@ -5,9 +5,12 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-09-14 18:00 (EOD sync). Unchanged and still accurate — the last
-  commit touching `apps/web-clock/` is `9635707` (2026-09-12, a reconcile of harness edits
-  and stranded STATE commits, not product work). Still no device, no accuracy figure.
+- **Last verified:** 2026-09-20 18:00 (EOD sync). Unchanged and still accurate — the last
+  commit touching `apps/web-clock/` is `75c4f50` (2026-09-14, an EOD sync writing STATUS
+  files, not product work). Still no device, no accuracy figure, no TestFlight build. Every
+  blocker below is unchanged and each is a founder dependency (hardware, an Apple Developer
+  account, four ASO calls).
+- **Prior verification:** 2026-09-14 18:00 (EOD sync), same conclusion.
 - **Codename:** `web-clock` · working name **Suit Up** · bundle `com.salaseviciusm.suitup`
 
 ## In-flight

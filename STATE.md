@@ -6,12 +6,19 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-09-13 18:00 (EOD sync — six corrections. The founder merged #99
-> and #98 after the 11:00 cutoff, so the Pace census is 8 open, not 9; #97 went
-> CONFLICTING as a result and the "three mergeable PRs" item is down to #96 alone;
-> the skip-hero marketing calendar recorded as "drafting today" was never drafted and
-> its gate is due 2026-09-14. Read the newest dated block at the END of this file for
-> the live picture; everything above the 2026-09-10 blocks is historical.)
+> Last updated: 2026-09-20 18:00 (EOD sync — eight corrections. The skip-hero pose-parity
+> ref `893ab34` went missing for the second time in six days and was restored again (the
+> same-named ref on `origin` is an unrelated 08-11 branch, not a backup). The founder merged
+> #96 after today's cutoff, so `origin/main` is `a2ab343` and the census is 8 open with #101
+> new; #81 was never a draft. `feature-msdpir37` has been carried as unresolved for 48 days
+> but actually shipped via its retry run. The 2.1GB "orphan worktree" is clean and fully
+> pushed — disk bloat, not data loss. D-3 has NOT passed; it is Friday 2026-09-25.
+> Read the newest dated block at the END of this file for the live picture; everything
+> above the 2026-09-10 blocks is historical.)
+>
+> Prior: 2026-09-13 18:00 (EOD sync — six corrections; the founder merged #99 and #98 after
+> the 11:00 cutoff and the skip-hero marketing calendar recorded as "drafting" was never
+> drafted.)
 >
 > Prior: 2026-09-12 18:00 (EOD sync — six stale records corrected; the biggest is
 > that the Pace PR census has been a filtered engine feed, not a census.)
@@ -2004,3 +2011,164 @@ input by default, which is the opposite of how this is meant to work.**
   — still the only carried item whose downside is permanent.
 
 **No dispatch.** The engine stays idle.
+
+## 2026-09-20 18:00 — EOD sync (git-, GitHub-, engine-, cron- and disk-verified)
+
+The 11:00 cutoff block above was written at 11:05 today. Seven hours later three of its
+statements are already wrong, one carried item turns out to have been wrong for weeks, and
+a branch ref has gone missing for the second time in six days. Corrections below; each one
+was checked, not assumed.
+
+### Correction 1 — the skip-hero pose-parity ref is missing AGAIN, and I restored it again
+
+`factory/feature-android-pose-parity-spike` did not resolve in `~/src/skip-hero` at this
+sync. The 09-16 block recorded it as "re-verified, holds" — it did not hold. The commit
+`893ab34` still existed as a dangling object; I recreated the branch from it and
+`git branch --contains 893ab34` now returns it.
+
+**The trap worth recording:** `origin/factory/feature-android-pose-parity-spike` *does*
+exist, so a casual `git branch -a | grep pose` looks reassuring. That remote ref is
+`bede20f` (2026-08-11) — an unrelated older branch that happens to share the name. It is
+**2071 deletions away** from the spike. The remote is not a backup of this work.
+
+**Nothing was lost.** The independent backup held:
+`apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` (90KB) is committed in `84b1ded`
+and is an ancestor of `origin/main`. That is twice now that the diff-to-app-factory habit
+has been the thing that saved this spike. *(Filename nit: the sidecar is
+`...-stat.txt`, not `....stat.txt` as skip-hero/STATUS.md states. Fixed there.)*
+
+**This ref has now vanished twice without an explanation.** I do not know the cause. A
+third disappearance should stop being treated as an accident.
+
+### Correction 2 — the factory was idle today; the founder was not
+
+The cutoff block ends "**No dispatch.** The engine stays idle." True of the engine, and it
+reads as though the day was dark. It was not — after the cutoff the founder shipped:
+
+- **#96 merged at 13:03Z** ("Show optional photo pins on social and journal routes").
+  `origin/main` is now `a2ab343`, not `913a257` as every record since 09-14 has said.
+- Three branches advanced today: `c36cada` (#97), `3c996cf` (#101), `87f9a84`
+  (referrals/entitlements review).
+- Two `*-2026-09-20` backup branches cut before rebases.
+
+"The engine stays idle" and "nothing is happening" are not the same sentence, and this
+file has been eliding them. Recording the difference explicitly.
+
+### Correction 3 — the PR census moved again, and "#81 is a draft" was never true
+
+Verified against `gh pr list` at 18:00. Eight open, but not the eight recorded:
+
+| PR | State | Change since the record |
+| --- | --- | --- |
+| #101 | draft / MERGEABLE, 3 green checks | **New today.** Not in any prior record. |
+| #97 | MERGEABLE, 3 green checks | Head moved to `c36cada` (was `49cc8ff`). |
+| #96 | **MERGED 13:03Z** | Was "mergeable and green, awaiting founder review". |
+| #88 | CONFLICTING | unchanged |
+| #86 | **draft AND CONFLICTING** | recorded only as "draft" |
+| #83 | CONFLICTING | unchanged |
+| #81 | CONFLICTING, **not a draft** | recorded as a draft since 09-14. Wrong then too. |
+| #80 | CONFLICTING | unchanged |
+| #78 | CONFLICTING | unchanged |
+
+Local Pace `main` is **behind 14**, not 13.
+
+### Correction 4 — `feature-msdpir37` shipped. It has been carried as unresolved for 48 days.
+
+Every block since 2026-08-03 has carried: *"`feature-msdpir37` failed at implement 2/11,
+$31.70 sunk, still neither resolved nor killed."* The failed engine record is real. The
+conclusion drawn from it is not.
+
+`feature-retry-failed-run-feature` completed **11/11** for $8.56, and its commit `733212a`
+is an ancestor of `skip-hero` `main` — carrying `d166920`, *"Show loaded OTA update in a
+Settings footer badge."* **That is the feature msdpir37 was asked for. It is in main and
+has been for weeks.** The $31.70 is sunk; the outcome is not lost. What remains is a stale
+`failed` row in the engine that has been generating a false carry-forward line in every
+EOD sync since August. Kill the record; stop carrying the item.
+
+### Correction 5 — the "2.1GB orphan worktree holding single-copy work" is neither
+
+Carried since 2026-08-22 as a data-loss risk. Measured today: the 2.0GB worktree is
+`~/.codex/worktrees/0378/running-with-pace`, on branch `codex/saved-routes-v1` at
+`c36cada` — **clean tree, zero dirty entries, and fully present on `origin`.** It is #97's
+head. 1.6GB of it is `pace-react-native` build output and 166MB is `node_modules`.
+
+It is disk bloat, not exposure. Deleting it loses nothing. Filed under housekeeping, and
+removed from the single-copy risk list — where its presence has been inflating the
+apparent size of a real but much smaller problem. The actual single-copy inventory:
+
+| Where | Commit | Size of exposure |
+| --- | --- | --- |
+| Pace `main` working tree | uncommitted, 27 entries | day 11 — 128 added lines exist nowhere else |
+| `.worktrees/pr83-rebase` | `71ee06d` | unpushed, clean, green |
+| `.worktrees/pr78-rebase` (`pr78-salvage`) | `37efb30` | unpushed, clean, green |
+| `.worktrees/pr88-rebase` | `4cd874b` | unpushed, ahead 15 — day 11 parked |
+| `codex/referrals-entitlements-review` | `87f9a84` | **new today**, unpushed |
+| skip-hero pose-parity | `893ab34` | ref restored today; diff backup pushed |
+
+`pr80-rebase` (`83feb88`) is **not** at risk — it is on `origin/cursor/goal-badge-gallery-7c74`.
+Prior records implied all four rebase worktrees were equally exposed. Three are.
+
+### Correction 6 — D-3 has not passed
+
+The 11:00 block says the marketing calendar's "D-3 beat has already passed." It has not.
+The calendar puts **D-3 on Friday 2026-09-25** against the provisional 2026-09-28 launch —
+**five days out and still reachable.** This matters because D-3 is the only founder-only,
+hard-gated beat in the week: IG + YouTube accounts registered (~20 min, cannot be
+delegated) and the store listing Ready for Sale ≥24h before D0. Miss it and, in the
+calendar's own words, "D0 does not happen."
+
+### Correction 7 — `error (7x)` on the cutoff cron does not mean the cutoff did nothing
+
+`openclaw cron list` shows `factory-standup-cutoff` as `error (7x)`, last run 7h ago. That
+run nonetheless did its work and committed `7ceb6fe` at 11:05. The error is the
+timeout/delivery, not the job. A future sync reading only the cron status would wrongly
+record today as a second silent day. The inverse of the 09-15 failure mode — there, a run
+reported `ok` and produced nothing.
+
+### Correction 8 — the STATE.md header was four blocks stale
+
+Read "Last updated: 2026-09-13 18:00" while carrying 09-14, 09-15, 09-16 and 09-20 blocks.
+Updated.
+
+### Verified correct, no change
+
+- **Time Machine** — `tmutil destinationinfo`: *"No destinations configured."* Unchanged
+  since first recorded. Still the only carried item whose downside is permanent, and today
+  is the second time in six days that a branch ref evaporated under it.
+- **Rebase-train gate** — `self-build-rebase-train-workflow`, `awaiting-approval`,
+  **7d 6h open**, $4.70.
+- **Pace working tree** — dirty since 2026-09-09 21:29, **day 11**, 13 modified + 14
+  untracked. Untouched, deliberately.
+- **skip-hero** — `main` `5685bc0`, **tenth quiet day**. `.agents/` and `.codex/`
+  untracked, day 13. No open PRs.
+- **`slack-leak-watchdog`** — runs `ok` every 10m; delivery `last -> no route`. Dead where
+  it counts, unchanged.
+- **`factory-weekly-self-review`** — `disabled`, last run 14d ago.
+- **pullup** — dormant **45 days** under D27. No pullup run has ever existed in the engine.
+- **web-clock** — unchanged; no commit has touched it since `75c4f50` (09-14).
+
+### Fixed by this sync
+
+- Restored `factory/feature-android-pose-parity-spike` → `893ab34` in skip-hero.
+- All four `apps/*/STATUS.md` re-verified and corrected (all four were last verified
+  2026-09-14 — six days stale, and three of them wrong).
+- STATE.md header un-staled.
+
+### For the founder tomorrow
+
+1. **The standup cron has been dead five days and it is a harness bug, not a factory one.**
+   The three `isolated`-target jobs fail; the one `main`-target job (this sync) does not.
+   That is a specific, testable hypothesis and it is the first thing to fix. Until it is,
+   the default state of this factory is steering itself with no founder input.
+2. **D-3 is Friday and it is yours alone.** ~20 minutes: register @skiphero on IG and
+   YouTube, and get the store listing to Ready for Sale. Everything else in week one is
+   mine. If 2026-09-28 is not a real date, say so now and the calendar slides intact —
+   but the accounts are worth registering either way.
+3. **Ship date: day 29 unanswered.**
+4. **One word still unblocks two finished rebases** (`71ee06d`, `4cd874b` — day 11 parked)
+   and the 7-day rebase-train gate. I will not push to your remote unattended.
+5. **`feature-msdpir37` is done** — shipped via the retry run, in `main`. I am dropping it
+   from the carry list after 48 days of carrying it wrongly.
+6. **Your dirty Pace tree is day 11.** 128 single-copy lines, now also blocking local
+   `main` from catching up 14 commits. Still not touching it.
+7. **Time Machine still has no destination**, and a branch ref vanished again today.
