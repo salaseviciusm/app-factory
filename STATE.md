@@ -1962,3 +1962,45 @@ push nothing, dispatch nothing.** That is what happened.
   the only item here whose downside is permanent. `slack-leak-watchdog` delivery still
   dead. `factory-weekly-self-review` still `enabled = 0`. `feature-msdpir37` still
   failed at implement 2/11 since 2026-08-03, $31.70 sunk.
+
+## 2026-09-20 — standup cutoff (11:00, nothing to proceed with)
+
+**There was no standup today, and there has not been one since Wednesday 16 September.**
+`factory-daily-standup` timed out at 07:19 this morning (`cron: job execution timed out,
+last phase: process-spawned`) and now reads `error (7x)` in `openclaw cron list`. The same
+job failed on 09-17 (four attempts), 09-18, and 09-19. `factory-standup-cutoff` failed on
+09-17 (four attempts), 09-18 and 09-19 as well. The channel holds nothing but those
+warnings — no founder message of any kind since the 09-16 cutoff post.
+
+So the cutoff's own contract applies in its degenerate form: **no proposal was posted, so
+nothing proceeds. Record written, nothing pushed, nothing dispatched.**
+
+### The pattern worth naming
+
+Of the four factory crons, the one that still works is the one that does not run isolated:
+
+- `factory-eod-sync` — target `main`, last run `ok` 17h ago.
+- `factory-daily-standup` — target `isolated`, `error (7x)`.
+- `factory-standup-cutoff` — target `isolated`, timing out since 09-17.
+- `slack-leak-watchdog` — target `isolated`, delivery `last -> no route`, still dead.
+
+Three isolated-target jobs are failing and the one main-target job is not. That is a
+harness question, not a factory-planning question, and it is the first thing to fix:
+**four days of standups is four days of the factory steering itself with no founder
+input by default, which is the opposite of how this is meant to work.**
+
+### Verified state at this cutoff
+
+- **`app-factory`** — `main` at `8bcae2e` (09-16), clean tree. Nothing has landed in four days.
+- **`running-with-pace`** — `main` has moved to `f32921d` ("Fix JSON request body types
+  across server and native clients"); the working tree is **dirty, 27 files** — day 11 now.
+- **`skip-hero`** — `main` at `5685bc0` ("Record the internal preview version for the
+  September retest"), 2 files dirty.
+- **Carried, unchanged and unanswered:** skip-hero week-one marketing calendar
+  (`59fd17f`) still awaiting a yes/no, built on a provisional 2026-09-28 launch — that
+  date is now **8 days out** and the calendar's D-3 beat has already passed. The
+  rebase-train plan gate is 7 days open. `pr83-rebase` (`71ee06d`) and #88's rebase
+  (`4cd874b`) still unpushed. Time Machine still has no destination (3.5GB single-copy)
+  — still the only carried item whose downside is permanent.
+
+**No dispatch.** The engine stays idle.
