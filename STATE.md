@@ -2172,3 +2172,22 @@ Updated.
 6. **Your dirty Pace tree is day 11.** 128 single-copy lines, now also blocking local
    `main` from catching up 14 commits. Still not touching it.
 7. **Time Machine still has no destination**, and a branch ref vanished again today.
+
+## 2026-09-22 11:00 — standup cutoff (no standup to cut off)
+
+- **No standup today.** `factory-daily-standup` failed again at **08:16** (timeout,
+  `last phase: process-spawned`) and posted only the failure warning to
+  `#factory-standup`. Error count on that job is now **9x**. Nothing was proposed, so
+  nothing proceeds and nothing was dispatched.
+- **Last real standup: Wednesday 2026-09-16.** Four working days dark (09-17, 09-18,
+  09-19, 09-22; 09-21 produced no cron output in-channel at all).
+- **The "isolated target" hypothesis from the 09-20 sync is wrong.** This cutoff run is
+  itself an `isolated`-target job and it completed. `factory-daily-standup` is the only
+  job now failing; `factory-eod-sync` (main) ran `ok` 17h ago, `slack-leak-watchdog`
+  (isolated) runs `ok`. The failure is specific to the 08:00 standup job — most likely
+  its own workload exceeding the spawn/execution timeout, not the target mode.
+- **No code movement to report:** `app-factory` `422b230` (09-20),
+  `running-with-pace` `f32921d` (09-09), `skip-hero` `5685bc0` (09-10).
+- **Note:** yesterday's 18:00 EOD sync reported `ok` but left no commit — the 09-21
+  record is missing from this file. Flagged for the next sync.
+- **Not dispatched:** no approved proposal exists for today.
