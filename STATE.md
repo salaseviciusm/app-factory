@@ -2191,3 +2191,24 @@ Updated.
 - **Note:** yesterday's 18:00 EOD sync reported `ok` but left no commit — the 09-21
   record is missing from this file. Flagged for the next sync.
 - **Not dispatched:** no approved proposal exists for today.
+
+## 2026-09-23 11:00 — standup cutoff (no standup to cut off)
+
+- **No standup today, and no founder reply.** `factory-daily-standup` failed again at
+  **08:30** (timeout, `last phase: process-spawned`), posting only the failure warning to
+  `#factory-standup`. Error count on that job is now **10x**. The 11:00 cutoff's own first
+  attempt also timed out at **11:22**; this is the retry. Nothing was proposed, so nothing
+  proceeds and nothing was dispatched.
+- **Last real standup: Wednesday 2026-09-16.** Five working days dark (09-17, 09-18,
+  09-21, 09-22, 09-23), six calendar days.
+- **The standup job is now the single longest-running unfixed fault in the factory** and it
+  is a harness fault, not a factory one. The cutoff job (same `isolated` target, same
+  channel) completes; `factory-eod-sync` ran `ok` 18h ago. Only the 08:00 job fails, which
+  points at its own workload exceeding the spawn/execution timeout. Untested fix: cut the
+  standup's evidence-gathering scope, or raise that job's timeout.
+- **No code movement to report:** `app-factory` `8a16c68` (09-22),
+  `running-with-pace` `f32921d` (09-09, day 14), `skip-hero` `5685bc0` (09-10, day 13).
+- **D-3 is Friday 2026-09-25 — in two days.** The founder-only items (register @skiphero on
+  IG and YouTube, store listing to Ready for Sale) are still unstarted and still cannot be
+  done by me.
+- **Not dispatched:** no approved proposal exists for today.
