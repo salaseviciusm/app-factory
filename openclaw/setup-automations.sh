@@ -15,6 +15,11 @@
 #   not left to agent discretion. Workspace/skills still load (same agent).
 # - Agent jobs default to a 30s timeout — far too short for a standup turn —
 #   so every job sets --timeout-seconds explicitly.
+# - The two standup jobs were raised 900 -> 1800s on 2026-09-26: both had grown
+#   past the 15m ceiling (observed 16.9m and 17.6m) and were failing as timeouts,
+#   which cost the factory seven dark days (last real standup 2026-09-16). The
+#   healthy jobs are not a counter-example — they only wake a session and return
+#   in milliseconds; these two run the whole turn synchronously.
 set -euo pipefail
 
 # Channel ID comes from the environment, or falls back to openclaw/secrets.env.
@@ -34,7 +39,7 @@ openclaw cron add "0 8 * * *" \
   --announce \
   --channel slack \
   --to "channel:${STANDUP_CHANNEL}" \
-  --timeout-seconds 900
+  --timeout-seconds 1800
   < /dev/null
 
 # Standup cutoff sweep — 11:00 local. Reads the standup thread; if the founder
@@ -47,7 +52,7 @@ openclaw cron add "0 11 * * *" \
   --announce \
   --channel slack \
   --to "channel:${STANDUP_CHANNEL}" \
-  --timeout-seconds 900
+  --timeout-seconds 1800
   < /dev/null
 
 # Evening state sync — 18:00. Housekeeping in the main session; nothing to post.

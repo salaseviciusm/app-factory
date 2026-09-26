@@ -8,11 +8,11 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-09-20 18:00 (EOD sync). Still correct, still dormant: the last
-  commit to touch `apps/pullup/` is `75c4f50` (2026-09-14) — an EOD sync editing this file,
-  not product work. No pullup run exists in the engine (re-confirmed against
-  `factory-run status`; none has ever existed). D27 was not mentioned again.
-  **Dormant 45 days.**
+- **Last verified:** 2026-09-26 18:00 (EOD sync). Still correct, still dormant: the last
+  commit to touch `apps/pullup/` is `422b230` (2026-09-20) — an EOD sync editing this file,
+  not product work. No pullup run exists in the engine (none has ever existed). D27 was not
+  mentioned again. **Dormant 51 days.**
+- **Prior verification:** 2026-09-20 18:00 (EOD sync). Same conclusion, dormant 45 days.
 - **Prior verification:** 2026-09-14 18:00 (EOD sync). Same conclusion, dormant 39 days.
 - **Prior verification:** 2026-09-10 18:00 (EOD sync). Still correct, still dormant. Zero
   pullup runs in the engine (re-confirmed against `factory-run list`), and the last commit

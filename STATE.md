@@ -6,7 +6,17 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-09-20 18:00 (EOD sync — eight corrections. The skip-hero pose-parity
+> Last updated: 2026-09-26 18:00 (EOD sync — fourteen corrections, and the standup fault
+> fixed rather than re-described. Both standup crons were overrunning a 900s cap (16.9m and
+> 17.6m observed); raised to 1800s live and in `openclaw/setup-automations.sh`, which would
+> otherwise have reverted it. `factory-standup-cutoff` is now failing too (7x), which voids
+> the 09-22/09-23 reasoning that only the 08:00 job fails. The skip-hero pose-parity ref
+> `893ab34` went missing a THIRD time and was restored again. skip-hero's D-3 lapsed on
+> Friday 2026-09-25 with nothing done and the provisional launch is Monday 2026-09-28. Pace
+> is 9 open PRs with #102 new, and its dirty tree is day 17 with ~128 single-copy lines.
+> Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-09-20 18:00 (EOD sync — eight corrections. The skip-hero pose-parity
 > ref `893ab34` went missing for the second time in six days and was restored again (the
 > same-named ref on `origin` is an unrelated 08-11 branch, not a backup). The founder merged
 > #96 after today's cutoff, so `origin/main` is `a2ab343` and the census is 8 open with #101
@@ -2212,3 +2222,99 @@ Updated.
   IG and YouTube, store listing to Ready for Sale) are still unstarted and still cannot be
   done by me.
 - **Not dispatched:** no approved proposal exists for today.
+
+## 2026-09-26 18:00 — EOD sync (git-, GitHub-, cron- and disk-verified)
+
+First sync since 09-20; the 09-24 and 09-25 records are missing from this file (as are
+09-17, 09-18, 09-19 and 09-21). **Fourteen corrections, and one fault actually fixed.**
+
+### The standup fault — diagnosed and FIXED today
+
+- **`factory-daily-standup` is at 13 consecutive errors** (was 10x on 09-23): it failed
+  again on 09-24, 09-25 and today. **Last real standup remains Wednesday 2026-09-16 —
+  seven working days dark, ten calendar days.**
+- **CORRECTION — `factory-standup-cutoff` is now failing too, at 7 consecutive errors.**
+  The 09-22 and 09-23 blocks both reasoned from "the cutoff job (same isolated target,
+  same channel) completes, so only the 08:00 job fails." That is no longer true, and the
+  inference built on it is void.
+- **Root cause confirmed, with numbers.** Both failing jobs set `timeoutSeconds: 900` and
+  both now overrun it: the standup's last run took **1013988ms (16.9m)** and the cutoff's
+  **1055159ms (17.6m)**, each ending `cron: job execution timed out (last phase:
+  process-spawned)`. The 09-23 guess ("its own workload exceeding the spawn/execution
+  timeout") was right; it was simply never acted on.
+- **The two healthy jobs are not a counter-example.** `factory-eod-sync` (main) and
+  `slack-leak-watchdog` (isolated) set **no** timeout and return in **20ms and 48ms** —
+  they only wake a session and hand off. This very sync is that hand-off. The two standup
+  jobs run the whole agent turn synchronously, so only they can hit a wall clock.
+- **FIXED:** both jobs raised **900 → 1800s** live (`openclaw cron edit --timeout-seconds`),
+  schedule, isolated target and Slack delivery all preserved and re-verified. The
+  declaration source `openclaw/setup-automations.sh` hardcoded 900 at two sites and would
+  have reverted the fix on any re-run — **patched to 1800 there too**, with the rationale
+  recorded in its header comment. Unproven until 08:00 tomorrow: headroom is now ~12
+  minutes over the worst observed run, but the underlying turn is still slow and growing.
+  If it times out again the fix is to cut the standup's evidence-gathering scope, not to
+  raise the ceiling a second time.
+
+### skip-hero — the pose-parity ref was lost a THIRD time
+
+- **`factory/feature-android-pose-parity-spike` was missing again** (lost 09-14, restored
+  09-20, gone again by today) and has been **restored again to `893ab34`**; `git branch
+  --contains` now confirms it reachable. The commit had once more survived only as a
+  dangling object. Three losses in twelve days is a pattern, not bad luck.
+- The diff backup `apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` (+ `-stat.txt`)
+  is intact on disk and pushed in `84b1ded`. It remains the only durable copy.
+  `origin/factory/feature-android-pose-parity-spike` is still `bede20f` — the unrelated
+  08-11 branch, **not** a backup.
+- **Founder decision needed:** this local-only ref cannot survive being re-orphaned
+  indefinitely. Push it under a distinct remote name (the same-name remote ref is already
+  taken by the 08-11 branch) or accept the committed diff as the archive of record.
+- **CORRECTION:** "tenth quiet day" → `main` is still `5685bc0` (2026-09-10), **16 quiet
+  days**. No commits, no open PRs. Untracked `.agents/` and `.codex/` remain.
+
+### skip-hero — the launch window has arrived unattended
+
+- **CORRECTION: D-3 (Friday 2026-09-25) HAS NOW PASSED, and nothing in it was done.**
+  The 09-20 sync correctly flagged that it had not yet passed; that reading is superseded.
+  The founder-only items — register @skiphero on IG and YouTube, store listing to Ready
+  for Sale — are **still unstarted and still cannot be delegated**.
+- **The provisional launch day 2026-09-28 is Monday — two days out**, against an
+  unbuilt asset list (§7 of the week-one calendar).
+- **Ship date: day 35 unanswered** (was day 29 on 09-20).
+- **Marketing-calendar gate: still OPEN**, unanswered since 09-14 (`59fd17f`).
+
+### running-with-pace
+
+- **CORRECTION — PR census is 9 open, not 8:** 7 non-draft + 2 draft. **#102 is new**
+  since the last sync ("Make voice coaching concise and regenerate English audio",
+  `eba38bd`, non-draft, MERGEABLE).
+- **CORRECTION — #97's head moved** `c36cada` → **`075ee8d`**. Still MERGEABLE, still
+  awaiting founder review.
+- **CORRECTION — no founder merges in six days.** `origin/main` is still **`a2ab343`**
+  (09-20). The 09-20 entry noted the founder active that day; he has not merged since.
+  #101 (draft, `3c996cf`), #86, #83, #81, #80, #78 all unchanged in state.
+- **The dirty working tree is day 17** (was day 11): local `main` still `f32921d`, still
+  **14 behind** origin, 13 modified + 14 untracked. The ~128 single-copy added lines that
+  appear nowhere in #88's rebase are still single-copy. **Still needs a founder decision,
+  not a default** — this has now been carried, unresolved, for over two weeks.
+- Rebase worktrees all intact and all still unpushed: `pr78-salvage` `37efb30`,
+  `pr80-rebase` `83feb88`, `pr83-rebase` `71ee06d`, `pr88-rebase` `4cd874b`.
+
+### Unchanged and correctly dormant
+
+- **pullup — dormant 51 days** under D27 (was 45). No run has ever existed. Last commit
+  touching `apps/pullup/` is `422b230`, an EOD sync editing STATUS, not product work.
+- **web-clock — unchanged.** Last commit touching `apps/web-clock/` is likewise `422b230`.
+  Still no device, no accuracy figure, no TestFlight build; every blocker is a founder
+  dependency.
+- Engine still idle: zero runs executing, zero gates open.
+
+### Needs founder attention tomorrow (ranked)
+
+1. **skip-hero launch is Monday and D-3 lapsed yesterday.** Either move the date or do the
+   two 20-minute registrations — this is the only hard gate nobody else can clear.
+2. **Ship date (day 35) and the marketing-calendar gate (day 12).** Everything else in the
+   calendar hangs off the first.
+3. **Pace's day-17 dirty tree** — 128 single-copy lines, one bad `git checkout` from gone.
+4. **Where the pose-parity spike should live**, so it stops needing rescue every few days.
+5. FYI only: the standup should post at 08:00 tomorrow for the first time since 09-16. If
+   it does not, the next step is cutting its scope, not raising the timeout again.
