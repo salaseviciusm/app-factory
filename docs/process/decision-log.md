@@ -664,3 +664,36 @@ in the PR diff for review.
 founder-gated check, so a fixture-adding run will still park until `rigs.json` is
 pointed at `golden:bootstrap`. That one-line change is the consequential half and
 is the founder's call. Local half delivered as skip-hero PR #4.
+
+## D34 — cleanup's `forceBranch` needs an ancestry check; a branch name is not a branch (2026-09-27)
+
+**Context:** the skip-hero pose-parity spike commit `893ab34` vanished four times in
+thirteen days (2026-09-14 onward), and three separate syncs wrote it off as bad luck or
+blamed the coding agent. It was neither. `classifyCleanup()`
+(`orchestration/bin/factory-run`, ~line 2903) hits the `branchExists && !merged &&
+prMerged` case for run `feature-android-pose-parity-spike` — `done`, PR #3 merged in
+August — returns `forceBranch: true`, and runs `git branch -D
+factory/feature-android-pose-parity-spike`. On 2026-09-14 the unrelated spike commit was
+parked on that same branch name. Cleanup was correctly reclaiming a merged August branch
+and destroying 29 days of single-copy work each time it ran. Every recovery worked only
+because the object stayed dangling.
+**Decision:** treat this as diagnosed and closed — stop re-diagnosing it. Two responses,
+already taken. (1) *Durable and additive:* the commit now also lives at
+`spike/android-pose-parity`, outside the `factory/*` namespace the engine owns, so no
+cleanup pass can reach it; the `factory/*` copy will be deleted again and that is now
+harmless, and the committed diff backup
+`apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` is intact. (2) *The engine fix:*
+`forceBranch` must be refused when the branch tip is not an ancestor of the merged PR's
+head, skipping with "branch tip diverged from merged PR" instead of deleting. Sent to a
+focused `factory-self-review` run (`self-focused-self-review-factory`) on 2026-09-27
+rather than hand-edited, because it touches the destructive path and wants a regression
+test.
+**Why:** cleanup's authority to delete comes from "this work is merged and therefore
+recoverable." A run branch's *name* does not establish that; only its *tip's ancestry*
+does. `893ab34` is not PR #3's head and is not an ancestor of `main`, so the premise that
+licensed `-D` was false and the guard that would have caught it never existed. The rest of
+`classifyCleanup()` is already conservative; this is one missing precondition, not a
+redesign.
+**Anti-instruction:** do not "simplify" the ancestry check away on the grounds that a
+`factory/*` branch is engine-owned and therefore safe to force-delete. That assumption is
+exactly what cost four destructions — the namespace is owned, but the tip is not.

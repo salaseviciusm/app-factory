@@ -6,7 +6,17 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-09-26 18:00 (EOD sync — fourteen corrections, and the standup fault
+> Last updated: 2026-09-27 11:00 (standup cutoff — no founder reply, so the posted proposal
+> proceeded. Rebase-train gate approved after 14 days (approve alone did nothing; the parked
+> executor had died and needed `factory-run resume`), spawning child run
+> `feature-improvement-plan-rebase`. The cleanup force-delete guard went to
+> `self-focused-self-review-factory`. D34 records the root cause: `classifyCleanup()`
+> force-deletes on `prMerged` without checking the tip's ancestry, which destroyed the
+> skip-hero pose-parity commit four times. Both standup crons are now healthy. skip-hero
+> launches TOMORROW with nothing done and only the founder can move the date.
+> Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-09-26 18:00 (EOD sync — fourteen corrections, and the standup fault
 > fixed rather than re-described. Both standup crons were overrunning a 900s cap (16.9m and
 > 17.6m observed); raised to 1800s live and in `openclaw/setup-automations.sh`, which would
 > otherwise have reverted it. `factory-standup-cutoff` is now failing too (7x), which voids
@@ -2384,3 +2394,54 @@ Asked of the founder (posted to #factory-standup, defaults stated):
 2. skip-hero launch is tomorrow with nothing done — default **slide the date, register the
    two accounts today**.
 3. Send the cleanup force-delete guard to `factory-self-review` — default **yes**.
+
+## 2026-09-27 11:00 — cutoff (no founder reply; posted proposal proceeds)
+
+**`factory-standup-cutoff` ran and cleared its 7-error streak.** Both standup crons are
+healthy for the first time since 2026-09-16; the 900 → 1800s raise is confirmed as the fix
+for both jobs, not just the 08:00 one.
+
+**No founder reply in #factory-standup** between the 08:00 post and the 11:00 cutoff. The
+three stated defaults took effect.
+
+### Acted on defaults
+
+1. **Rebase-train gate APPROVED** — `self-build-rebase-train-workflow`, parked 14 days,
+   $4.70 sunk. Note for future cutoffs: `factory-run approve` only *records* the approval;
+   the run's executor process had died during the 14-day park, so the state did not move
+   until `factory-run resume self-build-rebase-train-workflow`. After the resume the gate
+   cleared and the run went `done` (step 2/2), spawning child run
+   **`feature-improvement-plan-rebase`** (app-factory, feature-dev, `running:plan`). It
+   will implement the rebase-train workflow, validate on Pace #88, and park at a PR.
+2. **Cleanup force-delete guard SENT TO SELF-REVIEW** — run
+   **`self-focused-self-review-factory`** (app-factory, self-review, `running:analyze`),
+   prompted with the full `classifyCleanup()` evidence and the ancestry-guard proposal, and
+   explicitly requiring a regression test since it touches the destructive path. It will
+   post a plan to #factory-builds and park at a plan-gate for the founder.
+3. **skip-hero date slide + @skiphero registrations — NOT actionable by default.** The
+   default was "slide the date to one you name, and register the accounts today"; both
+   halves are founder-only. The provisional launch is **tomorrow, Monday 2026-09-28**,
+   against an unbuilt asset list, and it will now arrive unmoved unless the founder names a
+   new date. This is the one default that could not be executed on his behalf.
+
+### Also done
+
+- **D34 recorded** in `docs/process/decision-log.md` — cleanup's `forceBranch` needs an
+  ancestry check; a branch name is not a branch. Includes the anti-instruction against
+  "simplifying" the guard away. The root cause is now written down and should not be
+  re-diagnosed as bad luck at a fifth sync.
+
+### Engine state after the cutoff
+
+Two runs in flight on the app-factory rig (both self-improvement; no app work dispatched,
+as proposed). Week's engine spend was $0 before this; it is now non-zero for the first time
+since 2026-09-13.
+
+### Still unanswered by the founder (carried)
+
+1. **skip-hero launch tomorrow**, D-3 lapsed 09-25, nothing done. Ship date **day 36**.
+2. **Marketing-calendar gate — day 13** open since `59fd17f` (09-14).
+3. **Pace's day-18 dirty tree** — ~128 single-copy added lines, still one bad
+   `git checkout` from gone. Carried unresolved for over two weeks.
+4. **Pace merges — day 7 with none.** 9 open PRs, 6 CONFLICTING; #97 and #102 are green
+   and MERGEABLE and only need his review.
