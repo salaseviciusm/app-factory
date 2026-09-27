@@ -5,7 +5,8 @@
 #   1. sync    — every `awaiting-merge` run against its GitHub PR, so runs the
 #                founder merged on github.com flip to done without being asked.
 #   2. cleanup — reclaim worktrees/branches of terminal runs (never forced: dirty
-#                or unmerged trees are skipped with a reason, `--discard` is
+#                or unmerged trees, and merged-PR branches whose tip diverged
+#                from the PR head, are skipped with a reason; `--discard` is
 #                founder-only and deliberately not used here).
 #   3. watchdog — the stale-run alert pass, which had no schedule of its own.
 #
