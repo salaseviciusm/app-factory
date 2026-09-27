@@ -120,14 +120,17 @@ export function parsePrCreateUrl(output) {
   return m ? { number: parseInt(m[1], 10), url: m[0] } : null;
 }
 
-/** argv for `gh <...>`: one PR's live merge status. */
+/** argv for `gh <...>`: one PR's live merge status, plus the head sha the
+ *  PR was merged from (headRefOid) — cleanup's ancestry guard (D34) proves a
+ *  local branch tip belongs to the merged PR before force-deleting it. */
 export function prStatusCommand(number) {
-  return ["pr", "view", String(number), "--json", "state,mergedAt,mergeCommit"];
+  return ["pr", "view", String(number), "--json", "state,mergedAt,mergeCommit,headRefOid"];
 }
 
-/** Parse `gh pr view --json state,mergedAt,mergeCommit` output into
- *  { state: "open"|"merged"|"closed", mergedAt, mergeCommit } (mergeCommit is
- *  the merge commit sha or null). Null on anything unrecognizable. */
+/** Parse `gh pr view --json state,mergedAt,mergeCommit,headRefOid` output
+ *  into { state: "open"|"merged"|"closed", mergedAt, mergeCommit, headRefOid }
+ *  (mergeCommit is the merge commit sha or null; headRefOid is the PR head
+ *  sha or null when absent/blank). Null on anything unrecognizable. */
 export function parsePrStatus(parsed) {
   if (!parsed || typeof parsed !== "object") return null;
   const states = { OPEN: "open", MERGED: "merged", CLOSED: "closed" };
@@ -140,6 +143,7 @@ export function parsePrStatus(parsed) {
       parsed.mergeCommit && typeof parsed.mergeCommit === "object" && typeof parsed.mergeCommit.oid === "string"
         ? parsed.mergeCommit.oid
         : null,
+    headRefOid: typeof parsed.headRefOid === "string" && parsed.headRefOid ? parsed.headRefOid : null,
   };
 }
 
