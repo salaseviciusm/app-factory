@@ -918,7 +918,18 @@ factory-run start --rig running-with-pace --workflow rebase-train --pr 88
 - **Out of scope (v2, D34 trigger):** an `onFail` loop for rebase-induced
   check failures, an `--all-conflicting` sweep, non-default base branches,
   fork PRs.
-- **First live run:** recorded below once executed.
+- **First live run:** `rebase-pr-88` on running-with-pace PR #88 ("Add
+  Apple Watch integration", CONFLICTING for 3 files, executed 2026-09-27 from
+  the implementation worktree's engine). Head `6191b658abd6` → `d9d9478ffd69`
+  on `main@a2ab343c0e16`; the resolver completed the stopped rebase in 73 s
+  (events.ts, app.config.js, RunDashboard.tsx), the engine verified it
+  (clean status, no markers, 1 commit before and after, merge-base = base
+  sha), pace's three checks and unit tests ran green on the rebased tree,
+  and the lease-pinned push landed. Outcome `done`; GitHub reported the PR
+  MERGEABLE after the push (the summary captured CONFLICTING because GitHub
+  had not yet recomputed at write time). Cost $1.27 (643.9k tokens in,
+  600.7k cached, 5.2k out, one agent step). The founder's
+  `.worktrees/pr88-rebase` (4 extra local commits) was untouched.
 
 ## 12. Non-goals (this document)
 
