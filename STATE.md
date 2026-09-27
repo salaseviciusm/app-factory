@@ -2318,3 +2318,69 @@ First sync since 09-20; the 09-24 and 09-25 records are missing from this file (
 4. **Where the pose-parity spike should live**, so it stops needing rescue every few days.
 5. FYI only: the standup should post at 08:00 tomorrow for the first time since 09-16. If
    it does not, the next step is cutting its scope, not raising the timeout again.
+
+## 2026-09-27 08:00 — standup (first since 2026-09-16; the timeout fix held)
+
+**The standup cron worked.** `factory-daily-standup` posted for the first time in eleven
+calendar days / ten working days. The 900 → 1800s raise applied at last night's EOD sync is
+the reason; the job had been at 13 consecutive errors. `factory-standup-cutoff` is still
+carrying 7 errors and has not yet re-run — its first test is 11:00 today.
+
+### ROOT CAUSE FOUND — the skip-hero pose-parity ref is deleted by our own engine
+
+The ref was **missing for the FOURTH time** this morning, under fourteen hours after being
+restored at the 09-26 sync. It is not bad luck and it is not Codex: **`factory-run`'s
+cleanup deletes it, by design.**
+
+- Engine run `feature-android-pose-parity-spike` (skip-hero) is `done` with
+  `pr {number: 3, state: "merged"}` (August). Its `runBranch` is
+  `factory/feature-android-pose-parity-spike`.
+- `classifyCleanup()` (orchestration/bin/factory-run:2903) hits the
+  `branchExists && !merged && prMerged` case → returns `forceBranch: true` → runs
+  `git branch -D factory/feature-android-pose-parity-spike`.
+- On 2026-09-14 the unrelated pose-parity spike commit `893ab34` was parked on that **same
+  branch name**. So every cleanup pass force-deletes 29 days of single-copy work while
+  correctly believing it is reclaiming a merged August branch.
+- The guard is missing: cleanup never checks that the branch tip is an ancestor of the
+  merged PR's head. `893ab34` is not `b5d96ddde6f4` and is not an ancestor of `main`.
+
+**Fixed durably today, additively:** the commit is now also at
+**`spike/android-pose-parity`** — a name outside the `factory/*` namespace the engine owns,
+so no cleanup pass can reach it. `factory/feature-android-pose-parity-spike` was restored
+again too (it will be deleted again; that is now harmless). The committed diff backup
+`apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` is intact.
+
+### Verified state
+
+- **Engine idle.** Zero runs executing. `report --days 7` is empty — **$0 engine spend this
+  week**, no runs since 2026-09-13. One pending gate:
+  `self-build-rebase-train-workflow` (plan-gate, **14d 0h** waiting, $4.70 sunk). No
+  pending merges, no held deploys.
+- **running-with-pace:** `origin/main` still `a2ab343` (09-20) — **day 7 with no founder
+  merge**. **9 open PRs**: 6 CONFLICTING (#78, #80, #81, #83, #86 draft, #88), 3 MERGEABLE
+  (#97, #101 draft, #102). Checks green on #78/#80/#88/#97/#101/#102; #81/#83/#86 have no
+  checks configured. Local `main` `f32921d`, still 14 behind. **Dirty tree is day 18** —
+  13 modified + 14 untracked, ~128 single-copy added lines. Still a founder decision.
+- **skip-hero:** `main` `5685bc0` (09-10) — **17 quiet days**, zero open PRs. Provisional
+  launch is **TOMORROW, Monday 2026-09-28**, against an unbuilt asset list; D-3 lapsed on
+  2026-09-25 with nothing done. Ship date **day 36** unanswered; marketing-calendar gate
+  **day 13** open since `59fd17f` (09-14).
+- **app-factory:** `origin/main` `24a4689` — yesterday's only commit factory-wide, the EOD
+  sync itself plus the cron timeout fix. Clean.
+- **pullup** dormant 52 days under D27. **web-clock** unchanged; every blocker is a founder
+  dependency.
+
+### Today
+
+No sub-agent dispatch. Nothing today needs a specialist, and the two items that matter are
+founder decisions, not tasks. My own work, both cheap:
+
+1. Record the cleanup force-delete root cause in the decision log so it stops being
+   re-diagnosed as bad luck every sync. (done as part of this standup's follow-through)
+2. Hold for the 11:00 cutoff; verify `factory-standup-cutoff` clears its 7-error streak.
+
+Asked of the founder (posted to #factory-standup, defaults stated):
+1. Approve the 14-day rebase-train gate — default **yes**.
+2. skip-hero launch is tomorrow with nothing done — default **slide the date, register the
+   two accounts today**.
+3. Send the cleanup force-delete guard to `factory-self-review` — default **yes**.
