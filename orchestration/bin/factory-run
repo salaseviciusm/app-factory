@@ -11,6 +11,11 @@
  *
  * Commands:
  *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]
+ *   factory-run start --rig <name> --workflow rebase-train --pr <n>
+ *                                        (rebase one open PR onto the rig default
+ *                                         branch, resolve conflicts with a bounded
+ *                                         agent, re-run checks/tests, force-push the
+ *                                         PR branch with a lease; never merges)
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
  *   factory-run resume <run_id> [--step <step-id>|--back]
  *                                        (restart a stopped/failed/cancelled run's
@@ -146,6 +151,26 @@ const {
   sleepProofSpawn,
   classifyAgentStepFailure,
 } = require(path.join(ORCH_DIR, "web", "lib", "agent-spawn.mjs"));
+// rebase-train pure core (PR target/outcome classifiers, the lease-pinned
+// PR push builder, fetch/worktree-add argv, the push-source scan predicate,
+// the summary composer) — same web-lib pattern; deep coverage lives in
+// rebase.test.mjs, the engine's contract in selftest.
+const {
+  validPrNumber,
+  prViewCommand,
+  parsePrView,
+  classifyRebaseTarget,
+  prFetchArgs,
+  prWorktreeAddArgs,
+  rebaseCommand,
+  classifyRebaseOutcome,
+  classifyResolveEnding,
+  pushPrBranchCommand,
+  pushLiteralAllowed,
+  classifyPushFailure,
+  classifyPushReadiness,
+  composeRebaseSummary,
+} = require(path.join(ORCH_DIR, "web", "lib", "rebase.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -549,6 +574,14 @@ function validateWorkflowAgentSteps(wfName, wf) {
         problems.push(`workflow ${wfName}: spawn step '${s.id}' rigFrom '${s.rigFrom}' must be a plain .json filename in the run dir`);
       }
     }
+    // rebase-train step types only make sense on a detached PR checkout: a
+    // factory/<id> run has no PR branch to rebase or lease-push.
+    if ((s.type === "rebase" || s.type === "push-pr" || s.skipWhen === "no-conflict") && wf.checkout !== "pr") {
+      problems.push(`workflow ${wfName}: step '${s.id}' (${s.type}${s.skipWhen ? `, skipWhen ${s.skipWhen}` : ""}) requires "checkout": "pr"`);
+    }
+  }
+  if (wf.checkout === "pr" && (wf.steps || []).some((s) => s.type === "deploy")) {
+    problems.push(`workflow ${wfName}: a "checkout": "pr" workflow never deploys or opens PRs — remove the deploy step`);
   }
   return problems;
 }
@@ -2413,6 +2446,374 @@ function setupFailureSummary(cmds, failedIndex) {
   );
 }
 
+// ---------- rebase-train (workflow "checkout": "pr") ----------
+//
+// A rebase-train run works on a DETACHED checkout of an existing PR's fetched
+// head, never on a factory/<id> branch: run.branch stays unset (every
+// pushRunBranch call site early-returns on its rev-parse guard), no local
+// branch is created, read, or deleted, and every ref the run reads is
+// origin/<ref> after an explicit fetch. The engine's one push outside
+// factory/<id> is the lease-pinned PR-branch push (pushPrBranchCommand in
+// web/lib/rebase.mjs), executed only after the rig gates are green and the
+// push invariants hold. It never merges, never pushes the base branch, and a
+// red gate is a semantic conflict for the founder to see on the PR (D34).
+
+/** True while a rebase is mid-flight in the worktree (either backend). */
+function rebaseInProgress(worktree) {
+  return ["rebase-merge", "rebase-apply"].some((d) => {
+    const p = git(worktree, ["rev-parse", "--git-path", d]);
+    return p.status === 0 && fs.existsSync(path.resolve(worktree, p.stdout.trim()));
+  });
+}
+
+/** Whether a checkout:"pr" run's `resolve` step runs (pure, exercised by
+ *  selftest). Skipped on a clean rebase, and — resume-aware — when the
+ *  conflict was already resolved (conflicted recorded true, no rebase in
+ *  progress): a resumed run must never hand a finished rebase back to the
+ *  agent. A null outcome means the rebase step never completed. */
+function classifyResolveSkip({ conflicted, rebaseInProgress: inProgress }) {
+  if (conflicted === false) return { run: false, reason: "rebase was clean" };
+  if (conflicted === true && !inProgress) return { run: false, reason: "rebase already completed" };
+  if (conflicted === true) return { run: true, reason: "rebase stopped on conflicts" };
+  return { run: false, fail: true, reason: "resolve reached without a rebase outcome (rebase step did not complete)" };
+}
+
+/** Which reclaim probes cleanupRun runs for a run (pure, exercised by
+ *  selftest). A checkout:"pr" run owns no branch: the PR-merge probe (gh) and
+ *  the local ancestor probe are skipped, and no `git branch -d/-D` can ever
+ *  run — the worktree is the only thing to reclaim. */
+function cleanupProbesFor(run) {
+  if (run && run.rebase) return { branch: false, prMerge: false, reason: "pr checkout: no run branch, worktree only" };
+  return { branch: true, prMerge: true, reason: "run branch owned" };
+}
+
+/** Write conflict.md into the run dir: the unmerged files, the PR framing,
+ *  the base-side commits since the branch point, and the conflict hunks —
+ *  the dynamic context the static conflict-resolver prompt references (same
+ *  pattern as findings.md). Written before the resolve agent starts. */
+function writeConflictContext(run, { fromSha, toSha, files, logFile }) {
+  const rb = run.rebase;
+  const commits = runCommand(`git log --format='%h %s' ${fromSha}..${toSha}`, run.worktree, logFile, 2).output.trim();
+  const hunksRaw = runCommand("git diff", run.worktree, logFile, 2).output;
+  const hunks = hunksRaw.length > 30000 ? `${hunksRaw.slice(0, 30000)}\n… (truncated)` : hunksRaw;
+  fs.writeFileSync(
+    path.join(runDirOf(run.id), "conflict.md"),
+    [
+      `# Rebase conflict: PR #${rb.pr} — ${rb.title || "(untitled)"}`,
+      "",
+      `${rb.url || ""}`,
+      "",
+      `Branch \`${rb.headRef}\` (head \`${String(rb.headShaBefore || "").slice(0, 12)}\`) is being rebased onto \`${rb.baseRef}\` (\`${String(toSha).slice(0, 12)}\`); the rebase stopped on conflicts.`,
+      "",
+      "## Conflicting files",
+      "",
+      files.length ? `\`\`\`\n${files.join("\n")}\n\`\`\`` : "(none reported)",
+      "",
+      `## Base-side commits since the branch point (\`${String(fromSha).slice(0, 12)}..${String(toSha).slice(0, 12)}\`)`,
+      "",
+      commits ? `\`\`\`\n${commits}\n\`\`\`` : "(none)",
+      "",
+      "## Conflict hunks (`git diff` at the first stop, truncated)",
+      "",
+      "```diff",
+      hunks.trimEnd(),
+      "```",
+      "",
+    ].join("\n")
+  );
+}
+
+/** Resolve the run's PR with gh in the rig checkout — before any worktree
+ *  exists — and record its facts on run.rebase. Returns {ok} or {ok:false,
+ *  reason}; a refusal (classifyRebaseTarget) or a gh failure ends the run
+ *  failed with the reason, and no worktree is ever created. Runs once: a
+ *  resume with headRef already recorded keeps the sha the lease is pinned to. */
+function resolvePrForRun(run, rig) {
+  const runDir = runDirOf(run.id);
+  const rb = run.rebase;
+  if (rb.headRef) return { ok: true, reason: `PR #${rb.pr} already resolved (${rb.headRef})` };
+  const view = ghRun(run, prViewCommand(rb.pr), 2, rig.path);
+  let parsed = null;
+  try {
+    parsed = JSON.parse(view.stdout);
+  } catch {}
+  const pr = view.ok ? parsePrView(parsed) : null;
+  if (!pr) {
+    return { ok: false, reason: `gh pr view ${rb.pr} failed: ${view.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300)} (see pr.log)` };
+  }
+  const target = classifyRebaseTarget({
+    state: pr.state,
+    isCrossRepository: pr.isCrossRepository,
+    headRefName: pr.headRefName,
+    baseRefName: pr.baseRefName,
+    defaultBranch: rig.defaultBranch,
+  });
+  if (!target.ok) return { ok: false, reason: `PR #${rb.pr} refused: ${target.reason}` };
+  rb.url = pr.url;
+  rb.title = pr.title;
+  rb.body = pr.body;
+  rb.headRef = pr.headRefName;
+  rb.baseRef = pr.baseRefName;
+  rb.headShaBefore = pr.headRefOid || null;
+  rb.mergeableBefore = pr.mergeable;
+  run.baseBranch = pr.baseRefName;
+  saveRun(run);
+  log(runDir, `pr #${rb.pr}: ${pr.headRefName} → ${pr.baseRefName} at ${String(rb.headShaBefore).slice(0, 12)} (${pr.mergeable || "mergeability unknown"}): ${target.reason}`);
+  return { ok: true, reason: target.reason };
+}
+
+/** Create the detached PR worktree: fetch exactly the base and head refs,
+ *  then `git worktree add --detach <worktree> origin/<headRef>`. The lease is
+ *  pinned to the sha actually fetched (logged when it differs from what gh
+ *  reported a moment earlier). Throws on any git failure. */
+function createPrWorktree(run, rig) {
+  const runDir = runDirOf(run.id);
+  const rb = run.rebase;
+  const fetchArgs = prFetchArgs({ baseRef: rb.baseRef, headRef: rb.headRef });
+  log(runDir, `git ${fetchArgs.join(" ")} (in ${rig.path})`);
+  const fetched = git(rig.path, fetchArgs);
+  if (fetched.status !== 0) throw new Error(`git ${fetchArgs.join(" ")} failed: ${(fetched.stderr || fetched.stdout || "").trim().slice(0, 300)}`);
+  const head = git(rig.path, ["rev-parse", `origin/${rb.headRef}`]);
+  if (head.status !== 0) throw new Error(`origin/${rb.headRef} not present after fetch: ${(head.stderr || "").trim().slice(0, 200)}`);
+  const fetchedSha = head.stdout.trim();
+  if (rb.headShaBefore && rb.headShaBefore !== fetchedSha) {
+    log(runDir, `pr #${rb.pr}: head moved between gh view (${rb.headShaBefore.slice(0, 12)}) and fetch (${fetchedSha.slice(0, 12)}); lease pinned to the fetched sha`);
+  }
+  rb.headShaBefore = fetchedSha;
+  saveRun(run);
+  const addArgs = prWorktreeAddArgs({ worktree: run.worktree, headRef: rb.headRef });
+  log(runDir, `git ${addArgs.join(" ")}`);
+  const added = git(rig.path, addArgs);
+  if (added.status !== 0) throw new Error(`git ${addArgs.join(" ")} failed: ${(added.stderr || added.stdout || "").trim().slice(0, 300)}`);
+  log(runDir, `worktree created at ${run.worktree} (detached at origin/${rb.headRef} ${fetchedSha.slice(0, 12)}; no run branch)`);
+}
+
+/** Restore every setup-churned path whose content still matches the
+ *  post-setup snapshot (`git checkout -- <path>`; the deploy gate's exact
+ *  tolerance), so `git rebase` — which refuses unstaged changes — sees a
+ *  clean tree. Anything else dirty is left for the caller to refuse on:
+ *  no --autostash, nothing agent-authored is ever discarded here. */
+function restoreSetupDirt(run, logFile) {
+  const runDir = runDirOf(run.id);
+  const status = git(run.worktree, ["status", "--porcelain"]);
+  if (status.status !== 0) return { ok: false, reason: `git status failed in ${run.worktree}: ${(status.stderr || "").trim().slice(0, 200)}` };
+  const { tolerated, unexpected } = partitionDirtyPaths({
+    paths: porcelainPaths(status.stdout),
+    snapshot: run.setupDirtyPaths,
+    hashOf: (p) => dirtyPathHash(run.worktree, p),
+  });
+  for (const p of tolerated) {
+    const r = runCommand(`git checkout -- ${JSON.stringify(p)}`, run.worktree, logFile, 2);
+    if (!r.ok) return { ok: false, reason: `restoring setup-churned path ${p} failed (see rebase.log)` };
+    log(runDir, `rebase: restored setup-churned path ${p} (content unchanged since the post-setup snapshot)`);
+  }
+  return { ok: true, restored: tolerated, unexpected };
+}
+
+/** The `rebase` step: clean tree required, base sha and ahead count
+ *  recorded, then the literal `git rebase origin/<baseRef>`. A conflict stop
+ *  is a successful step outcome (conflicted:true, conflict.md written for
+ *  the resolve agent); a stop with nothing unmerged is an error — aborted
+ *  and failed with the log tail. */
+function rebaseStep(run, rig, step) {
+  const runDir = runDirOf(run.id);
+  const rb = run.rebase;
+  const logFile = path.join(runDir, "rebase.log");
+  if (rebaseInProgress(run.worktree)) {
+    // A re-run (resume at this step) never continues a half-done rebase.
+    log(runDir, "rebase: aborting an in-progress rebase before starting over");
+    runCommand("git rebase --abort", run.worktree, logFile, 2);
+  }
+  rb.baseSha = null;
+  rb.conflicted = null;
+  rb.conflictFiles = [];
+  rb.commitsBefore = null;
+  rb.headShaAfter = null;
+  rb.commitsAfter = null;
+  saveRun(run);
+  const restore = restoreSetupDirt(run, logFile);
+  if (!restore.ok) return { ok: false, summary: restore.reason };
+  if (restore.unexpected.length) {
+    return { ok: false, summary: `worktree dirty before rebase: ${restore.unexpected.join(", ")} (not attributable to setup; commit or revert by hand, then resume)` };
+  }
+  const baseSha = git(run.worktree, ["rev-parse", `origin/${rb.baseRef}`]);
+  if (baseSha.status !== 0) return { ok: false, summary: `origin/${rb.baseRef} unresolvable: ${(baseSha.stderr || "").trim().slice(0, 200)}` };
+  const ahead = git(run.worktree, ["rev-list", "--count", `origin/${rb.baseRef}..HEAD`]);
+  const commitsBefore = ahead.status === 0 ? parseInt(ahead.stdout.trim(), 10) : NaN;
+  if (!Number.isFinite(commitsBefore)) return { ok: false, summary: `git rev-list --count origin/${rb.baseRef}..HEAD failed: ${(ahead.stderr || "").trim().slice(0, 200)}` };
+  const mergeBase = git(run.worktree, ["merge-base", `origin/${rb.baseRef}`, "HEAD"]);
+  rb.baseSha = baseSha.stdout.trim();
+  rb.commitsBefore = commitsBefore;
+  saveRun(run);
+  if (commitsBefore === 0) {
+    return { ok: false, summary: `PR branch has no commits ahead of origin/${rb.baseRef} — nothing to rebase` };
+  }
+  const cmd = rebaseCommand(rb.baseRef);
+  log(runDir, `step '${step.id}': ${cmd} (${commitsBefore} commit(s) onto ${rb.baseSha.slice(0, 12)})`);
+  const r = runCommand(cmd, run.worktree, logFile, 30);
+  const unmerged = git(run.worktree, ["diff", "--name-only", "--diff-filter=U"]);
+  const outcome = classifyRebaseOutcome({
+    rebaseOk: r.ok,
+    unmergedFiles: unmerged.status === 0 ? unmerged.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [],
+  });
+  if (outcome.error) {
+    if (rebaseInProgress(run.worktree)) runCommand("git rebase --abort", run.worktree, logFile, 2);
+    let tail = "";
+    try {
+      tail = fs.readFileSync(logFile, "utf8").split("\n").filter((l) => l.trim()).slice(-3).join(" | ");
+    } catch {}
+    return { ok: false, summary: `git rebase origin/${rb.baseRef} failed without conflicts (aborted): ${tail.slice(0, 400)}` };
+  }
+  rb.conflicted = outcome.conflicted;
+  rb.conflictFiles = outcome.conflicted ? outcome.files : [];
+  saveRun(run);
+  if (outcome.conflicted) {
+    writeConflictContext(run, {
+      fromSha: mergeBase.status === 0 ? mergeBase.stdout.trim() : rb.headShaBefore,
+      toSha: rb.baseSha,
+      files: outcome.files,
+      logFile,
+    });
+    return { ok: true, summary: `rebase stopped on ${outcome.files.length} conflicting file(s): ${outcome.files.join(", ")} — conflict.md written for the resolve step` };
+  }
+  return { ok: true, summary: `rebased ${commitsBefore} commit(s) onto ${rb.baseRef}@${rb.baseSha.slice(0, 12)} cleanly` };
+}
+
+/** Post-`resolve` verification: the agent's word alone never passes. Returns
+ *  the step result; on escalation or an incomplete rebase the in-progress
+ *  rebase is aborted so the worktree is left consistent (and pushable by
+ *  nothing). */
+function verifyResolveStep(run, step, agentResult) {
+  const runDir = runDirOf(run.id);
+  const logFile = path.join(runDir, "rebase.log");
+  const escalationPath = path.join(runDir, "escalation.md");
+  const status = git(run.worktree, ["status", "--porcelain"]);
+  const markers = git(run.worktree, ["grep", "-l", "^<<<<<<< ", "HEAD"]);
+  const inProgress = rebaseInProgress(run.worktree);
+  const ending = classifyResolveEnding({
+    agentOk: agentResult.ok,
+    resultText: agentResult.summary,
+    escalationPresent: fs.existsSync(escalationPath),
+    rebaseInProgress: inProgress,
+    statusClean: status.status === 0 && status.stdout.trim() === "",
+    markerFiles: markers.status === 0 ? markers.stdout.split("\n").map((l) => l.replace(/^HEAD:/, "").trim()).filter(Boolean) : [],
+  });
+  const carry = { attempt: agentResult.attempt, usage: agentResult.usage };
+  if (ending.outcome === "resolved") {
+    log(runDir, `step '${step.id}': rebase verified complete (no rebase in progress, clean status, no conflict markers)`);
+    return { ok: true, summary: `conflicts resolved by the agent: ${(run.rebase.conflictFiles || []).join(", ") || "(files unrecorded)"}`, ...carry };
+  }
+  if (inProgress) {
+    log(runDir, `step '${step.id}': ${ending.outcome} — aborting the in-progress rebase`);
+    runCommand("git rebase --abort", run.worktree, logFile, 2);
+  }
+  if (ending.outcome === "escalated") {
+    let first = "";
+    try {
+      first = fs.readFileSync(escalationPath, "utf8").split("\n").find((l) => l.trim()) || "";
+    } catch {}
+    run.rebase.escalation = first.replace(/^#+\s*/, "").trim() || "agent escalated without writing escalation.md";
+    saveRun(run);
+    return { ok: false, summary: `conflict resolution escalated to the founder: ${run.rebase.escalation} (see escalation.md; rebase aborted, branch untouched)`, ...carry };
+  }
+  const detail = agentResult.ok ? "" : ` — agent: ${String(agentResult.summary || "").slice(0, 200)}`;
+  return { ok: false, summary: `${ending.reason}${detail} (rebase aborted, branch untouched)`, ...carry };
+}
+
+/** The `push-pr` step: the four invariants (classifyPushReadiness), then the
+ *  one lease-pinned push. A lease failure fails the step once with the branch
+ *  and both shas; no re-fetch, no retry — a moved branch is the founder's to
+ *  look at. */
+function pushPrStep(run, rig, step) {
+  const runDir = runDirOf(run.id);
+  const rb = run.rebase;
+  const logFile = path.join(runDir, "push.log");
+  const ahead = git(run.worktree, ["rev-list", "--count", `origin/${rb.baseRef}..HEAD`]);
+  const mergeBase = git(run.worktree, ["merge-base", `origin/${rb.baseRef}`, "HEAD"]);
+  const readiness = classifyPushReadiness({
+    conflicted: rb.conflicted,
+    rebaseInProgress: rebaseInProgress(run.worktree),
+    commitsBefore: rb.commitsBefore,
+    commitsNow: ahead.status === 0 ? parseInt(ahead.stdout.trim(), 10) : NaN,
+    baseSha: rb.baseSha,
+    mergeBaseNow: mergeBase.status === 0 ? mergeBase.stdout.trim() : null,
+  });
+  if (!readiness.ok) return { ok: false, summary: readiness.reason };
+  let cmd;
+  try {
+    cmd = pushPrBranchCommand({ headRef: rb.headRef, expectedSha: rb.headShaBefore, defaultBranch: rig.defaultBranch });
+  } catch (err) {
+    return { ok: false, summary: `push refused: ${String(err.message || err)}` };
+  }
+  const localHead = git(run.worktree, ["rev-parse", "HEAD"]);
+  const headNow = localHead.status === 0 ? localHead.stdout.trim() : "";
+  log(runDir, `step '${step.id}': ${cmd} (${readiness.reason})`);
+  const r = runCommand(cmd, run.worktree, logFile, 5);
+  if (!r.ok) {
+    const failure = classifyPushFailure(r.output);
+    const tail = r.output.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+    if (failure.kind === "lease") {
+      return {
+        ok: false,
+        summary: `push refused by lease: origin/${rb.headRef} moved since the fetched head ${rb.headShaBefore} (local rebased head ${headNow}); not retried — start a fresh rebase-train run for PR #${rb.pr} (see push.log)`,
+      };
+    }
+    return { ok: false, summary: `push of ${rb.headRef} failed: ${tail} (see push.log)` };
+  }
+  rb.headShaAfter = headNow;
+  rb.commitsAfter = parseInt(ahead.stdout.trim(), 10);
+  rb.pushedAt = nowIso();
+  saveRun(run);
+  try {
+    tArtifact(run.id, step.id, "pr_head", headNow);
+  } catch {}
+  // Best-effort: GitHub's post-push mergeability for the summary (often
+  // UNKNOWN for a few seconds after a push; never a step outcome).
+  try {
+    const view = ghRun(run, prViewCommand(rb.pr), 1, rig.path);
+    const pr = view.ok ? parsePrView(JSON.parse(view.stdout)) : null;
+    if (pr) {
+      rb.mergeableAfter = pr.mergeable;
+      saveRun(run);
+    }
+  } catch {}
+  log(runDir, `pushed ${rb.headRef} → ${headNow.slice(0, 12)} (lease ${rb.headShaBefore.slice(0, 12)})`);
+  return { ok: true, summary: `force-pushed ${rb.headRef} with lease on ${rb.headShaBefore.slice(0, 12)}: ${rb.headShaBefore.slice(0, 12)} → ${headNow.slice(0, 12)} (${rb.commitsAfter} commit(s) on ${rb.baseRef}@${rb.baseSha.slice(0, 12)})`};
+}
+
+/** rebase-summary.md, rewritten on every exit of a checkout:"pr" run (the
+ *  notify step's body on success; the failure record otherwise). Never
+ *  throws — a summary write must not change a terminal state. */
+function writeRebaseSummary(run, { state, failedStep = null, failureSummary = null } = {}) {
+  if (!run.rebase) return;
+  const rb = run.rebase;
+  try {
+    fs.writeFileSync(
+      path.join(runDirOf(run.id), "rebase-summary.md"),
+      composeRebaseSummary({
+        runId: run.id,
+        pr: rb.pr,
+        url: rb.url,
+        title: rb.title,
+        headRef: rb.headRef,
+        baseRef: rb.baseRef || run.baseBranch,
+        headShaBefore: rb.headShaBefore,
+        headShaAfter: rb.headShaAfter,
+        baseSha: rb.baseSha,
+        conflicted: rb.conflicted,
+        conflictFiles: rb.conflictFiles || [],
+        escalation: rb.escalation || null,
+        gates: rb.gates || {},
+        pushed: !!rb.headShaAfter,
+        state: state || run.state,
+        failedStep,
+        failureSummary,
+        mergeableAfter: rb.mergeableAfter || null,
+      })
+    );
+  } catch {}
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -2952,7 +3353,10 @@ function cleanupRun(run, opts = {}) {
     return { id: run.id, action: "skip", reason: `branch/worktree shared with live run ${liveSharer}`, freedBytes: 0 };
   }
   const worktreeExists = fs.existsSync(worktree);
-  const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
+  // A checkout:"pr" run (rebase-train) owns no branch: never probe, never
+  // delete one, never ask gh — its detached worktree is all there is.
+  const probes = cleanupProbesFor(run);
+  const branchExists = probes.branch && git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
   let dirty = false;
   if (worktreeExists && !opts.discard) {
     const st = git(worktree, ["status", "--porcelain"]);
@@ -2971,7 +3375,7 @@ function cleanupRun(run, opts = {}) {
   // both probes are best-effort — on gh failure the conservative local
   // verdict stands.
   let prMerged = false;
-  if (branchExists && !merged && run.pr && run.pr.number && !opts.discard) {
+  if (probes.prMerge && branchExists && !merged && run.pr && run.pr.number && !opts.discard) {
     runCommand("git fetch origin", rig.path, path.join(runDirOf(run.id), "pr.log"), 2);
     const view = ghRun(run, prStatusCommand(run.pr.number), 2, rig.path);
     let viewJson = null;
@@ -3068,6 +3472,46 @@ function cmdCleanup(argv) {
 
 // ---------- executor ----------
 
+/** Run the rig's setup commands in the run's worktree, then record the
+ *  post-setup dirty snapshot and setupOk. Shared by every worktree flavour
+ *  (run-branch and detached PR checkouts). Throws on a failing command with
+ *  the position + unrun tail (setupFailureSummary); setupOk is written in
+ *  exactly one place — after every command exited 0 and the snapshot was
+ *  saved. No failure path writes it. */
+function provisionWorktree(run, rig, runDir) {
+  setState(run, "setup", `provisioning worktree (${(rig.setup || []).length} rig.setup command(s))`);
+  const setupLog = path.join(runDir, "setup.log");
+  const setupCmds = rig.setup || [];
+  for (let c = 0; c < setupCmds.length; c++) {
+    log(runDir, `setup: ${setupCmds[c]}`);
+    const r = runCommand(setupCmds[c], run.worktree, setupLog, 30);
+    if (!r.ok) {
+      const summary = setupFailureSummary(setupCmds, c);
+      fs.appendFileSync(setupLog, `${summary}\n`);
+      throw new Error(summary);
+    }
+  }
+  // Post-setup snapshot: tracked-file churn the setup commands left behind
+  // (lockfile metadata, generated files) is recorded as {path, hash} so
+  // the deploy readiness gate (and the rebase step's pre-rebase restore) can
+  // tolerate exactly that dirt — and nothing else. Empty array = setup left
+  // the tree clean; field absent entirely = legacy run (the gate stays
+  // strict). A failed status probe snapshots empty too: never tolerate dirt
+  // we could not attribute. Re-taken on every (re-)provision so the gate
+  // matches what this pass churned.
+  const postSetup = git(run.worktree, ["status", "--porcelain"]);
+  run.setupDirtyPaths =
+    postSetup.status === 0
+      ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
+      : [];
+  saveRun(run);
+  if (run.setupDirtyPaths.length) {
+    log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
+  }
+  run.setupOk = true;
+  saveRun(run);
+}
+
 function execRun(id) {
   const run = loadRun(id);
   const runDir = runDirOf(id);
@@ -3127,6 +3571,28 @@ function execRun(id) {
     if (workflow.worktree === false) {
       run.worktree = rig.path;
       saveRun(run);
+    } else if (workflow.checkout === "pr") {
+      // rebase-train: resolve the PR (gh, in the rig checkout) before any
+      // worktree exists — a refusal ends the run with nothing created — then
+      // a detached worktree at the fetched PR head. No run branch, no push.
+      if (!run.rebase || !validPrNumber(run.rebase.pr)) throw new Error(`workflow ${run.workflow} requires run.rebase.pr (start it with --pr <n>)`);
+      const resolved = resolvePrForRun(run, rig);
+      if (!resolved.ok) {
+        writeRebaseSummary(run, { state: "failed", failureSummary: resolved.reason });
+        setState(run, "failed", resolved.reason);
+        notify(run, `:x: Run ${id} FAILED: ${resolved.reason}\nNo worktree was created. Run dir: ${runDir}`);
+        return;
+      }
+      if (!fs.existsSync(run.worktree)) {
+        setState(run, "setup", `creating detached worktree at origin/${run.rebase.headRef}`);
+        fs.mkdirSync(WORKTREES_DIR, { recursive: true });
+        createPrWorktree(run, rig);
+        if (run.setupOk !== undefined) {
+          delete run.setupOk;
+          saveRun(run);
+        }
+      }
+      if (setupNeeded(run, workflow)) provisionWorktree(run, rig, runDir);
     } else {
       if (!fs.existsSync(run.worktree)) {
         setState(run, "setup", "creating worktree");
@@ -3153,41 +3619,7 @@ function execRun(id) {
           saveRun(run);
         }
       }
-      if (setupNeeded(run, workflow)) {
-        setState(run, "setup", `provisioning worktree (${(rig.setup || []).length} rig.setup command(s))`);
-        const setupLog = path.join(runDir, "setup.log");
-        const setupCmds = rig.setup || [];
-        for (let c = 0; c < setupCmds.length; c++) {
-          log(runDir, `setup: ${setupCmds[c]}`);
-          const r = runCommand(setupCmds[c], run.worktree, setupLog, 30);
-          if (!r.ok) {
-            const summary = setupFailureSummary(setupCmds, c);
-            fs.appendFileSync(setupLog, `${summary}\n`);
-            throw new Error(summary);
-          }
-        }
-        // Post-setup snapshot: tracked-file churn the setup commands left behind
-        // (lockfile metadata, generated files) is recorded as {path, hash} so
-        // the deploy readiness gate can tolerate exactly that dirt — and nothing
-        // else. Empty array = setup left the tree clean; field absent entirely =
-        // legacy run (the gate stays strict). A failed status probe snapshots
-        // empty too: never tolerate dirt we could not attribute. Re-taken on
-        // every (re-)provision so the gate matches what this pass churned.
-        const postSetup = git(run.worktree, ["status", "--porcelain"]);
-        run.setupDirtyPaths =
-          postSetup.status === 0
-            ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
-            : [];
-        saveRun(run);
-        if (run.setupDirtyPaths.length) {
-          log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
-        }
-        // Provisioning completion is explicit run state, written in exactly one
-        // place — after every setup command exited 0 and the post-setup snapshot
-        // was saved. No failure path writes it.
-        run.setupOk = true;
-        saveRun(run);
-      }
+      if (setupNeeded(run, workflow)) provisionWorktree(run, rig, runDir);
     }
 
     let i = run.stepIndex || 0;
@@ -3210,22 +3642,49 @@ function execRun(id) {
         step.skipWhen === "no-preview"
           ? classifyPreviewStep({ previewOn: effectivePreviewMode(run, rig), previewApproved: !!run.previewApproved })
           : null;
+      // rebase-train's resolve step: runs only on a conflict stop that is
+      // still in progress (classifyResolveSkip — clean rebase and already-
+      // resolved resumes skip; a missing outcome fails).
+      const resolveSkip =
+        step.skipWhen === "no-conflict"
+          ? classifyResolveSkip({ conflicted: run.rebase ? run.rebase.conflicted : null, rebaseInProgress: rebaseInProgress(run.worktree) })
+          : null;
       if (pvStep && !pvStep.run) {
         // Preview-and-approve steps only exist when the mode is on (per-run
         // flag over per-rig policy.preview); off = today's straight-to-deploy.
         // An approved preview is skipped too, so a rewound resume through
         // "checks" cannot re-build or re-gate (classifyPreviewStep).
         result = { ok: true, summary: `${step.id} skipped (${pvStep.reason})` };
+      } else if (resolveSkip && !resolveSkip.run) {
+        result = resolveSkip.fail ? { ok: false, summary: resolveSkip.reason } : { ok: true, summary: `${step.id} skipped (${resolveSkip.reason})` };
       } else if (step.type === "agent") {
         setState(run, `running:${step.id}`, null);
         notify(run, `:gear: Run ${id} (${run.rig}): step *${step.id}* started.`);
         // A stale verdict from an earlier attempt must never masquerade as
         // this attempt's decision.
         if (step.id === RELEASE_DECISION_STEP.id) fs.rmSync(path.join(runDir, RELEASE_DECISION_FILE), { force: true });
-        result = runAgentStep(run, step);
+        // PR framing for rebase-train's conflict-resolver (template-only
+        // placeholders, like the discussion step's).
+        const prExtra = run.rebase
+          ? {
+              "{{PR_NUMBER}}": String(run.rebase.pr),
+              "{{PR_TITLE}}": run.rebase.title || "",
+              "{{PR_URL}}": run.rebase.url || "",
+              "{{PR_BODY}}": (run.rebase.body || "(no description)").slice(0, 8000),
+              "{{HEAD_REF}}": run.rebase.headRef || "",
+            }
+          : undefined;
+        result = runAgentStep(run, step, prExtra);
+        if (resolveSkip) {
+          // The agent's word is not the outcome: verify the worktree, abort
+          // on escalation or an incomplete rebase (verifyResolveStep).
+          result = verifyResolveStep(run, step, result);
+        }
         // Safety net behind the agents' own per-commit pushes: publish the
         // branch after every agent step, success or failure — a timed-out
         // implement attempt may still hold commits the founder wants to see.
+        // (A checkout:"pr" run has no run branch: the rev-parse guard inside
+        // makes this a no-op there.)
         pushRunBranch(run);
         if (step.id === "implement") recordCommits(run);
         if (result.ok && step.id === "review") {
@@ -3252,6 +3711,17 @@ function execRun(id) {
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
         result = runCommandsStep(run, step, rig);
+        if (run.rebase) {
+          // Gate outcomes feed rebase-summary.md (green / failing command).
+          run.rebase.gates = { ...(run.rebase.gates || {}), [step.id]: result.ok ? true : result.summary };
+          saveRun(run);
+        }
+      } else if (step.type === "rebase") {
+        setState(run, `running:${step.id}`, null);
+        result = run.rebase ? rebaseStep(run, rig, step) : { ok: false, summary: `step type ${step.type} needs a checkout:"pr" run` };
+      } else if (step.type === "push-pr") {
+        setState(run, `running:${step.id}`, null);
+        result = run.rebase ? pushPrStep(run, rig, step) : { ok: false, summary: `step type ${step.type} needs a checkout:"pr" run` };
       } else if (step.type === "gate") {
         result = waitForGate(run, step);
         if (result.ok) {
@@ -3275,6 +3745,9 @@ function execRun(id) {
           saveRun(run);
         }
       } else if (step.type === "notify") {
+        // rebase-train: the summary is (re)written here so the notify step
+        // posts the final record (heads, base, conflicts, gates, push).
+        if (run.rebase) writeRebaseSummary(run, { state: "done" });
         // summaryFile (e.g. factory-retro): the step posts a run-dir summary
         // instead of the merge/deploy message — see classifyNotifyMessage.
         const summaryText = (() => {
@@ -3449,10 +3922,12 @@ function execRun(id) {
             continue;
           }
         }
+        writeRebaseSummary(run, { state: "failed", failedStep: step.id, failureSummary: result.summary });
         setState(run, "failed", result.summary);
         {
           const usage = usageLine(id);
-          notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}\nRun dir: ${runDir}${prChecksLine(run)}${usage ? `\n${usage}` : ""}`);
+          const prLine = run.rebase && run.rebase.url ? `\nPR #${run.rebase.pr}: ${run.rebase.url} — branch untouched, nothing pushed` : "";
+          notify(run, `:x: Run ${id} FAILED at step *${step.id}*: ${result.summary}${prLine}\nRun dir: ${runDir}${prChecksLine(run)}${usage ? `\n${usage}` : ""}`);
         }
         return;
       }
@@ -3492,6 +3967,7 @@ function execRun(id) {
   } catch (err) {
     // A crash racing an external cancel must not overwrite the terminal state.
     if (!terminalStateOnDisk(id)) {
+      writeRebaseSummary(run, { state: "failed", failureSummary: String(err.message || err) });
       setState(run, "failed", String(err.message || err));
       notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}${prChecksLine(run)}`);
     }
@@ -3522,14 +3998,47 @@ function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_
   };
 }
 
-function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview, baseRun }) {
+/** The run.rebase record a checkout:"pr" run starts with (pure, exercised by
+ *  selftest): the PR number is known at creation; everything gh and the
+ *  fetch establish (url, title, refs, head sha) and everything the rebase
+ *  and push record (base sha, outcome, counts, new head) start null so a
+ *  half-run reads as exactly that. */
+function initialRebaseRecord(pr) {
+  return {
+    pr,
+    url: null,
+    title: null,
+    headRef: null,
+    baseRef: null,
+    headShaBefore: null,
+    baseSha: null,
+    headShaAfter: null,
+    conflicted: null,
+    commitsBefore: null,
+    commitsAfter: null,
+  };
+}
+
+/** The prompt a --pr start synthesises (pure, exercised by selftest): it
+ *  feeds {{PROMPT}}, status lines, and Slack text. A founder note given via
+ *  --prompt is appended, never substituted. */
+function rebasePrompt(pr, base, note) {
+  const head = `Rebase PR #${pr} onto ${base}`;
+  const extra = typeof note === "string" ? note.trim() : "";
+  return extra ? `${head}\n\nFounder note: ${extra}` : head;
+}
+
+function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview, baseRun, idBase, pr }) {
   const rig = resolveRig(rigName);
   const wf = loadWorkflow(wfName);
   // Fail before the run dir or worktree exists on a broken step reference.
   const wfProblems = validateWorkflowAgentSteps(wfName, wf);
   if (wfProblems.length) throw new Error(wfProblems.join("; "));
+  const prCheckout = wf.checkout === "pr";
+  if (prCheckout && !validPrNumber(pr)) throw new Error(`workflow ${wfName} needs a PR number (--pr <n>, 1..999999)`);
+  if (!prCheckout && pr !== undefined) throw new Error(`--pr is only valid with a "checkout": "pr" workflow (rebase-train), not ${wfName}`);
   const slug = slugify(prompt);
-  const base = `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
+  const base = idBase || `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
   const id = uniqueRunId(base, (candidate) => fs.existsSync(runDirOf(candidate)));
   const runDir = runDirOf(id);
   fs.mkdirSync(runDir, { recursive: true });
@@ -3545,7 +4054,11 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
     previewMode: preview === true || preview === false ? preview : null,
     parentRun: parentRun || null,
     baseBranch: setup.baseBranch,
-    branch: setup.branch,
+    // A checkout:"pr" run has no run branch at all (field absent): the
+    // engine works on a detached checkout of the PR head and every
+    // pushRunBranch call site early-returns on its rev-parse guard.
+    branch: prCheckout ? undefined : setup.branch,
+    rebase: prCheckout ? initialRebaseRecord(pr) : undefined,
     worktree: setup.worktree,
     // Follow-ups inherit the chain root's post-setup dirty snapshot and its
     // setupOk (they reuse the worktree); fresh runs get theirs written after
@@ -3570,17 +4083,49 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
   return id;
 }
 
-function cmdStart(argv) {
+const START_USAGE =
+  'usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]\n' +
+  "       factory-run start --rig <name> --workflow rebase-train --pr <n> [--prompt \"<founder note>\"]";
+
+/** Parse `start` argv into createRun inputs (pure, exercised by selftest).
+ *  --pr is rebase-train's only required input (a positive integer up to
+ *  999999); with it the prompt is synthesised (rebasePrompt) and the run id
+ *  base is rebase-pr-<n>. --pr with any other workflow, a rebase-train start
+ *  without --pr, or a malformed --pr is a usage error. */
+function parseStartArgs(argv, defaultBranchOf) {
   const rigName = argOf(argv, "--rig");
   const wfName = argOf(argv, "--workflow") || "feature-dev";
   const prompt = argOf(argv, "--prompt");
   const auto = argv.includes("--auto");
   const preview = argv.includes("--preview") ? true : argv.includes("--no-preview") ? false : null;
-  if (!rigName || !prompt) {
-    console.error('usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]');
+  const prRaw = argOf(argv, "--pr");
+  const hasPr = argv.includes("--pr");
+  if (!rigName) return { error: START_USAGE };
+  if (wfName === "rebase-train") {
+    const pr = /^\d+$/.test(String(prRaw || "")) ? parseInt(prRaw, 10) : NaN;
+    if (!hasPr || !validPrNumber(pr)) return { error: `rebase-train needs --pr <n> (a positive integer up to 999999; got ${prRaw === undefined ? "nothing" : `'${prRaw}'`})\n${START_USAGE}` };
+    return {
+      rig: rigName,
+      workflow: wfName,
+      prompt: rebasePrompt(pr, defaultBranchOf(rigName), prompt),
+      auto,
+      preview,
+      pr,
+      idBase: `rebase-pr-${pr}`,
+    };
+  }
+  if (hasPr) return { error: `--pr is only valid with --workflow rebase-train (got ${wfName})\n${START_USAGE}` };
+  if (!prompt) return { error: START_USAGE };
+  return { rig: rigName, workflow: wfName, prompt, auto, preview };
+}
+
+function cmdStart(argv) {
+  const parsed = parseStartArgs(argv, (rigName) => resolveRig(rigName).defaultBranch);
+  if (parsed.error) {
+    console.error(parsed.error);
     process.exit(1);
   }
-  console.log(createRun({ rig: rigName, workflow: wfName, prompt, auto, preview }));
+  console.log(createRun(parsed));
 }
 
 function cmdReport(argv) {
@@ -4367,6 +4912,14 @@ function cmdStatus(argv) {
       }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
       if (r.pr) console.log(`  pr: #${r.pr.number} ${r.pr.url}${r.pr.state ? ` (${r.pr.state}, checked ${r.pr.checkedAt || "never"})` : ""}`);
+      if (r.rebase) {
+        const rb = r.rebase;
+        const sha = (s) => (s ? String(s).slice(0, 12) : "none");
+        console.log(
+          `  rebase: pr #${rb.pr} ${rb.headRef || "(unresolved)"} — headShaBefore ${sha(rb.headShaBefore)} headShaAfter ${sha(rb.headShaAfter)} conflicted ${rb.conflicted === null || rb.conflicted === undefined ? "null" : rb.conflicted}` +
+            `${rb.url ? ` · ${rb.url}` : ""}${rb.escalation ? ` · escalated: ${rb.escalation}` : ""}`
+        );
+      }
       if (r.state === "awaiting-merge") {
         console.log(
           r.pr
@@ -5045,12 +5598,19 @@ function cmdSelftest() {
     // in the source must name factory/. The scan's own lines, and selftest
     // lines that quote the literal for other checks, carry the no-push-scan
     // marker and are excluded.
-    ["every git push in the engine targets factory/<id>, never the base branch", (() => {
-      const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
-      const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
-      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l)); // no-push-scan
+    // rebase-train (D34) adds exactly one more accepted shape: the
+    // lease-pinned, fully qualified PR-branch push built in web/lib/rebase.mjs
+    // (`--force-with-lease=refs/heads/<ref>:<sha> … HEAD:refs/heads/<ref>`).
+    // The scan covers the engine AND that module, through the exported
+    // predicate, so a planted `git push origin main` in either fails it.
+    ["every git push in the engine and rebase.mjs is a factory/<id> push or the lease-pinned PR push", (() => {
+      const files = [__filename, path.join(ORCH_DIR, "web", "lib", "rebase.mjs")]; // no-push-scan
+      const pushes = files.flatMap((f) => fs.readFileSync(f, "utf8").split("\n").filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l))); // no-push-scan
+      return pushes.length >= 2 && pushes.every(pushLiteralAllowed); // no-push-scan
     })()],
-    ["engine's only push command is the run branch push", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
+    ["push-scan predicate rejects a base-branch push and a bare --force", !pushLiteralAllowed("git push origin main") && !pushLiteralAllowed("git push --force origin HEAD:refs/heads/x")], // no-push-scan
+    ["push-scan predicate accepts only factory/ or the lease shape", pushLiteralAllowed("git push --force-with-lease -u origin factory/x") && pushLiteralAllowed("git push --force-with-lease=refs/heads/codex/x:abc origin HEAD:refs/heads/codex/x") && !pushLiteralAllowed("git push --force-with-lease=refs/heads/x:abc origin x")], // no-push-scan
+    ["engine's run-branch push command is unchanged", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
     // greenTerminalState: awaiting-merge only when a merge was actually in
     // play (worktree + deploy step + review policy + nothing merged).
     ["review-policy worktree run with a deploy step and no merge parks awaiting-merge",
@@ -5813,6 +6373,82 @@ function cmdSelftest() {
   for (const [name, ok] of jsonChecks) {
     console.log(`json-extract ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`json-extract check failed: ${name}`);
+  }
+  // rebase-train (D34): the workflow's shape, the pure cores from
+  // web/lib/rebase.mjs the engine acts on (deep coverage in rebase.test.mjs),
+  // and the engine-side pure decisions (start parsing, resolve skip, cleanup
+  // probes, the initial run.rebase record).
+  const rtWf = (() => {
+    try {
+      return loadWorkflow("rebase-train");
+    } catch {
+      return null;
+    }
+  })();
+  const rtStep = (id) => (rtWf ? rtWf.steps.find((s) => s.id === id) : undefined);
+  const rtTarget = (over) => classifyRebaseTarget({ state: "OPEN", isCrossRepository: false, headRefName: "codex/x", baseRefName: "main", defaultBranch: "main", ...over });
+  const rtRefused = (over) => { const d = rtTarget(over); return d.ok === false && typeof d.reason === "string" && d.reason.length > 0; };
+  const rtStart = (argv) => parseStartArgs(argv, () => "main");
+  const rtSkip = (over) => classifyResolveSkip({ conflicted: null, rebaseInProgress: false, ...over });
+  const rtRecord = initialRebaseRecord(88);
+  const rebaseChecks = [
+    ["workflow rebase-train exists with checkout pr", !!rtWf && rtWf.checkout === "pr"],
+    ["steps in order: rebase, resolve, checks, tests, push, notify", !!rtWf && rtWf.steps.map((s) => s.id).join(",") === "rebase,resolve,checks,tests,push,notify"],
+    ["rebase step type", !!rtStep("rebase") && rtStep("rebase").type === "rebase"],
+    ["resolve is the conflict-resolver agent, skipped on no-conflict", !!rtStep("resolve") && rtStep("resolve").type === "agent" && rtStep("resolve").prompt === "conflict-resolver" && rtStep("resolve").skipWhen === "no-conflict"],
+    ["checks and tests are commands steps", ["checks", "tests"].every((id) => rtStep(id) && rtStep(id).type === "commands" && rtStep(id).source === id)],
+    ["push is a push-pr step", !!rtStep("push") && rtStep("push").type === "push-pr"],
+    ["notify posts rebase-summary.md", !!rtStep("notify") && rtStep("notify").type === "notify" && rtStep("notify").summaryFile === "rebase-summary.md"],
+    ["no deploy step (never awaiting-merge, never a PR of its own)", !!rtWf && !rtWf.steps.some((s) => s.type === "deploy") && greenTerminalState(rtWf, { merge: "review" }, null) === "done"],
+    ["rebase/push-pr steps outside a pr checkout are invalid", validateWorkflowAgentSteps("synthetic", { steps: [{ id: "r", type: "rebase" }, { id: "p", type: "push-pr" }] }).length === 2],
+    ["pr checkout with a deploy step is invalid", validateWorkflowAgentSteps("synthetic", { checkout: "pr", steps: [{ id: "d", type: "deploy" }] }).length === 1],
+    ["open same-repo PR onto the default branch is accepted", rtTarget({}).ok === true],
+    ["MERGED PR refused with a reason", rtRefused({ state: "MERGED" })],
+    ["CLOSED PR refused with a reason", rtRefused({ state: "CLOSED" })],
+    ["fork PR refused with a reason", rtRefused({ isCrossRepository: true })],
+    ["head equal to the default branch refused", rtRefused({ headRefName: "main" })],
+    ["head equal to the base refused", rtRefused({ headRefName: "release", baseRefName: "release" })],
+    ["base not the default branch refused", rtRefused({ baseRefName: "develop" })],
+    ["clean rebase classifies conflicted:false", classifyRebaseOutcome({ rebaseOk: true }).conflicted === false],
+    ["conflict stop classifies conflicted:true", classifyRebaseOutcome({ rebaseOk: false, unmergedFiles: ["a.ts"] }).conflicted === true],
+    ["failure without unmerged files is an error", classifyRebaseOutcome({ rebaseOk: false, unmergedFiles: [] }).error === true],
+    ["PR push is lease-pinned and fully qualified", pushPrBranchCommand({ headRef: "codex/x", expectedSha: "abc", defaultBranch: "main" }) === "git push --force-with-lease=refs/heads/codex/x:abc origin HEAD:refs/heads/codex/x"], // no-push-scan
+    ["PR push builder refuses the default branch", throws(() => pushPrBranchCommand({ headRef: "main", expectedSha: "abc", defaultBranch: "main" }), /default branch/)],
+    ["PR push builder refuses an empty ref", throws(() => pushPrBranchCommand({ headRef: "", expectedSha: "abc", defaultBranch: "main" }), /empty/)],
+    ["PR push builder refuses whitespace in the ref", throws(() => pushPrBranchCommand({ headRef: "a b", expectedSha: "abc", defaultBranch: "main" }), /whitespace/)],
+    ["fetch argv names exactly base and head", JSON.stringify(prFetchArgs({ baseRef: "main", headRef: "codex/x" })) === JSON.stringify(["fetch", "origin", "main", "codex/x"])],
+    ["worktree add is detached at origin/<head>", JSON.stringify(prWorktreeAddArgs({ worktree: "/w/x", headRef: "codex/x" })) === JSON.stringify(["worktree", "add", "--detach", "/w/x", "origin/codex/x"])],
+    ["rebase command is the literal onto origin/<base>", rebaseCommand("main") === "git rebase origin/main"],
+    ["RESOLVED without proof is incomplete", classifyResolveEnding({ agentOk: true, resultText: "RESOLVED", escalationPresent: false, rebaseInProgress: true, statusClean: true, markerFiles: [] }).outcome === "incomplete"],
+    ["ESCALATED ends escalated", classifyResolveEnding({ agentOk: true, resultText: "ESCALATED", escalationPresent: false, rebaseInProgress: false, statusClean: true, markerFiles: [] }).outcome === "escalated"],
+    ["push readiness refuses a null outcome, an in-progress rebase, a changed count, a moved base", [
+      classifyPushReadiness({ conflicted: null, rebaseInProgress: false, commitsBefore: 1, commitsNow: 1, baseSha: "b", mergeBaseNow: "b" }),
+      classifyPushReadiness({ conflicted: false, rebaseInProgress: true, commitsBefore: 1, commitsNow: 1, baseSha: "b", mergeBaseNow: "b" }),
+      classifyPushReadiness({ conflicted: false, rebaseInProgress: false, commitsBefore: 2, commitsNow: 1, baseSha: "b", mergeBaseNow: "b" }),
+      classifyPushReadiness({ conflicted: false, rebaseInProgress: false, commitsBefore: 1, commitsNow: 1, baseSha: "b", mergeBaseNow: "c" }),
+    ].every((d) => d.ok === false && /push refused/.test(d.reason)) && classifyPushReadiness({ conflicted: true, rebaseInProgress: false, commitsBefore: 1, commitsNow: 1, baseSha: "b", mergeBaseNow: "b" }).ok === true],
+    ["summary carries Not merged", /Not merged/.test(composeRebaseSummary({ runId: "r", pr: 1, headRef: "h", baseRef: "main", conflicted: false, state: "done" }))],
+    ["start: rebase-train --pr synthesises the prompt and id base", (() => { const p = rtStart(["--rig", "running-with-pace", "--workflow", "rebase-train", "--pr", "88"]); return !p.error && p.pr === 88 && p.idBase === "rebase-pr-88" && p.prompt === "Rebase PR #88 onto main"; })()],
+    ["start: rebase-train without --pr is a usage error", !!rtStart(["--rig", "running-with-pace", "--workflow", "rebase-train"]).error],
+    ["start: --pr 0 and --pr abc are usage errors", !!rtStart(["--rig", "r", "--workflow", "rebase-train", "--pr", "0"]).error && !!rtStart(["--rig", "r", "--workflow", "rebase-train", "--pr", "abc"]).error],
+    ["start: --pr with feature-dev is a usage error", !!rtStart(["--rig", "r", "--workflow", "feature-dev", "--pr", "88", "--prompt", "x"]).error],
+    ["start: a founder note is appended, never substituted", rtStart(["--rig", "r", "--workflow", "rebase-train", "--pr", "7", "--prompt", "watch the lockfile"]).prompt === "Rebase PR #7 onto main\n\nFounder note: watch the lockfile"],
+    ["start: plain feature-dev parsing unchanged", (() => { const p = rtStart(["--rig", "r", "--prompt", "hello", "--auto"]); return !p.error && p.workflow === "feature-dev" && p.prompt === "hello" && p.auto === true && p.pr === undefined; })()],
+    ["initial run.rebase record: pr set, everything else null", rtRecord.pr === 88 && ["url", "title", "headRef", "baseRef", "headShaBefore", "baseSha", "headShaAfter", "conflicted", "commitsBefore", "commitsAfter"].every((k) => k in rtRecord && rtRecord[k] === null)],
+    ["resolve skipped on a clean rebase", (() => { const d = rtSkip({ conflicted: false }); return d.run === false && /clean/.test(d.reason); })()],
+    ["resolve runs on a conflict stop still in progress", rtSkip({ conflicted: true, rebaseInProgress: true }).run === true],
+    ["resolve skipped on resume once the conflict was resolved", (() => { const d = rtSkip({ conflicted: true, rebaseInProgress: false }); return d.run === false && !d.fail; })()],
+    ["resolve without a rebase outcome fails", rtSkip({ conflicted: null }).fail === true],
+    ["cleanup of a pr checkout probes neither branch nor PR merge", (() => { const p = cleanupProbesFor({ rebase: { pr: 88 } }); return p.branch === false && p.prMerge === false; })()],
+    ["cleanup of a run-branch run keeps both probes", (() => { const p = cleanupProbesFor({ branch: "factory/x" }); return p.branch === true && p.prMerge === true; })()],
+    ["pr checkout cleanup decision: clean worktree reclaimed, no branch", (() => { const d = classifyCleanup({ state: "done", worktreeExists: true, branchExists: false, dirty: false, merged: false, prMerged: false }); return d.action === "clean" && d.forceBranch !== true && /branch already deleted/.test(d.reason); })()],
+    ["pr checkout cleanup decision: failed run with a clean worktree reclaimed", classifyCleanup({ state: "failed", worktreeExists: true, branchExists: false, dirty: false, merged: false, prMerged: false }).action === "clean"],
+    ["pr checkout cleanup decision: live run skipped", classifyCleanup({ state: "running:rebase", worktreeExists: true, branchExists: false, dirty: false, merged: false, prMerged: false }).action === "skip"],
+    ["conflict-resolver prompt forbids skip/push/installs and ends RESOLVED|ESCALATED", (() => { const p = stepPrompt("conflict-resolver"); return p.includes("--skip") && p.includes("Do NOT push") && p.includes("Do NOT run installs") && p.includes("RESOLVED") && p.includes("ESCALATED") && p.includes("conflict.md"); })()],
+  ];
+  for (const [name, ok] of rebaseChecks) {
+    console.log(`rebase-train ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`rebase-train check failed: ${name}`);
   }
   if (problems.length) {
     console.error(`\nSELFTEST FAILED:\n- ${problems.join("\n- ")}`);

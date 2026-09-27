@@ -36,6 +36,31 @@ Start a bug fix: same, with `--workflow bug-fix`.
 The command prints a run id and returns immediately. Tell the founder the run id
 and that the plan will arrive shortly for approval.
 
+Rebase a PR (the founder says "rebase PR 88", "get the watch PR onto main", or a
+standup shows a CONFLICTING PR they want handled):
+
+```sh
+~/src/app-factory/orchestration/bin/factory-run start \
+  --rig <rig> --workflow rebase-train --pr <n>
+```
+
+No `--prompt` is needed (the engine synthesises "Rebase PR #n onto main"; an
+optional `--prompt "<note>"` is appended as a founder note for the conflict
+resolver). The run id is `rebase-pr-<n>`. What it does: fetches the PR head,
+checks it out detached, rebases onto `origin/main`, lets a bounded
+conflict-resolver agent finish a stopped rebase (it escalates rather than
+guesses), re-runs the rig checks and tests on the rebased tree, then
+force-pushes the PR branch with a lease pinned to the head sha it fetched.
+**Starting rebase-train authorises that force-push of the PR's own branch —
+confirm the founder means it before starting one; the PR's old commits are
+rewritten on GitHub.** It **never merges**, never pushes `main`, and never pushes
+on a red check or test: the run ends `done` with the PR still open and the
+diff on GitHub as the review surface, or `failed` at `resolve` (escalation —
+read `runs/<id>/escalation.md` and relay its first line), at `checks`/`tests`
+(a semantic conflict the founder must look at; nothing was pushed), or at
+`push` (the branch moved since the fetch; start a fresh run if they still
+want it). Fork PRs and PRs whose head or base is `main` are refused up front.
+
 Run ids are readable task slugs derived from the prompt (`feature-version-badge`,
 `bug-leaked-sockets`), and every verb below accepts any unambiguous prefix or
 fragment of an id — so when the founder says "approve the version badge run" you
@@ -102,6 +127,12 @@ Cancel: `factory-run cancel <run_id>`.
 - When a run finishes, the engine posts the artifact link + QR code itself. Your job
   afterwards: offer to merge (`git -C <rig path> merge factory/<run_id>`) once the
   founder confirms the build works on their device. Never merge unprompted.
+- rebase-train is the one verb that rewrites a branch on GitHub (the PR's own
+  branch, by lease, after green gates). Do not start it on a PR the founder is
+  actively editing in a local worktree without saying so — their local branch
+  will need `git rebase` onto the new head afterwards. Never start it on a PR
+  the founder has not named, and never present a rebase as a merge: the PR
+  stays open for review.
 - On failures, read `~/src/app-factory/orchestration/runs/<run_id>/engine.log` and the
   failing step log, summarize the cause in one or two sentences, and propose the next
   action (retry, steer, or drop).

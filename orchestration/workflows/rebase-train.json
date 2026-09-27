@@ -1,0 +1,13 @@
+{
+  "name": "rebase-train",
+  "description": "Rebase one open PR onto the rig's default branch and force-push it back to its own branch, never merging. Detached checkout of the fetched PR head (checkout \"pr\": no run branch), rebase onto origin/<base>, a bounded conflict-resolver agent finishes a stopped rebase (skipped on a clean rebase; escalates instead of guessing), rig checks and tests re-run on the rebased tree, then the PR branch is pushed with --force-with-lease pinned to the head sha fetched at run start. No deploy step: the run ends done, the PR diff on GitHub stays the review surface. Start with `factory-run start --rig <rig> --workflow rebase-train --pr <n>`.",
+  "checkout": "pr",
+  "steps": [
+    { "id": "rebase", "type": "rebase" },
+    { "id": "resolve", "type": "agent", "prompt": "conflict-resolver", "timeoutMinutes": 30, "skipWhen": "no-conflict" },
+    { "id": "checks", "type": "commands", "source": "checks" },
+    { "id": "tests", "type": "commands", "source": "tests" },
+    { "id": "push", "type": "push-pr" },
+    { "id": "notify", "type": "notify", "summaryFile": "rebase-summary.md" }
+  ]
+}

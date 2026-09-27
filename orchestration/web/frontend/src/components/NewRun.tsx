@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { SettingsResponse } from "../types";
 
-/** Start a run: rig + workflow pickers from the registry, prompt, --auto toggle. */
+/** The one workflow that starts from a PR number instead of a prompt. */
+const REBASE_WORKFLOW = "rebase-train";
+const PR_MAX = 999999;
+
+/** Start a run: rig + workflow pickers from the registry, prompt, --auto toggle.
+ *  Selecting rebase-train swaps the required prompt for a required PR number
+ *  (the prompt becomes an optional founder note). */
 export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -10,6 +16,7 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
   const [customRig, setCustomRig] = useState("");
   const [workflow, setWorkflow] = useState("feature-dev");
   const [prompt, setPrompt] = useState("");
+  const [pr, setPr] = useState("");
   const [auto, setAuto] = useState(false);
   const [preview, setPreview] = useState<"default" | "on" | "off">("default");
   const [busy, setBusy] = useState(false);
@@ -34,6 +41,10 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
 
   const workflows = settings?.workflows ?? [];
   const effectiveRig = rig === "__factory__" ? (customRig.trim() ? `factory:${customRig.trim()}` : "") : rig;
+  const rebaseTrain = workflow === REBASE_WORKFLOW;
+  const prNumber = /^\d+$/.test(pr.trim()) ? parseInt(pr.trim(), 10) : NaN;
+  const prValid = Number.isInteger(prNumber) && prNumber >= 1 && prNumber <= PR_MAX;
+  const canSubmit = !!effectiveRig && (rebaseTrain ? prValid : !!prompt.trim());
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -43,8 +54,8 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
       const r = await api.start({
         rig: effectiveRig,
         workflow,
-        prompt: prompt.trim(),
         auto,
+        ...(rebaseTrain ? { pr: prNumber, ...(prompt.trim() ? { prompt: prompt.trim() } : {}) } : { prompt: prompt.trim() }),
         ...(preview === "default" ? {} : { preview: preview === "on" }),
       });
       onStarted(r.runId);
@@ -103,14 +114,31 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
         <p className="field-hint">{workflows.find((w) => w.name === workflow)!.description}</p>
       )}
 
+      {rebaseTrain && (
+        <label className="field">
+          <span>PR number (open PR of this rig, rebased onto its default branch and force-pushed with a lease; never merged)</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={PR_MAX}
+            step={1}
+            value={pr}
+            onChange={(e) => setPr(e.target.value)}
+            placeholder="88"
+            required
+          />
+        </label>
+      )}
+
       <label className="field">
-        <span>Prompt</span>
+        <span>{rebaseTrain ? "Founder note (optional — appended to the synthesised prompt)" : "Prompt"}</span>
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          rows={6}
-          placeholder="What should this run build or fix?"
-          required
+          rows={rebaseTrain ? 3 : 6}
+          placeholder={rebaseTrain ? "Optional: anything the conflict resolver should know" : "What should this run build or fix?"}
+          required={!rebaseTrain}
         />
       </label>
 
@@ -133,7 +161,7 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
       )}
 
       {error && <div className="error-box">{error}</div>}
-      <button type="submit" className="btn btn-primary" disabled={busy || !effectiveRig || !prompt.trim()}>
+      <button type="submit" className="btn btn-primary" disabled={busy || !canSubmit}>
         {busy ? "Starting…" : "Start run"}
       </button>
     </form>

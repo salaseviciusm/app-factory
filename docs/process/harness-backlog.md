@@ -11,7 +11,10 @@ decision) and must not be re-proposed.
 
 ## R1 — A resume at a later step never revalidates worktree dependencies
 
-- **Status:** open
+- **Status:** done — run `feature-improvement-plan-resume-must` (app-factory),
+  commit `9deb8b1`, merged 2026-08-19: `run.setupOk` is written only after every
+  rig setup command exits 0, and `resume` at any step re-provisions when it is
+  absent.
 - **Observation:** Run `bug-century-club-goal-shows` (running-with-pace) ran
   `find` → `implement` ×2 → `checks` → `review` → `tests` → PR #48 and only
   died at `deploy`, the last step, on `npx expo config` failing to resolve
@@ -29,7 +32,9 @@ decision) and must not be re-proposed.
 
 ## R2 — Setup aborts on the first failing command and silently leaves the rest unrun
 
-- **Status:** open
+- **Status:** done — same run and commit as R1 (`9deb8b1`, 2026-08-19):
+  `setupFailureSummary` names the failing command's position and the exact
+  unrun tail in the failure detail and in `setup.log`.
 - **Observation:** running-with-pace's rig `setup` is three commands
   (`npm install`, `cd pace-node-js-server && npm install`,
   `cd pace-react-native && npm install`). In `bug-century-club-goal-shows` the
@@ -45,3 +50,21 @@ decision) and must not be re-proposed.
   class of failure.
 - **Rough cost to try:** small — one change to the setup runner's failure
   reporting.
+
+## R3 — rebase-train workflow
+
+- **Status:** accepted — decision D34 (2026-09-27); delivered by run
+  `feature-improvement-plan-rebase` (app-factory) from the self-review
+  `self-build-rebase-train-workflow`.
+- **Observation:** six of nine open running-with-pace PRs were CONFLICTING
+  (oldest 183 days) while the engine sat idle for 23 days; the founder rebased
+  them by hand in `.worktrees/pr<N>-rebase` checkouts and stalled on a push
+  nobody was authorised to make.
+- **Change:** `factory-run start --rig <rig> --workflow rebase-train --pr <n>`
+  — detached checkout of the fetched PR head, rebase onto `origin/<base>`,
+  bounded conflict-resolver agent (escalates rather than guesses), rig checks
+  and tests on the rebased tree, force-push of the PR branch with a lease
+  pinned to the fetched head sha. Never merges, never pushes the base branch,
+  never pushes on a red gate. Web console and skills carry the verb.
+- **Deferred (v2, D34 trigger):** `onFail` loop for rebase-induced check
+  failures, `--all-conflicting` sweep, non-default base branches, fork PRs.

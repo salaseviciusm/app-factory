@@ -834,6 +834,92 @@ reports and suggests only — remediation stays a founder action.
   0 * * * * /Users/morkus/src/app-factory/orchestration/bin/factory-run watchdog >> /Users/morkus/src/app-factory/orchestration/watchdog.log 2>&1
   ```
 
+## 12i. rebase-train: rebase one PR onto its base and force-push it back, never merging (implemented 2026-09-27; D34)
+
+Six of nine open running-with-pace PRs were CONFLICTING and the founder was
+rebasing them by hand. `rebase-train` gives the engine that verb, with one
+deliberate exception to the push invariant of §12e: the PR's **own** branch
+may be force-pushed, by lease, after green gates.
+
+```
+factory-run start --rig running-with-pace --workflow rebase-train --pr 88
+```
+
+- **Shape** (`workflows/rebase-train.json`, `"checkout": "pr"`): `rebase` →
+  `resolve` (agent, `conflict-resolver`, 30 min, `skipWhen: "no-conflict"`)
+  → `checks` → `tests` → `push` (`push-pr`) → `notify`
+  (`summaryFile: rebase-summary.md`). No `deploy` step, so the run ends
+  `done`; `awaiting-merge` is never entered. `--prompt` is optional (the
+  engine synthesises `Rebase PR #<n> onto <base>`); the run id is
+  `rebase-pr-<n>`. The console's New-run form shows a PR-number input for
+  this workflow only (`POST /api/runs` takes integer `pr`, 1..999999, with
+  `rebase-train` only).
+- **Detached checkout, origin-only refs.** Before any worktree exists the
+  PR is resolved with `gh pr view <n> --json number,url,title,body,state,
+  isCrossRepository,headRefName,baseRefName,headRefOid,mergeable` in the rig
+  checkout and classified (`classifyRebaseTarget`): only an OPEN, same-repo
+  PR whose base is the rig default branch and whose head is a real topic
+  branch qualifies; a refusal ends the run `failed` with nothing created.
+  Then `git fetch origin <base> <head>` and `git worktree add --detach
+  <worktrees>/<id> origin/<head>`. `run.branch` is never set, so every
+  `pushRunBranch` call site early-returns; no local branch is created, read,
+  or deleted. `run.rebase` records `pr, url, title, headRef, baseRef,
+  headShaBefore` (the sha actually fetched — the lease) and, as the run
+  proceeds, `baseSha, conflicted, conflictFiles, commitsBefore,
+  headShaAfter, commitsAfter`. `factory-run status <id>` prints a `rebase:`
+  line; `--json` carries the record unchanged.
+- **`rebase` step.** Setup-churned paths whose content still matches the
+  post-setup snapshot are restored (`git checkout -- <path>`, the deploy
+  gate's exact tolerance — pace's three `npm install`s rewrite a lockfile);
+  anything else dirty fails with `worktree dirty before rebase`. No
+  `--autostash`. Records `baseSha = rev-parse origin/<base>` and
+  `commitsBefore = rev-list --count origin/<base>..HEAD`, then the literal
+  `git rebase origin/<base>` (`rebase.log`). `classifyRebaseOutcome`: a
+  clean exit → `conflicted:false`; a stop with unmerged paths →
+  `conflicted:true` and `conflict.md` (files, PR title, base-side commits
+  `<merge-base>..<baseSha>`, hunks) written before the agent starts; a
+  failure with nothing unmerged → `git rebase --abort` and a failed step.
+- **`resolve` step.** Skipped on a clean rebase (`resolve skipped (rebase
+  was clean)`), and on a resume whose conflict was already resolved
+  (`conflicted:true`, no rebase in progress). The agent's word is not the
+  outcome: `RESOLVED` passes only with no rebase in progress, an empty
+  `git status --porcelain`, and no tracked file at HEAD matching
+  `^<<<<<<< `; `ESCALATED` or an `escalation.md` aborts the rebase and fails
+  the run with the file's first line (worktree kept, nothing pushed); any
+  other ending aborts and fails with `resolve agent finished but the rebase
+  is not complete`. No `onFail` loops: a red `checks`/`tests` after the
+  rebase is a semantic conflict for the founder.
+- **`push-pr` step.** Four invariants first (`classifyPushReadiness`):
+  `conflicted` recorded, no rebase in progress, `rev-list --count` unchanged
+  since before the rebase (no `--skip`, no squash), `merge-base
+  origin/<base> HEAD === baseSha`. Then the one command, built by
+  `pushPrBranchCommand` (which itself throws for the default branch, an
+  empty ref, or whitespace):
+  `git push --force-with-lease=refs/heads/<head>:<headShaBefore> origin
+  HEAD:refs/heads/<head>`. A lease failure (the branch moved since the
+  fetch) fails the step once naming the branch and both shas — no re-fetch,
+  no retry. Success records `headShaAfter`, `commitsAfter`, a `push/pr_head`
+  telemetry artifact, and GitHub's post-push mergeability (best-effort).
+- **Summary and cleanup.** `rebase-summary.md` is written on every exit (PR
+  url + title, both head shas, `<base>@<baseSha>`, the conflict outcome with
+  files, checks/tests, push, and the literal `Not merged`); notify posts it
+  plus the usage line. Cleanup of a `checkout:"pr"` run probes neither the
+  local branch nor gh — it removes the detached worktree and nothing else.
+- **Proofs.** The pure core lives in `web/lib/rebase.mjs` (pinned twice:
+  `rebase.test.mjs` and selftest); the selftest push-source scan now covers
+  the engine **and** that module through `pushLiteralAllowed` — a `git
+  push` literal passes only when it names `factory/` or carries both
+  `--force-with-lease=refs/heads/` and `HEAD:refs/heads/`; a planted
+  `git push origin main` still fails it. `test/rebase-train.test.mjs` runs
+  the real workflow against a local bare origin with a scripted `gh` and
+  `claude`: usage errors, a refused PR, a clean rebase to `done`, a
+  conflict resolved and pushed with an unchanged commit count, an
+  escalation, a lease failure with no retry, and cleanup.
+- **Out of scope (v2, D34 trigger):** an `onFail` loop for rebase-induced
+  check failures, an `--all-conflicting` sweep, non-default base branches,
+  fork PRs.
+- **First live run:** recorded below once executed.
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.

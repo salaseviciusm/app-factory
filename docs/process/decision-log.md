@@ -664,3 +664,56 @@ in the PR diff for review.
 founder-gated check, so a fixture-adding run will still park until `rigs.json` is
 pointed at `golden:bootstrap`. That one-line change is the consequential half and
 is the founder's call. Local half delivered as skip-hero PR #4.
+
+## D34 — rebase-train: the engine may force-push a PR's own branch, by lease, after green gates; it never merges (2026-09-27)
+
+**Context:** six of the nine open running-with-pace PRs were CONFLICTING and
+the founder was rebasing them by hand in ad-hoc `.worktrees/pr<N>-rebase`
+checkouts, then stalling on a push nobody was authorised to make. D26/D31
+pinned the engine's only push to `factory/<id>`; the self-review of
+2026-09-13 (`self-build-rebase-train-workflow`) asked for the rebase verb the
+engine was best placed to own. The deleted auto-merge machinery of D31 held
+the rebase halves (`writeConflictContext`, `rebaseInProgress`,
+`conflict-resolver.md`); the deploy-time merge welding was the defect, never
+the rebase.
+**Decision:** a new workflow, `rebase-train` (`checkout: "pr"`), is the one
+sanctioned exception to "the engine pushes only `factory/<id>`":
+`factory-run start --rig <rig> --workflow rebase-train --pr <n>` fetches the
+PR head, checks it out **detached** (no local branch created, read, or
+deleted; `run.branch` stays unset), rebases onto `origin/<base>`, lets a
+bounded conflict-resolver agent finish a stopped rebase (RESOLVED counts only
+with no rebase in progress, an empty status, and no conflict markers;
+ESCALATED aborts and fails the run for the founder), re-runs the rig checks
+and tests on the rebased tree, and force-pushes the PR branch. Bounds:
+- the push is `git push --force-with-lease=refs/heads/<head>:<sha fetched at
+  run start> origin HEAD:refs/heads/<head>` — a branch that moved since the
+  fetch is refused by the remote and the step fails once, naming the branch
+  and both shas; no re-fetch, no retry;
+- only after green gates, and only when the commit count across the rebase is
+  unchanged (no `--skip`, no squash) and HEAD's merge-base with the base is
+  the recorded base sha;
+- never the default branch: refused by the command builder itself, by
+  `classifyRebaseTarget` (head or base equal to the default branch, fork PRs,
+  closed/merged PRs), and by the selftest push-source scan, which now proves
+  both accepted shapes — `factory/` or the lease-pinned fully qualified PR
+  push — across the engine and `web/lib/rebase.mjs`; a planted
+  `git push origin main` still fails it;
+- never a merge: no deploy step, `awaiting-merge` is never entered, the run
+  ends `done` with the PR open and the GitHub diff as the review surface;
+- a red check or test after the rebase is a semantic conflict for the founder
+  (no `onFail` loop), the worktree is kept, nothing is pushed.
+Starting the run is the founder's authorisation of that one force-push; the
+factory-feature skill says so, and the standup's default proposal for a
+CONFLICTING PR is a rebase-train run.
+**v2 upgrade trigger (recorded, not built):** an `onFail` loop from
+`checks`/`tests` back to a resolver, an `--all-conflicting` sweep, and
+non-default base branches — each only once a live run has failed for want of
+it. Fork PRs stay refused.
+**Why:** the conflict backlog was the founder's evening work and the thing the
+engine is best at; the pre-D31 machinery already existed. Binding the
+exception to a lease on the fetched sha, to green gates, and to a fully
+qualified non-default ref keeps D26's invariant intact for everything the
+engine could damage (the base branch) while giving up the one thing that was
+never at risk (a PR's own topic branch, rewritten in place and still reviewed
+on GitHub).
+**First live run:** see docs/08 §12i.

@@ -36,6 +36,7 @@ import {
 } from "./lib/runs.mjs";
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
+import { PR_MAX } from "./lib/rebase.mjs";
 import { listFileRoots, resolveFileDownload } from "./lib/files.mjs";
 import {
   loadToken,
@@ -58,6 +59,8 @@ const MUTATION_LIMIT = new RateLimiter(10, 60 * 1000); // 10 mutations/min per I
 const PROMPT_CAP = 20000;
 // Follow-up guards, mirroring the CLI's classifyFollowup (which re-checks).
 const FOLLOWUP_WORKFLOWS = ["feature-dev", "bug-fix"];
+// The one workflow that starts from a PR number (see web/lib/rebase.mjs).
+const REBASE_WORKFLOW = "rebase-train";
 const FOLLOWUP_PARENT_STATES = ["awaiting-merge", "done", "closed"];
 
 // ---------- startup: host/port/token ----------
@@ -351,20 +354,37 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- POST /api/runs : start ----
   if (pathname === "/api/runs") {
-    const { rig, workflow, prompt, auto, preview } = body;
+    const { rig, workflow, prompt, auto, preview, pr } = body;
     if (typeof rig !== "string" || !rigExists(rig)) {
       return sendJson(res, 400, { error: `unknown rig: ${String(rig).slice(0, 100)}` });
     }
     if (typeof workflow !== "string" || !workflowExists(workflow)) {
       return sendJson(res, 400, { error: `unknown workflow: ${String(workflow).slice(0, 100)}` });
     }
-    if (typeof prompt !== "string" || !prompt.trim() || prompt.length > PROMPT_CAP) {
-      return sendJson(res, 400, { error: `prompt must be a non-empty string (max ${PROMPT_CAP} chars)` });
+    // rebase-train takes a PR number instead of a prompt (the engine
+    // synthesises "Rebase PR #<n> onto <base>"); `pr` is refused everywhere
+    // else so a stray number can never start the wrong workflow.
+    const rebaseTrain = workflow === REBASE_WORKFLOW;
+    if (pr !== undefined && pr !== null) {
+      if (!rebaseTrain) return sendJson(res, 400, { error: `pr is only valid with workflow ${REBASE_WORKFLOW}` });
+      if (!Number.isInteger(pr) || pr < 1 || pr > PR_MAX) {
+        return sendJson(res, 400, { error: `pr must be a positive integer up to ${PR_MAX}` });
+      }
+    } else if (rebaseTrain) {
+      return sendJson(res, 400, { error: `workflow ${REBASE_WORKFLOW} requires pr (the PR number to rebase)` });
+    }
+    const promptGiven = prompt !== undefined && prompt !== null && prompt !== "";
+    if (rebaseTrain ? promptGiven && (typeof prompt !== "string" || prompt.length > PROMPT_CAP) : typeof prompt !== "string" || !prompt.trim() || prompt.length > PROMPT_CAP) {
+      return sendJson(res, 400, {
+        error: rebaseTrain ? `prompt is optional for ${REBASE_WORKFLOW} but must be a string (max ${PROMPT_CAP} chars) when given` : `prompt must be a non-empty string (max ${PROMPT_CAP} chars)`,
+      });
     }
     if (preview !== undefined && preview !== null && typeof preview !== "boolean") {
       return sendJson(res, 400, { error: "preview must be a boolean (or omitted for the rig default)" });
     }
-    const args = ["start", "--rig", rig, "--workflow", workflow, "--prompt", prompt];
+    const args = ["start", "--rig", rig, "--workflow", workflow];
+    if (rebaseTrain) args.push("--pr", String(pr));
+    if (!rebaseTrain || (promptGiven && prompt.trim())) args.push("--prompt", prompt);
     if (auto === true) args.push("--auto");
     if (preview === true) args.push("--preview");
     if (preview === false) args.push("--no-preview");

@@ -50,6 +50,14 @@ done
    a count. Report mergeability (`gh pr list --json mergeable`) alongside checks —
    they are different axes, and calling a CONFLICTING PR "passing" because its
    checks are green has misled three standups running.
+   **A CONFLICTING PR's default proposal is a rebase-train run**: in "Needs
+   founder" propose `factory-run start --rig <rig> --workflow rebase-train
+   --pr <n>` (one line per conflicting PR, oldest first) with the recommended
+   default "yes" so a one-word reply starts it. Say what it does in the same
+   line — rebases the PR branch onto main, resolves or escalates conflicts,
+   re-runs checks, force-pushes the PR branch, never merges — because the
+   founder's yes authorises that force-push. Never propose the founder rebase
+   by hand as the default; that is the evening work the engine exists for.
    "Yesterday" is composed from this: merged PRs and commits per rig. Most factory
    output currently arrives outside the engine; a standup that leads with engine
    state reports an empty pipeline on the busiest days.
@@ -152,6 +160,12 @@ is one of them.
   review", `failing-checks` = "checks failing"), age (`ageDays`), and check status
   (`checks`). Order by attention urgency, then age. PRs with attention `none` are
   omitted unless nothing else is open; a rig's `error` entry gets one honest line.
+  A CONFLICTING PR (from the `gh` census above) carries its rebase-train
+  proposal on the same line; a `rebase-pr-<n>` run already in flight or parked
+  (`factory-run status --json`, workflow `rebase-train`) is reported there
+  instead of re-proposed — `failed` at `resolve` means an escalation the
+  founder must read, `failed` at `checks`/`tests` a semantic conflict, `done`
+  a rebased PR ready for review.
   Where a PR belongs to a run you already listed (pending merge), fold the link
   into that line instead of repeating it.
 
