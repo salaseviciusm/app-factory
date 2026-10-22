@@ -2445,3 +2445,64 @@ since 2026-09-13.
    `git checkout` from gone. Carried unresolved for over two weeks.
 4. **Pace merges — day 7 with none.** 9 open PRs, 6 CONFLICTING; #97 and #102 are green
    and MERGEABLE and only need his review.
+
+## 2026-10-22 08:00 — standup (first post since 2026-09-27; 25-day blackout root-caused)
+
+**The record has a 25-day hole, and the cause is Slack OAuth, not the crons.** The last
+dated block before this one is 2026-09-27 11:00. `factory-daily-standup` and
+`factory-standup-cutoff` both fired every day through that window and both failed with
+`FailoverError: Failed to authenticate: OAuth session expired and could not be refreshed`.
+`factory-standup-cutoff` is at **error (24x)**. The failure notices were posted into
+`#factory-standup` daily — visible in the channel on 10-16, 10-17, 10-18, 10-19, 10-20 and
+10-21 (the read is paginated; the streak starts earlier than 10-16) — and nothing escalated
+them. The 900 → 1800s timeout fix of 2026-09-26 held; this is a different fault that landed
+on top of it. Today's 08:00 run authenticated, so the standup is live again.
+
+### Verified state (all rigs fetched; `origin/main` read, never local)
+
+- **running-with-pace:** `origin/main` **`8f5d2df6`** (2026-10-17). **21 merges landed
+  since 09-27** in three waves (10-10, 10-11, 10-17) — *every one from the founder's own
+  `codex/*` branches*, zero from the engine. Quiet 5 days since. **21 open PRs:** 16
+  MERGEABLE with all three checks green (#126–#138, #116, #115, #88), #83 MERGEABLE with no
+  checks, and 4 CONFLICTING (#112 and #81 green-checked, #78, #86 draft). Eight of them
+  (#131–#138) were opened in the last 36 hours. **The day-18 dirty tree is RESOLVED** — the
+  tree is clean bar 5 untracked `.agents/skills/` dirs; the ~128 single-copy lines are no
+  longer at risk. Local `main` is level with origin for the first time in weeks.
+- **skip-hero:** `origin/main` **`c2bb590`** (2026-10-10, PR #11 from `codex/ui`), zero open
+  PRs, nothing in 12 days. The local clone sits on `codex/ui`, 4 behind origin. The
+  provisional launch date of **2026-09-28 passed 24 days ago** and was never replaced.
+  Marketing-calendar gate is **day 38** open since `59fd17f` (09-14). The pose-parity commit
+  `893ab34` is intact at `spike/android-pose-parity` — D34's durable fix held through the
+  blackout, as designed.
+- **app-factory:** `origin/main` **`e305d8f`** — **zero commits in 25 days**, clean tree.
+  Two runs still in `awaiting-merge` since 09-27: **PR #7** (cleanup ancestry guard,
+  MERGEABLE) and **PR #8** (rebase-train workflow, now CONFLICTING). No CI is configured in
+  this repo, so both show an empty check rollup; both passed their run's own checks+review
+  before parking.
+- **Engine:** zero runs in flight, zero gates open, last terminal state 2026-09-27.
+  30-day spend **$26.86**, all of it incurred on 09-27.
+- **pullup** dormant 77 days under D27. **web-clock** unchanged; every blocker is a founder
+  dependency. All four `apps/*/STATUS.md` files are 25 days stale and were not rewritten
+  this morning.
+
+### Today
+
+No sub-agent dispatch. The engine has been idle for 25 days while the founder shipped 21
+PRs himself; nothing today is short of hands, and the three items that matter are his
+decisions.
+
+My own work, both cheap:
+
+1. Refresh the four `apps/*/STATUS.md` files against this morning's verified state, so the
+   per-app records stop claiming 2026-09-26 facts.
+2. Hold for the 11:00 cutoff and confirm `factory-standup-cutoff` clears its 24-error
+   streak now that OAuth is refreshed. If it fails again, the OAuth refresh is not durable
+   and that becomes the day's top item.
+
+Asked of the founder (posted to #factory-standup, defaults stated):
+
+1. Merge app-factory **#7**; **#8** needs a rebase or a close — default **merge #7, close #8
+   and re-run it on current main**.
+2. skip-hero is 24 days past an unnamed launch date with 12 quiet days — default **formally
+   shelve it and make Pace the priority app**, reversing the priority half of D27.
+3. Send the standup-liveness watchdog to `factory-self-review` — default **yes**.
