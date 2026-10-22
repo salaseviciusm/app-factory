@@ -45,3 +45,26 @@ decision) and must not be re-proposed.
   class of failure.
 - **Rough cost to try:** small — one change to the setup runner's failure
   reporting.
+
+## R3 — Cleanup force-deletes a merged PR's branch without checking the tip's ancestry
+
+- **Status:** accepted
+- **Observation:** `classifyCleanup()` returned `forceBranch: true` for any
+  terminal run whose recorded PR GitHub reports merged, and `cleanupRun` then
+  ran `git branch -D factory/<id>` against whatever commit currently sat on
+  that branch name. Run `feature-android-pose-parity-spike` (skip-hero, PR #3
+  merged in August) had the unrelated pose-parity spike commit `893ab34`
+  parked on its branch name from 2026-09-14; the 30-minute reconcile pass
+  deleted it four times in thirteen days, and three syncs wrote the loss off
+  as bad luck. Root-caused in decision D34 (`docs/process/decision-log.md`).
+- **Proposed change:** in the engine (`orchestration/bin/factory-run`), gate
+  the forced delete on the branch tip being an ancestor of the PR head
+  (`headRefOid`, added to the shared `gh pr view` contract), the merge commit,
+  or `origin/<default>`; skip with `branch tip diverged from merged PR`
+  otherwise, and log every branch delete with its sha in the run's
+  `engine.log`. Pinned by selftest arms and
+  `orchestration/test/cleanup-diverged-tip.test.mjs`. Per D34's
+  anti-instruction, the guard must not be simplified away on the grounds that
+  `factory/*` is engine-owned.
+- **Rough cost to try:** small — one input to the pure decision core, three
+  `merge-base --is-ancestor` probes, two log lines, and the regression test.

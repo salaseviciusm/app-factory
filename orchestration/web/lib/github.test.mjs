@@ -84,7 +84,7 @@ test("pr command builders emit the exact gh argv", () => {
   assert.deepEqual(prCreateCommand({ branch: "factory/feature-x", base: "main", title: "T", body: "B" }), [
     "pr", "create", "--head", "factory/feature-x", "--base", "main", "--title", "T", "--body", "B",
   ]);
-  assert.deepEqual(prStatusCommand(12), ["pr", "view", "12", "--json", "state,mergedAt,mergeCommit"]);
+  assert.deepEqual(prStatusCommand(12), ["pr", "view", "12", "--json", "state,mergedAt,mergeCommit,headRefOid"]);
 });
 
 test("parsePrList keeps well-formed open PRs and degrades garbage to []", () => {
@@ -235,15 +235,36 @@ test("parsePrAttention excludes drafts and degrades garbage safely", () => {
 
 test("parsePrStatus normalizes gh pr view JSON to open/merged/closed", () => {
   assert.deepEqual(
-    parsePrStatus({ state: "MERGED", mergedAt: "2026-08-09T10:00:00Z", mergeCommit: { oid: "abc123def456" } }),
-    { state: "merged", mergedAt: "2026-08-09T10:00:00Z", mergeCommit: "abc123def456" }
+    parsePrStatus({
+      state: "MERGED",
+      mergedAt: "2026-08-09T10:00:00Z",
+      mergeCommit: { oid: "abc123def456" },
+      headRefOid: "0f9e8d7c6b5a43210f9e8d7c6b5a43210f9e8d7c",
+    }),
+    {
+      state: "merged",
+      mergedAt: "2026-08-09T10:00:00Z",
+      mergeCommit: "abc123def456",
+      headRefOid: "0f9e8d7c6b5a43210f9e8d7c6b5a43210f9e8d7c",
+    }
   );
-  assert.deepEqual(parsePrStatus({ state: "OPEN", mergedAt: null, mergeCommit: null }), {
+  assert.deepEqual(parsePrStatus({ state: "OPEN", mergedAt: null, mergeCommit: null, headRefOid: "abc123def456" }), {
     state: "open",
     mergedAt: null,
     mergeCommit: null,
+    headRefOid: "abc123def456",
   });
-  assert.deepEqual(parsePrStatus({ state: "CLOSED" }), { state: "closed", mergedAt: null, mergeCommit: null });
+  assert.deepEqual(parsePrStatus({ state: "CLOSED" }), {
+    state: "closed",
+    mergedAt: null,
+    mergeCommit: null,
+    headRefOid: null,
+  });
+  // headRefOid absent or blank (older gh, partial JSON) degrades to null so
+  // cleanup's ancestry probe simply skips that target.
+  assert.equal(parsePrStatus({ state: "MERGED", mergeCommit: { oid: "abc" } }).headRefOid, null);
+  assert.equal(parsePrStatus({ state: "MERGED", headRefOid: "" }).headRefOid, null);
+  assert.equal(parsePrStatus({ state: "MERGED", headRefOid: 42 }).headRefOid, null);
   assert.equal(parsePrStatus({ state: "DRAFT?" }), null);
   assert.equal(parsePrStatus(null), null);
   assert.equal(parsePrStatus("MERGED"), null);

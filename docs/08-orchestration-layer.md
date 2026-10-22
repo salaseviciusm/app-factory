@@ -669,14 +669,29 @@ branch is merged — checked against the run's own rig repo (multi-rig
 correct). Merge truth for runs with a recorded PR is GitHub's (`gh pr view`,
 after a `git fetch origin`): a squash/rebase-merged PR never makes
 `factory/<id>` a local ancestor of the default branch, so the provably-merged
-branch is deleted with `git branch -D`; runs without a PR keep the
-conservative local ancestor check and `git branch -d`. Worktree removal is
-never forced (`git worktree remove` without `--force`), an unmerged-PR run is
-always skipped, clean worktrees on unmerged branches are only removed with
-`--remove-unmerged-worktrees` (branch always kept), and the orphan scan
-deletes a worktree directory only when its `.git` gitdir pointer is missing or
-dangling; a valid worktree of any rig repo is never classified as an orphan
-(without a `run.json` it is reported, not touched).
+branch is deleted with `git branch -D` — but only when the branch **tip** is
+an ancestor of the PR head (`headRefOid`), the merge commit, or
+`origin/<default>` (probed in that order with `git merge-base --is-ancestor`;
+a missing object or failing probe counts as "not an ancestor"). A merged PR
+proves the branch *name* once held merged work, not that the commit now on it
+is recoverable (D34: an unrelated commit parked on
+`factory/feature-android-pose-parity-spike` was force-deleted four times). A
+diverged tip is treated exactly like an unmerged branch: skipped with
+`branch tip diverged from merged PR (tip <sha> is not an ancestor of PR head
+<sha>, …)`, or `remove-worktree` under `--remove-unmerged-worktrees` with the
+branch kept. Runs without a PR keep the conservative local ancestor check and
+`git branch -d`; founder `--discard` (single run id, explicit) still overrides
+ancestry. Every branch delete is preceded by a
+`cleanup: deleting branch <branch> at <full sha> with git branch -D|-d` line
+in the run's `engine.log`, and every diverged skip writes
+`cleanup: kept <branch> at <sha>` there (dry runs included), so a deletion is
+attributable from the run record after the reconcile log rotates. Worktree
+removal is never forced (`git worktree remove` without `--force`), an
+unmerged-PR run is always skipped, clean worktrees on unmerged branches are
+only removed with `--remove-unmerged-worktrees` (branch always kept), and the
+orphan scan deletes a worktree directory only when its `.git` gitdir pointer
+is missing or dangling; a valid worktree of any rig repo is never classified
+as an orphan (without a `run.json` it is reported, not touched).
 
 ## 12e. PR-gated merges everywhere; the sync-time harness restart (2026-08-11; supersedes deploy-step merge-conflict recovery)
 

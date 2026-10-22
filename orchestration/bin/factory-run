@@ -2898,10 +2898,21 @@ function fmtBytes(n) {
  *  kept cancelled run). `merged` is the local ancestor probe; `prMerged` is
  *  GitHub's verdict on the run's recorded PR — the source of merge truth for
  *  PR-gated runs, because a squash/rebase merge never makes the run branch an
- *  ancestor of the default branch. A prMerged-only clean carries
- *  `forceBranch: true`: the branch is provably merged on origin, so forced
- *  local deletion (`git branch -D`) is safe and required. */
-function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged, prMerged }, opts = {}) {
+ *  ancestor of the default branch. `tipMerged` is the D34 ancestry guard: true
+ *  only when the local branch TIP is an ancestor of the merged PR's head, its
+ *  merge commit, or origin's default branch. A prMerged clean carries
+ *  `forceBranch: true` only when tipMerged is also true — the PR being merged
+ *  proves the branch NAME once held merged work, but only the tip's ancestry
+ *  proves the commits about to be deleted are recoverable. A merged PR whose
+ *  local tip diverged (an unrelated commit parked on the same branch name) is
+ *  treated exactly like an unmerged branch: skip with the diverged reason, or
+ *  `remove-worktree` under the same opt-in. Never "simplify" this away on the
+ *  grounds that factory/* is engine-owned — the namespace is, the tip is not
+ *  (D34). `tipSha`/`prHeadSha` are short shas for the reason text only. */
+function classifyCleanup(
+  { state, worktreeExists, branchExists, dirty, merged, prMerged, tipMerged, tipSha = "unknown", prHeadSha = "unknown" },
+  opts = {}
+) {
   if (!TERMINAL_STATES.includes(state)) return { action: "skip", reason: `state '${state}' is not terminal` };
   if (!worktreeExists && !branchExists) return { action: "none", reason: "nothing to clean" };
   if (opts.discard) {
@@ -2914,6 +2925,13 @@ function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged, p
     }
     return { action: "skip", reason: "branch not merged into default branch" };
   }
+  if (branchExists && !merged && prMerged && tipMerged !== true) {
+    const why = `branch tip diverged from merged PR (tip ${tipSha} is not an ancestor of PR head ${prHeadSha}, its merge commit, or origin's default branch)`;
+    if (worktreeExists && opts.removeUnmergedWorktrees) {
+      return { action: "remove-worktree", reason: `${why}; branch kept, clean worktree removed (--remove-unmerged-worktrees)` };
+    }
+    return { action: "skip", reason: why };
+  }
   if (branchExists && !merged && prMerged) {
     return { action: "clean", reason: "PR merged on GitHub (squash/rebase merge — forced local branch delete)", forceBranch: true };
   }
@@ -2922,9 +2940,13 @@ function classifyCleanup({ state, worktreeExists, branchExists, dirty, merged, p
 
 /** Reclaim one run's worktree/branch when safe. Never forced past the
  *  evidence: `git worktree remove` without --force, and `git branch -D` only
- *  when the run's PR is provably merged on origin (or on founder --discard);
- *  runs without a recorded PR keep the conservative local ancestor check and
- *  `git branch -d`. Returns {id, action, reason, freedBytes}. */
+ *  when the run's PR is provably merged on origin AND the local branch tip is
+ *  an ancestor of that PR's head / merge commit / origin default (D34), or on
+ *  founder --discard; runs without a recorded PR keep the conservative local
+ *  ancestor check and `git branch -d`. Every branch delete is preceded by a
+ *  `cleanup: deleting branch` engine.log line naming the tip sha, so a
+ *  deletion is attributable from the run record. Returns
+ *  {id, action, reason, freedBytes}. */
 function cleanupRun(run, opts = {}) {
   const worktree = path.join(WORKTREES_DIR, run.id);
   const branch = runBranch(run);
@@ -2971,6 +2993,16 @@ function cleanupRun(run, opts = {}) {
   // both probes are best-effort — on gh failure the conservative local
   // verdict stands.
   let prMerged = false;
+  // D34 ancestry guard: GitHub's verdict is about the PR, not about whatever
+  // commit currently sits on the local branch name. The tip must be an
+  // ancestor of the PR head, the merge commit, or origin/<default> (tried in
+  // that order — the head object may never have been fetched after a squash
+  // merge) before a forced delete is licensed. Probes never throw; a missing
+  // object or non-ancestor simply fails, which is the conservative outcome.
+  let tipMerged = false;
+  const tipProbe = branchExists ? git(rig.path, ["rev-parse", `refs/heads/${branch}`]) : null;
+  const tipSha = tipProbe && tipProbe.status === 0 ? tipProbe.stdout.trim() : null;
+  let prHeadSha = null;
   if (branchExists && !merged && run.pr && run.pr.number && !opts.discard) {
     runCommand("git fetch origin", rig.path, path.join(runDirOf(run.id), "pr.log"), 2);
     const view = ghRun(run, prStatusCommand(run.pr.number), 2, rig.path);
@@ -2980,9 +3012,41 @@ function cleanupRun(run, opts = {}) {
     } catch {}
     const status = view.ok ? parsePrStatus(viewJson) : null;
     prMerged = !!(status && status.state === "merged");
+    if (prMerged) {
+      prHeadSha = status.headRefOid || null;
+      const targets = [status.headRefOid, status.mergeCommit, `origin/${rig.defaultBranch}`].filter(Boolean);
+      tipMerged =
+        !!tipSha &&
+        targets.some((target) => {
+          try {
+            return git(rig.path, ["merge-base", "--is-ancestor", tipSha, target]).status === 0;
+          } catch {
+            return false;
+          }
+        });
+    }
   }
-  const decision = classifyCleanup({ state: run.state, worktreeExists, branchExists, dirty, merged, prMerged }, opts);
+  const shortSha = (sha) => (typeof sha === "string" && sha ? sha.slice(0, 7) : "unknown");
+  const decision = classifyCleanup(
+    {
+      state: run.state,
+      worktreeExists,
+      branchExists,
+      dirty,
+      merged,
+      prMerged,
+      tipMerged,
+      tipSha: shortSha(tipSha),
+      prHeadSha: shortSha(prHeadSha),
+    },
+    opts
+  );
   const result = { id: run.id, action: decision.action, reason: decision.reason, freedBytes: 0 };
+  if (prMerged && !tipMerged && !merged && branchExists) {
+    // Durable record of the refusal (also on dry runs — it is a no-op record):
+    // the reconcile log rotates, engine.log does not.
+    log(runDirOf(run.id), `cleanup: kept ${branch} at ${tipSha || "unknown"} (${decision.action}: ${decision.reason})`);
+  }
   if (decision.action === "skip" || decision.action === "none") return result;
   if (opts.dryRun) {
     return { ...result, action: `would-${decision.action}`, freedBytes: worktreeExists ? dirSizeBytes(worktree) : 0 };
@@ -2999,6 +3063,7 @@ function cleanupRun(run, opts = {}) {
   git(rig.path, ["worktree", "prune"]);
   if ((decision.action === "clean" || forced) && branchExists) {
     const forceBranch = forced || decision.forceBranch === true;
+    log(runDirOf(run.id), `cleanup: deleting branch ${branch} at ${tipSha || "unknown"} with git branch ${forceBranch ? "-D" : "-d"} (${decision.reason})`);
     const del = git(rig.path, ["branch", forceBranch ? "-D" : "-d", branch]);
     if (del.status !== 0) {
       return { ...result, action: "error", reason: `git branch ${forceBranch ? "-D" : "-d"} failed: ${(del.stderr || del.stdout || "").trim().slice(0, 200)}` };
@@ -5072,7 +5137,9 @@ function cmdSelftest() {
   // branch delete — while runs without a PR keep the conservative local
   // ancestor behaviour.
   const cls = (over, opts) =>
-    classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, prMerged: false, ...over }, opts).action;
+    classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, prMerged: false, tipMerged: false, ...over }, opts).action;
+  // Diverged fixture (D34): PR merged on GitHub, local tip unrelated to it.
+  const diverged = { state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: true, tipMerged: false };
   const cleanupChecks = [
     ["in-flight run skipped", cls({ state: "running:implement" }) === "skip"],
     ["awaiting-merge run skipped while unmerged", (() => { const d = classifyCleanup({ state: "awaiting-merge", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: false }); return d.action === "skip" && d.reason === "branch not merged into default branch"; })()],
@@ -5080,7 +5147,16 @@ function cmdSelftest() {
     ["dirty worktree skipped even when merged", cls({ dirty: true }) === "skip"],
     ["unmerged branch skipped by default", cls({ merged: false }) === "skip"],
     ["merged and clean reclaimed", cls({}) === "clean"],
-    ["squash-merged PR cleans without local ancestry", (() => { const d = classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: true }); return d.action === "clean" && d.forceBranch === true; })()],
+    ["squash-merged PR cleans without local ancestry", (() => { const d = classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: false, prMerged: true, tipMerged: true }); return d.action === "clean" && d.forceBranch === true && d.reason === "PR merged on GitHub (squash/rebase merge — forced local branch delete)"; })()],
+    ["diverged tip on a merged PR is skipped, never forced (D34)", (() => { const d = classifyCleanup(diverged); return d.action === "skip" && /branch tip diverged from merged PR/.test(d.reason) && d.forceBranch !== true; })()],
+    ["diverged tip reason renders unknown shas when omitted", /tip unknown is not an ancestor of PR head unknown/.test(classifyCleanup(diverged).reason)],
+    ["diverged tip reason names both short shas when given", /tip 893ab34 is not an ancestor of PR head b0b0b0b/.test(classifyCleanup({ ...diverged, tipSha: "893ab34", prHeadSha: "b0b0b0b" }).reason)],
+    ["diverged tip: opt-in removes only the clean worktree", (() => { const d = classifyCleanup(diverged, { removeUnmergedWorktrees: true }); return d.action === "remove-worktree" && /branch tip diverged from merged PR/.test(d.reason); })()],
+    ["diverged tip without a worktree is skipped even under opt-in", classifyCleanup({ ...diverged, worktreeExists: false }, { removeUnmergedWorktrees: true }).action === "skip"],
+    ["dirty worktree outranks the diverged verdict", (() => { const d = classifyCleanup({ ...diverged, dirty: true }); return d.action === "skip" && d.reason === "worktree has uncommitted changes"; })()],
+    ["founder discard overrides ancestry", classifyCleanup(diverged, { discard: true }).action === "discard"],
+    ["tipMerged true still forces the merged-PR delete", (() => { const d = classifyCleanup({ ...diverged, tipMerged: true }); return d.action === "clean" && d.forceBranch === true; })()],
+    ["tipMerged undefined is treated as diverged", classifyCleanup({ ...diverged, tipMerged: undefined }).action === "skip"],
     ["unmerged-PR run still skipped", cls({ merged: false, prMerged: false }) === "skip"],
     ["locally-merged branch never needs the forced delete", classifyCleanup({ state: "done", worktreeExists: true, branchExists: true, dirty: false, merged: true, prMerged: false }).forceBranch !== true],
     ["dirty worktree outranks a merged PR", cls({ dirty: true, merged: false, prMerged: true }) === "skip"],
@@ -5191,7 +5267,7 @@ function cmdSelftest() {
     ["missing gh skips with a warning", (() => { const d = pc({ ghAvailable: false }); return d.action === "skip" && d.warn === true; })()],
     ["recorded PR is reused, never recreated", (() => { const d = pc({ recordedPr: { number: 7 } }); return d.action === "reuse" && /#7/.test(d.reason); })()],
     ["existing open PR is reused, never duplicated", (() => { const d = pc({ openPr: { number: 9 } }); return d.action === "reuse" && /#9/.test(d.reason); })()],
-    ["gh pr status argv matches the shared contract", JSON.stringify(prStatusCommand(3)) === JSON.stringify(["pr", "view", "3", "--json", "state,mergedAt,mergeCommit"])],
+    ["gh pr status argv matches the shared contract", JSON.stringify(prStatusCommand(3)) === JSON.stringify(["pr", "view", "3", "--json", "state,mergedAt,mergeCommit,headRefOid"])],
   ];
   for (const [name, ok] of prChecks) {
     console.log(`pr-creation ${name}: ${ok ? "ok" : "FAIL"}`);
