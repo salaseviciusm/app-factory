@@ -43,11 +43,19 @@
  *   factory-run sync <run_id> | --all    (refresh awaiting-merge runs' GitHub PRs:
  *                                         merged -> done [harness-restart rigs also
  *                                         restart the gateway/web console once the
- *                                         rig checkout contains the merge], closed ->
+ *                                         rig checkout contains the merge AND the
+ *                                         gateway is idle, else defer it to
+ *                                         harness-restart], closed ->
  *                                         closed [worktree torn down, branch kept],
  *                                         open -> unchanged. --all sweeps every
  *                                         awaiting-merge run. The only sanctioned
  *                                         exit from awaiting-merge)
+ *   factory-run harness-restart [--approve] [--dry-run] [--json]
+ *                                        (apply sync-deferred harness restarts once
+ *                                         the gateway is idle: one restart per rig,
+ *                                         24h escalation, never forced. --approve is
+ *                                         the founder go under policy.deploy hold.
+ *                                         Run by the launchd reconcile pass)
  *   factory-run followup <run_id> --workflow <feature-dev|bug-fix> --prompt "<text>" [--auto]
  *                                        (chained run on a green terminal parent:
  *                                         continues the parent's branch and worktree
@@ -2071,39 +2079,142 @@ function publishDeploy(run, rig) {
   return easPublish(run, rig);
 }
 
-/** Pure gate for the sync-time harness restart (exercised by selftest): only
- *  harness-restart rigs restart, and only once the rig checkout's default
- *  branch actually contains the merged commit — the restart relaunches the
- *  live checkout, so restarting before the founder pulls would reload stale
- *  code. The degrade is an actionable message; the engine never pushes or
- *  pulls the default branch to fix it. */
-function classifyHarnessRestart({ deployType, containsMerge }) {
-  if (deployType !== "harness-restart") {
-    return { restart: false, reason: `deploy type '${deployType}' has no harness restart` };
-  }
-  if (!containsMerge) {
-    return { restart: false, reason: "local default branch lacks the merge commit — pull, then restart manually (the engine never pushes or pulls it)" };
-  }
-  return { restart: true, reason: "merge commit present in the rig checkout" };
+/** Quiet window for the harness-restart idleness gate: a gateway session
+ *  touched within this long counts as live work (D35). */
+const HARNESS_RESTART_QUIET_MS = 10 * 60 * 1000;
+/** A deferred harness restart older than this escalates (once per window). */
+const HARNESS_RESTART_ESCALATE_MS = 24 * 60 * 60 * 1000;
+
+/** "HH:MMZ" for a ms-epoch or ISO timestamp (pure); "?" when unparseable. */
+function clockZ(t) {
+  const ms = typeof t === "number" ? t : Date.parse(t || "");
+  return Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(11, 16)}Z` : "?";
 }
 
-/** Sync-time restart for harness-restart rigs (app-factory): restart the
- *  OpenClaw gateway so skills/engine reload, and — when the merged commit
- *  touched web-console sources — rebuild/restart the web console. Called from
- *  the sync `done` path once the merge commit `sha` is confirmed present in
- *  the rig checkout. Returns {ok, summary}; a failed console restart records
- *  run.deployWarning and notifies, but the run stays done — the merge is
- *  durable on origin. */
-function restartHarness(run, rig, sha) {
+/** Pure gate for the sync-time harness restart (exercised by selftest). D35:
+ *  the restart relaunches the gateway that may be running the very turn that
+ *  called sync, so it fires only when the gateway is provably idle. Precedence:
+ *   1. non-harness rigs never restart;
+ *   2. a rig checkout lacking the merge degrades to an actionable message —
+ *      the engine never pushes or pulls the default branch to fix it;
+ *   3. policy.deploy "hold" defers until the founder approves;
+ *   4. an unknown gateway (probe failed: `gateway === null`) defers — fail
+ *      closed;
+ *   5. any running task, or any session touched within `quietMs` of `nowMs`,
+ *      defers and names each busy item;
+ *   6. otherwise restart.
+ *  Labels and keys are only ever printed — no name decides anything (no cron
+ *  special case, no allowlist). No I/O, no clock or env reads: `nowMs` and the
+ *  probe snapshot are inputs. */
+function classifyHarnessRestart({ deployType, containsMerge, deployPolicy, approved, gateway, nowMs, quietMs }) {
+  if (deployType !== "harness-restart") {
+    return { restart: false, defer: false, reason: `deploy type '${deployType}' has no harness restart`, busy: [] };
+  }
+  if (!containsMerge) {
+    return { restart: false, defer: false, reason: "local default branch lacks the merge commit — pull, then restart manually (the engine never pushes or pulls it)", busy: [] };
+  }
+  if (deployPolicy === "hold" && approved !== true) {
+    return { restart: false, defer: true, reason: "rig policy.deploy is hold — the restart waits for founder approval (`factory-run harness-restart --approve`)", busy: [] };
+  }
+  if (gateway === null || gateway === undefined) {
+    return { restart: false, defer: true, reason: "gateway idleness unknown (probe failed) — deferring", busy: [] };
+  }
+  const busy = [];
+  for (const t of gateway.runningTasks || []) {
+    busy.push(`task ${t.label || "(unlabelled)"} (${t.runtime || "?"}) running since ${clockZ(t.startedAt)}`);
+  }
+  for (const s of gateway.recentSessions || []) {
+    const updated = typeof s.updatedAt === "number" ? s.updatedAt : Date.parse(s.updatedAt || "");
+    // An unreadable updatedAt is unknown, and unknown fails closed.
+    if (Number.isFinite(updated) && nowMs - updated >= quietMs) continue;
+    const ago = Number.isFinite(updated) ? `${Math.max(0, Math.round((nowMs - updated) / 1000))}s ago` : "at an unknown time";
+    busy.push(`session ${s.key || s.label || "(unkeyed)"} active ${ago}`);
+  }
+  if (busy.length) {
+    return { restart: false, defer: true, reason: `deferred: gateway busy — ${busy.join("; ")}`, busy };
+  }
+  return { restart: true, defer: false, reason: "merge commit present in the rig checkout and the gateway is idle", busy: [] };
+}
+
+/** Escalation predicate for a deferred harness restart (pure, exercised by
+ *  selftest): once the record is older than HARNESS_RESTART_ESCALATE_MS,
+ *  escalate at most once per that window, deduped by its `escalatedAt`. */
+function harnessRestartEscalationDue(record, nowMs) {
+  const deferred = Date.parse((record && record.deferredAt) || "");
+  if (!Number.isFinite(deferred) || nowMs - deferred < HARNESS_RESTART_ESCALATE_MS) return false;
+  const last = Date.parse(record.escalatedAt || "");
+  return !Number.isFinite(last) || nowMs - last >= HARNESS_RESTART_ESCALATE_MS;
+}
+
+/** One openclaw CLI call with stdin closed (`< /dev/null`), spawned directly
+ *  — never through a login shell, whose profile could re-order PATH. Returns
+ *  {status, stdout, output}; status -1 on spawn error or timeout. */
+function openclawSpawn(args, timeoutMs, logFile) {
+  const res = spawnSync("openclaw", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: timeoutMs,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  const status = res.error ? -1 : res.status;
+  const output = (res.stdout || "") + (res.stderr || "") + (res.error ? String(res.error.message) : "");
+  if (logFile) fs.appendFileSync(logFile, `\n$ openclaw ${args.join(" ")} < /dev/null\n${output}\n(exit ${status})\n`);
+  return { status, stdout: res.stdout || "", output };
+}
+
+/** Snapshot of live gateway work for classifyHarnessRestart: running tasks
+ *  (catch long cron turns, whose session updatedAt is stamped only at start)
+ *  plus sessions touched within the quiet window (catch the founder's live
+ *  Slack conversation). Null when either command fails or its JSON does not
+ *  parse — the gate treats null as unknown and defers. */
+function probeGatewayActivity() {
+  const quietMin = String(Math.ceil(HARNESS_RESTART_QUIET_MS / 60000));
+  const tasks = openclawSpawn(["tasks", "list", "--json", "--status", "running"], 30000);
+  if (tasks.status !== 0) return null;
+  const sessions = openclawSpawn(["sessions", "--active", quietMin, "--json"], 30000);
+  if (sessions.status !== 0) return null;
+  const t = parseFirstJsonObject(tasks.stdout);
+  const s = parseFirstJsonObject(sessions.stdout);
+  if (!t || !Array.isArray(t.tasks) || !s || !Array.isArray(s.sessions)) return null;
+  const now = Date.now();
+  return {
+    runningTasks: t.tasks.map((x) => ({ label: x.label || x.taskId || null, runtime: x.runtime || null, startedAt: x.startedAt ?? null })),
+    recentSessions: s.sessions.map((x) => ({
+      key: x.key || null,
+      label: x.label || null,
+      updatedAt: x.updatedAt ?? (Number.isFinite(x.ageMs) ? now - x.ageMs : null),
+    })),
+  };
+}
+
+/** Harness restart for harness-restart rigs (app-factory): restart the
+ *  OpenClaw gateway so skills/engine reload, and — when any merged commit
+ *  touched web-console sources — rebuild/restart the web console. `shas` is
+ *  one merge sha or a list (the deferred `harness-restart` pass batches every
+ *  pending merge on a rig into one restart; the web decision is the union of
+ *  classifyWebRestart over each sha's diff). Callers only get here once
+ *  classifyHarnessRestart said restart, and only after every line that must
+ *  be recorded is logged and notified — the gateway restart can tear down the
+ *  calling process tree. Returns {ok, summary}; a failed console restart
+ *  records run.deployWarning and notifies, but the run stays done — the merge
+ *  is durable on origin. */
+function restartHarness(run, rig, shas) {
+  const list = (Array.isArray(shas) ? shas : [shas]).filter(Boolean);
+  const label = list.map((x) => x.slice(0, 12)).join(", ");
   const runDir = runDirOf(run.id);
   const logFile = path.join(runDir, "deploy.log");
-  runCommand("openclaw gateway restart < /dev/null", rig.path, logFile, 5);
+  log(runDir, `harness-restart: restarting gateway (merge ${label})`);
+  openclawSpawn(["gateway", "restart"], 5 * 60 * 1000, logFile);
   // The gateway restart reloads gateway-owned code only; the web console is a
   // separate long-lived process, so a merge touching it needs its own restart.
-  const diff = runCommand(`git diff --name-only ${sha}^1 ${sha}`, rig.path, logFile, 2);
-  const web = classifyWebRestart(diff.ok ? diff.output.split("\n") : []);
+  const files = [];
+  for (const sha of list) {
+    const diff = runCommand(`git diff --name-only ${sha}^1 ${sha}`, rig.path, logFile, 2);
+    if (diff.ok) files.push(...diff.output.split("\n"));
+  }
+  const web = classifyWebRestart(files);
   if (!web.restart) {
-    return { ok: true, summary: `restarted gateway (merge ${sha.slice(0, 12)} live)` };
+    return { ok: true, summary: `restarted gateway (merge ${label} live)` };
   }
   // Rebuild synchronously BEFORE the restart: factory-web-up's readiness
   // wait cannot cover a dep install + build, and a failed build must land in
@@ -2123,11 +2234,11 @@ function restartHarness(run, rig, sha) {
       delete run.deployWarning;
       saveRun(run);
     }
-    return { ok: true, summary: `restarted gateway + web console (merge ${sha.slice(0, 12)} live)` };
+    return { ok: true, summary: `restarted gateway + web console (merge ${label} live)` };
   }
   // The merge is durable on origin, so the run stays done — but the failure
   // must reach the founder immediately, not just deploy.log.
-  const warning = `web console restart FAILED after PR merge (${sha.slice(0, 12)}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
+  const warning = `web console restart FAILED after PR merge (${label}): ${outcome.reason}. The console may be down or serving a stale frontend — restart manually with orchestration/bin/factory-web-up; details in ${logFile}.`;
   run.deployWarning = warning;
   saveRun(run);
   const tail = (build.ok ? up.output : build.output).split("\n").filter(Boolean).slice(-15).join("\n").slice(-1500);
@@ -4665,23 +4776,52 @@ function teardownWorktree(run, rig) {
   return { removed: true, reason: "worktree removed; branch kept" };
 }
 
-/** The harness-restart rig's sync-time restart: fetch origin, verify the
- *  merged commit reached the local default branch, then restart the gateway
- *  (+ web console when touched). Returns a human line for the sync output and
+/** True when every sha is an ancestor of the rig checkout's default branch,
+ *  after a best-effort `git fetch origin` (never a pull or push). */
+function rigContainsMerges(rig, shas, logFile) {
+  if (logFile) runCommand("git fetch origin", rig.path, logFile, 5);
+  return shas.every((sha) => git(rig.path, ["merge-base", "--is-ancestor", sha, rig.defaultBranch]).status === 0);
+}
+
+/** The harness-restart rig's sync-time restart GATE (D35): fetch origin,
+ *  verify the merged commit reached the local default branch, read the rig's
+ *  deploy policy, probe the gateway, and decide (classifyHarnessRestart). A
+ *  deferred restart is persisted as run.pendingHarnessRestart for the
+ *  reconcile pass / `factory-run harness-restart`. Never restarts anything
+ *  itself — syncOneRun calls restartHarness only after its own log + notify.
+ *  Returns {note, restart}: `note` is the human line for the sync output and
  *  notify. Never pushes or pulls the default branch — a checkout that lacks
- *  the merge gets an actionable degrade instead (classifyHarnessRestart). */
+ *  the merge gets an actionable degrade instead. */
 function syncHarnessRestart(run, rig, mergedSha) {
   if (!mergedSha) {
-    return "harness restart skipped: gh reported no merge commit — pull the rig checkout, then restart manually (`openclaw gateway restart`)";
+    return { restart: false, note: "harness restart skipped: gh reported no merge commit — pull the rig checkout, then restart manually (`openclaw gateway restart`)" };
   }
-  runCommand("git fetch origin", rig.path, path.join(runDirOf(run.id), "deploy.log"), 5);
-  const contains = git(rig.path, ["merge-base", "--is-ancestor", mergedSha, rig.defaultBranch]).status === 0;
-  const gate = classifyHarnessRestart({ deployType: (rig.deploy || {}).type, containsMerge: contains });
-  if (!gate.restart) {
-    return `harness restart skipped: ${gate.reason.replace("local default branch", `local ${rig.defaultBranch} (git -C ${rig.path} pull)`)}`;
+  const contains = rigContainsMerges(rig, [mergedSha], path.join(runDirOf(run.id), "deploy.log"));
+  const nowMs = Date.now();
+  const gate = classifyHarnessRestart({
+    deployType: (rig.deploy || {}).type,
+    containsMerge: contains,
+    deployPolicy: resolveRigPolicy(rig.name, rig.policy).policy.deploy,
+    approved: false,
+    gateway: contains ? probeGatewayActivity() : null,
+    nowMs,
+    quietMs: HARNESS_RESTART_QUIET_MS,
+  });
+  if (gate.restart) {
+    return { restart: true, note: `harness restart: gateway idle — restarting now (merge ${mergedSha.slice(0, 12)})` };
   }
-  const r = restartHarness(run, rig, mergedSha);
-  return r.summary;
+  if (!gate.defer) {
+    return { restart: false, note: `harness restart skipped: ${gate.reason.replace("local default branch", `local ${rig.defaultBranch} (git -C ${rig.path} pull)`)}` };
+  }
+  const at = new Date(nowMs).toISOString();
+  run.pendingHarnessRestart = { sha: mergedSha, deferredAt: at, reason: gate.reason, approved: false, attempts: 1, lastCheckedAt: at };
+  saveRun(run);
+  return {
+    restart: false,
+    note:
+      `Harness restart deferred: ${gate.reason}. The reconcile pass applies it when the gateway is idle ` +
+      "(or run `factory-run harness-restart`)",
+  };
 }
 
 /** One run's sync, shared by `sync <id>` and `sync --all`. Never throws or
@@ -4731,15 +4871,26 @@ function syncOneRun(id) {
     } catch {}
     // Harness-restart rigs reload the merged engine/skills here — the deploy
     // step only opened the PR, so sync is where the improvement goes live.
-    const restartNote = (rig.deploy || {}).type === "harness-restart" ? syncHarnessRestart(run, rig, outcome.mergedSha) : null;
+    // Gate first (may persist a deferral), then log + notify, and only then
+    // the restart: it can kill the process tree this sync runs in (D35), so
+    // nothing that must be recorded may come after it.
+    const hr = (rig.deploy || {}).type === "harness-restart" ? syncHarnessRestart(run, rig, outcome.mergedSha) : null;
+    const restartNote = hr ? hr.note : null;
+    log(runDir, `sync: ${outcome.reason} -> done${restartNote ? ` (${restartNote})` : ""}`);
     notify(
       run,
       `:tada: Run ${id}: PR #${run.pr.number} merged on GitHub — run is done.${restartNote ? ` ${restartNote}.` : ""} ` +
         `Cleanup reclaims the worktree/branch now that the PR is merged.\n` +
         consoleLine(id)
     );
-    log(runDir, `sync: ${outcome.reason} -> done${restartNote ? ` (${restartNote})` : ""}`);
-    return { status: "done", message: `${outcome.reason} — run is done${restartNote ? `; ${restartNote}` : ""}` };
+    let restartSummary = null;
+    if (hr && hr.restart) {
+      const r = restartHarness(run, rig, outcome.mergedSha);
+      restartSummary = r.summary;
+      log(runDir, `sync: ${r.summary}`);
+    }
+    const tail = restartSummary || restartNote;
+    return { status: "done", message: `${outcome.reason} — run is done${tail ? `; ${tail}` : ""}` };
   }
   // PR closed without merging: tear down the workspace, keep the branch alive
   // in git so a follow-up run (with the PR discussion as reference context)
@@ -4800,6 +4951,140 @@ function cmdSync(argv) {
   }
   console.log(`${id}: ${r.message}`);
 }
+
+/** Escalation text for a deferred harness restart past its 24h window. */
+function composeHarnessRestartEscalation(run, record, reason, nowMs) {
+  const age = formatQuiet(nowMs - Date.parse(record.deferredAt));
+  return (
+    `:warning: Run ${run.id} (${run.rig}): harness restart for merge ${String(record.sha).slice(0, 12)} has been deferred ${age} ` +
+    `(since ${record.deferredAt}, ${record.attempts || 1} check(s)) — the merged harness change is not live yet.\n` +
+    `Last reason: ${reason}\n` +
+    "Manual paths: `factory-run harness-restart --approve` (founder go under policy.deploy hold; the idle gate still applies); " +
+    "`openclaw tasks audit` if a task is stuck `running`. The engine never forces a restart.\n" +
+    consoleLine(run.id)
+  );
+}
+
+/** `factory-run harness-restart [--approve] [--dry-run] [--json]` — the
+ *  follow-up executor for restarts sync deferred (D35). Runs from the launchd
+ *  reconcile pass, outside the gateway's process tree. Per rig: one gate
+ *  (newest pending sha, every pending sha must be in the default branch), then
+ *  one restartHarness covering every pending run, or a deferral that bumps
+ *  attempts and escalates past 24h. Never forces a restart; exits 0 except on
+ *  usage errors. */
+function cmdHarnessRestart(argv) {
+  const known = ["--approve", "--dry-run", "--json"];
+  const bad = argv.filter((a) => !known.includes(a));
+  if (bad.length) {
+    console.error(`usage: factory-run harness-restart [--approve] [--dry-run] [--json] (unknown: ${bad.join(" ")})`);
+    process.exit(1);
+  }
+  const approve = argv.includes("--approve");
+  const dryRun = argv.includes("--dry-run");
+  const asJson = argv.includes("--json");
+  const nowMs = Date.now();
+  const at = new Date(nowMs).toISOString();
+  const byRig = new Map();
+  for (const id of listRunIds()) {
+    let run, rig;
+    try {
+      run = loadRun(id);
+      if (!run.pendingHarnessRestart) continue;
+      rig = resolveRig(run.rig);
+    } catch {
+      continue; // an unreadable run/rig must not kill the whole pass
+    }
+    if ((rig.deploy || {}).type !== "harness-restart") continue;
+    if (!byRig.has(rig.name)) byRig.set(rig.name, { rig, runs: [] });
+    byRig.get(rig.name).runs.push(run);
+  }
+  if (!byRig.size) {
+    if (asJson) console.log(JSON.stringify({ checkedAt: at, dryRun, rigs: [] }, null, 2));
+    else console.log("harness-restart: nothing pending");
+    return;
+  }
+  const gateway = probeGatewayActivity();
+  const results = [];
+  for (const { rig, runs } of byRig.values()) {
+    const entry = { rig: rig.name, runs: runs.map((r) => r.id), action: null, reason: null, escalated: [] };
+    results.push(entry);
+    try {
+      if (approve) {
+        for (const run of runs) {
+          run.pendingHarnessRestart.approved = true;
+          if (!dryRun) saveRun(run);
+        }
+      }
+      runs.sort((x, y) => Date.parse(x.pendingHarnessRestart.deferredAt) - Date.parse(y.pendingHarnessRestart.deferredAt));
+      const newest = runs[runs.length - 1];
+      const shas = runs.map((r) => r.pendingHarnessRestart.sha);
+      const contains = rigContainsMerges(rig, shas, dryRun ? null : path.join(runDirOf(newest.id), "deploy.log"));
+      const gate = classifyHarnessRestart({
+        deployType: (rig.deploy || {}).type,
+        containsMerge: contains,
+        deployPolicy: resolveRigPolicy(rig.name, rig.policy).policy.deploy,
+        approved: runs.every((r) => r.pendingHarnessRestart.approved === true),
+        gateway,
+        nowMs,
+        quietMs: HARNESS_RESTART_QUIET_MS,
+      });
+      entry.reason = gate.reason;
+      if (gate.restart) {
+        entry.action = dryRun ? "would-restart" : "restarted";
+        if (dryRun) continue;
+        // Bookkeeping, log, and notify all land before the restart call.
+        for (const run of runs) {
+          const rec = run.pendingHarnessRestart;
+          delete run.pendingHarnessRestart;
+          saveRun(run);
+          log(runDirOf(run.id), `harness restart applied (deferred since ${rec.deferredAt}; merge ${String(rec.sha).slice(0, 12)})`);
+        }
+        notify(
+          newest,
+          `:arrows_counterclockwise: Harness restart applied on ${rig.name}: gateway idle — restarting now for ` +
+            `${runs.map((r) => r.id).join(", ")} (merge ${shas.map((x) => x.slice(0, 12)).join(", ")}).\n` +
+            consoleLine(newest.id)
+        );
+        const r = restartHarness(newest, rig, shas);
+        entry.reason = r.summary;
+        continue;
+      }
+      // Deferred (or the actionable "pull" degrade): the record stays pending
+      // so the next pass picks it up once the gateway is idle / the checkout
+      // is pulled.
+      entry.action = dryRun ? "would-defer" : "deferred";
+      for (const run of runs) {
+        const rec = run.pendingHarnessRestart;
+        if (!dryRun) {
+          rec.attempts = (rec.attempts || 1) + 1;
+          rec.lastCheckedAt = at;
+          rec.reason = gate.reason;
+        }
+        if (harnessRestartEscalationDue(rec, nowMs)) {
+          if (dryRun) {
+            entry.escalated.push(run.id);
+          } else if (notify(run, composeHarnessRestartEscalation(run, rec, gate.reason, nowMs))) {
+            rec.escalatedAt = at;
+            entry.escalated.push(run.id);
+          }
+        }
+        if (!dryRun) saveRun(run);
+      }
+    } catch (err) {
+      entry.action = "error";
+      entry.reason = String(err.message || err).slice(0, 300);
+    }
+  }
+  if (asJson) {
+    console.log(JSON.stringify({ checkedAt: at, dryRun, rigs: results }, null, 2));
+    return;
+  }
+  for (const e of results) {
+    const esc = e.escalated.length ? ` [${dryRun ? "would escalate" : "escalated"}: ${e.escalated.join(", ")}]` : "";
+    console.log(`harness-restart ${e.rig}: ${e.action} (${e.runs.length} pending: ${e.runs.join(", ")}) — ${e.reason}${esc}`);
+  }
+}
+
 
 const FOLLOWUP_WORKFLOWS = ["feature-dev", "bug-fix"];
 // Green terminal parents a follow-up may continue: awaiting-merge (PR open —
@@ -5226,11 +5511,39 @@ function cmdSelftest() {
   // Sync-time harness restart gate (pure): only harness-restart rigs restart,
   // and only once the local default branch contains the merged commit — the
   // degrade must be actionable (pull, then restart manually), never a push.
-  const hr = (over) => classifyHarnessRestart({ deployType: "harness-restart", containsMerge: true, ...over });
+  // D35: and only when the gateway is provably idle and policy allows it —
+  // every other case defers (fail closed on an unknown gateway).
+  const hrNow = Date.parse("2026-10-23T10:05:00Z");
+  const idleGw = { runningTasks: [], recentSessions: [] };
+  const cronTask = { label: "factory-standup-cutoff", runtime: "cron", startedAt: Date.parse("2026-10-23T10:00:00Z") };
+  const hr = (over) =>
+    classifyHarnessRestart({
+      deployType: "harness-restart",
+      containsMerge: true,
+      deployPolicy: "auto",
+      approved: false,
+      gateway: idleGw,
+      nowMs: hrNow,
+      quietMs: HARNESS_RESTART_QUIET_MS,
+      ...over,
+    });
+  const deferred = (d) => d.restart === false && d.defer === true;
   const harnessRestartChecks = [
     ["merge present in the checkout restarts", hr({}).restart === true],
     ["missing merge degrades to an actionable message", (() => { const d = hr({ containsMerge: false }); return d.restart === false && /pull/.test(d.reason) && /never pushes/.test(d.reason); })()],
     ["non-harness rigs never restart", hr({ deployType: "eas-update" }).restart === false && hr({ deployType: "none" }).restart === false],
+    ["idle gateway restarts", (() => { const d = hr({}); return d.restart === true && d.defer === false; })()],
+    ["running cron task defers, naming its label", (() => { const d = hr({ gateway: { runningTasks: [cronTask], recentSessions: [] } }); return deferred(d) && d.reason.includes("factory-standup-cutoff") && d.reason.includes("10:00Z"); })()],
+    ["running non-cron task defers", deferred(hr({ gateway: { runningTasks: [{ label: "adhoc", runtime: "cli", startedAt: hrNow - 5000 }], recentSessions: [] } }))],
+    ["slack session updated 34s ago defers", (() => { const d = hr({ gateway: { runningTasks: [], recentSessions: [{ key: "agent:main:slack:channel:c0test", updatedAt: hrNow - 34000 }] } }); return deferred(d) && d.reason.includes("agent:main:slack:channel:c0test") && d.reason.includes("34s ago"); })()],
+    ["session updated 11 min ago is not busy", hr({ gateway: { runningTasks: [], recentSessions: [{ key: "agent:main:cron:old", updatedAt: hrNow - 11 * 60 * 1000 }] } }).restart === true],
+    ["probe failure (null gateway) defers", (() => { const d = hr({ gateway: null }); return deferred(d) && /unknown/.test(d.reason); })()],
+    ["hold + not approved defers with the approve hint", (() => { const d = hr({ deployPolicy: "hold" }); return deferred(d) && d.reason.includes("factory-run harness-restart --approve"); })()],
+    ["hold + approved + idle restarts", hr({ deployPolicy: "hold", approved: true }).restart === true],
+    ["hold + approved + busy defers", deferred(hr({ deployPolicy: "hold", approved: true, gateway: { runningTasks: [cronTask], recentSessions: [] } }))],
+    ["escalation waits for 24h", harnessRestartEscalationDue({ deferredAt: new Date(hrNow - 23 * 3600 * 1000).toISOString() }, hrNow) === false],
+    ["escalation fires once past 24h", harnessRestartEscalationDue({ deferredAt: new Date(hrNow - 25 * 3600 * 1000).toISOString() }, hrNow) === true],
+    ["escalation deduped by escalatedAt", harnessRestartEscalationDue({ deferredAt: new Date(hrNow - 30 * 3600 * 1000).toISOString(), escalatedAt: new Date(hrNow - 5 * 3600 * 1000).toISOString() }, hrNow) === false],
   ];
   for (const [name, ok] of harnessRestartChecks) {
     console.log(`harness-restart ${name}: ${ok ? "ok" : "FAIL"}`);
@@ -5918,6 +6231,7 @@ try {
   else if (cmd === "steer") cmdSteer(resolveRunId(rest[0]), rest.slice(1).join(" "));
   else if (cmd === "cancel") cmdCancel(resolveRunId(rest[0]));
   else if (cmd === "sync") cmdSync(rest);
+  else if (cmd === "harness-restart") cmdHarnessRestart(rest);
   else if (cmd === "followup") cmdFollowup(rest);
   else if (cmd === "preview") cmdPreviewTrigger(rest);
   else if (cmd === "preview-exec") execPreview(rest[0], rest.slice(1));
@@ -5931,7 +6245,7 @@ try {
   else if (cmd === "report") cmdReport(rest);
   else if (cmd === "context") cmdContext(rest);
   else {
-    console.log("factory-run <start|exec|resume|retry|status|list|prs|approve|reject|reply|steer|sync|followup|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
+    console.log("factory-run <start|exec|resume|retry|status|list|prs|approve|reject|reply|steer|sync|harness-restart|followup|preview|preview-mode|deploy|cancel|cleanup|watchdog|report|context|preflight|selftest>");
     process.exit(cmd ? 1 : 0);
   }
 } catch (err) {
