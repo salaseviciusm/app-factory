@@ -37,6 +37,7 @@ import {
 import { openTelemetry, usageTotals } from "./lib/db.mjs";
 import { contextStorage } from "./lib/storage.mjs";
 import { listFileRoots, resolveFileDownload } from "./lib/files.mjs";
+import { REBASE_WORKFLOW, parsePrNumber } from "./lib/rebase.mjs";
 import {
   loadToken,
   createToken,
@@ -351,12 +352,39 @@ async function handleApi(req, res, pathname, query) {
 
   // ---- POST /api/runs : start ----
   if (pathname === "/api/runs") {
-    const { rig, workflow, prompt, auto, preview } = body;
+    const { rig, workflow, prompt, auto, preview, pr, dryRun } = body;
     if (typeof rig !== "string" || !rigExists(rig)) {
       return sendJson(res, 400, { error: `unknown rig: ${String(rig).slice(0, 100)}` });
     }
     if (typeof workflow !== "string" || !workflowExists(workflow)) {
       return sendJson(res, 400, { error: `unknown workflow: ${String(workflow).slice(0, 100)}` });
+    }
+    // Rebase-train (D36) takes a PR number instead of a prompt; `pr` and
+    // `dryRun` belong to that workflow only.
+    const isRebase = workflow === REBASE_WORKFLOW;
+    if (!isRebase && (pr !== undefined || dryRun !== undefined)) {
+      return sendJson(res, 400, { error: `pr/dryRun apply to the ${REBASE_WORKFLOW} workflow only` });
+    }
+    if (isRebase && (typeof pr !== "number" || parsePrNumber(pr) === null)) {
+      return sendJson(res, 400, { error: "pr must be an integer in 1..999999" });
+    }
+    if (dryRun !== undefined && typeof dryRun !== "boolean") {
+      return sendJson(res, 400, { error: "dryRun must be a boolean" });
+    }
+    if (isRebase) {
+      if (prompt !== undefined && (typeof prompt !== "string" || prompt.length > PROMPT_CAP)) {
+        return sendJson(res, 400, { error: `prompt must be a string (max ${PROMPT_CAP} chars)` });
+      }
+      const args = ["start", "--rig", rig, "--workflow", workflow, "--pr", String(pr)];
+      if (dryRun === true) args.push("--dry-run");
+      if (typeof prompt === "string" && prompt.trim()) args.push("--prompt", prompt);
+      const r = await factoryRun(args);
+      const runId = r.stdout.trim().split("\n").pop() || "";
+      logAudit("start", runId || `${rig}/${workflow}#${pr}`, r.ok ? "ok" : r.stderr.slice(0, 200));
+      if (!r.ok || !RUN_ID_RE.test(runId)) {
+        return sendJson(res, 502, { error: `factory-run start failed: ${(r.stderr || r.stdout).slice(0, 400)}` });
+      }
+      return sendJson(res, 201, { ok: true, runId });
     }
     if (typeof prompt !== "string" || !prompt.trim() || prompt.length > PROMPT_CAP) {
       return sendJson(res, 400, { error: `prompt must be a non-empty string (max ${PROMPT_CAP} chars)` });
