@@ -154,6 +154,14 @@ is one of them.
   omitted unless nothing else is open; a rig's `error` entry gets one honest line.
   Where a PR belongs to a run you already listed (pending merge), fold the link
   into that line instead of repeating it.
+- **CONFLICTING PRs**: for every open non-draft PR whose `mergeable` is
+  `CONFLICTING`, the default proposal is `start rebase-train on #<n>` — one run per
+  PR (`factory-run start --rig <rig> --workflow rebase-train --pr <n>`), costing
+  nothing, never merging. Put it in "Today's proposal"; the founder's yes (or the
+  cutoff) starts the runs. A rebase-train run that failed with `conflict: needs
+  founder` is a founder item, not a stalled run: list the PR, the unmerged files
+  from the run's failure detail, and "resolve by hand, then re-run rebase-train"
+  as the default.
 
 ## After posting
 

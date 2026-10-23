@@ -11,7 +11,9 @@ decision) and must not be re-proposed.
 
 ## R1 — A resume at a later step never revalidates worktree dependencies
 
-- **Status:** open
+- **Status:** done — shipped in commit `9deb8b1` (merge `dace019`, PR #4): the
+  engine records `run.setupOk` only after every setup command exits 0, and
+  `setupNeeded()` re-provisions on any resume where it is absent.
 - **Observation:** Run `bug-century-club-goal-shows` (running-with-pace) ran
   `find` → `implement` ×2 → `checks` → `review` → `tests` → PR #48 and only
   died at `deploy`, the last step, on `npx expo config` failing to resolve
@@ -29,7 +31,9 @@ decision) and must not be re-proposed.
 
 ## R2 — Setup aborts on the first failing command and silently leaves the rest unrun
 
-- **Status:** open
+- **Status:** done — shipped in commit `9deb8b1` (merge `dace019`, PR #4):
+  `setupFailureSummary()` names the failing command's position and every
+  command that never ran, in the failure detail and in `setup.log`.
 - **Observation:** running-with-pace's rig `setup` is three commands
   (`npm install`, `cd pace-node-js-server && npm install`,
   `cd pace-react-native && npm install`). In `bug-century-club-goal-shows` the
@@ -68,3 +72,22 @@ decision) and must not be re-proposed.
   `factory/*` is engine-owned.
 - **Rough cost to try:** small — one input to the pure decision core, three
   `merge-base --is-ancestor` probes, two log lines, and the regression test.
+
+## R4 — rebase-train workflow
+
+- **Status:** accepted
+- **Observation:** running-with-pace has 6 CONFLICTING open PRs, and the five
+  merges of 2026-10-22 conflicted two more of them. The pile conflicts itself
+  faster than the founder can rebase it by hand, and every rebase is the same
+  mechanical sequence: fetch, rebase onto `main`, re-run checks and tests,
+  force-push the head.
+- **Proposed change:** an agent-free `rebase-train` workflow
+  (`orchestration/workflows/rebase-train.json`, pure core
+  `orchestration/web/lib/rebase.mjs`): one PR per run, a detached checkout of
+  gh's `headRefOid`, rebase before setup, push invariants checked before a
+  lease force-push pinned to that sha, never a merge, and a conflict aborted
+  and reported as a founder item. The force-push exception and its bounds are
+  decision D36; the design is `docs/08-orchestration-layer.md` §12i. An
+  `--all-conflicting` sweep is a possible follow-up, not part of this item.
+- **Rough cost to try:** medium — two new step types, one pure module, a
+  sandbox integration test, the console/API inputs, and two skill updates.
