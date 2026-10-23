@@ -2069,7 +2069,7 @@ function publishDeploy(run, rig) {
     // merged commit is present in the rig checkout (restartHarness).
     return {
       ok: true,
-      summary: `harness restart deferred: merge the PR, then \`factory-run sync ${run.id}\` restarts the gateway/web console`,
+      summary: `harness restart deferred: merge the PR, then \`factory-run sync ${run.id}\` restarts the gateway/web console once the gateway is idle (else the reconcile pass does, via \`factory-run harness-restart\`)`,
       url: null,
     };
   }

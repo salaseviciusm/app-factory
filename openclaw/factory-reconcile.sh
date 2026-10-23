@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Reconciles factory run state against reality, on a schedule (launchd, every 30m).
 #
-# Three passes, cheapest first — all deterministic, no agent/model cost:
+# Four passes, cheapest first — all deterministic, no agent/model cost:
 #   1. sync    — every `awaiting-merge` run against its GitHub PR, so runs the
 #                founder merged on github.com flip to done without being asked.
+#  1b. harness-restart — apply harness restarts sync deferred (D35: sync only
+#                restarts an idle gateway). launchd runs outside the gateway's
+#                process tree, so this pass is never killed by its own restart;
+#                it never forces one either (busy/hold → defer, 24h escalation).
 #   2. cleanup — reclaim worktrees/branches of terminal runs (never forced: dirty
 #                or unmerged trees, and merged-PR branches whose tip diverged
 #                from the PR head, are skipped with a reason; `--discard` is
@@ -57,6 +61,12 @@ if [ -n "$ids" ]; then
     esac
   done <<< "$ids"
 fi
+
+# --- 1b. deferred harness restarts ----------------------------------------
+# After sync, so a merge sync just deferred is picked up in the same pass.
+# "nothing pending" is the steady state and not worth a log line every 30m.
+hr_out="$("$RUN" harness-restart $DRY 2>&1 | grep -v '^harness-restart: nothing pending$')"
+[ -n "$hr_out" ] && { say "harness-restart:"; echo "$hr_out"; }
 
 # --- 2. cleanup ------------------------------------------------------------
 cleanup_out="$("$RUN" cleanup $DRY 2>&1 | grep -Ev ': nothing to clean$|is not terminal$')"
