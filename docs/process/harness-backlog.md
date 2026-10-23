@@ -68,3 +68,51 @@ decision) and must not be re-proposed.
   `factory/*` is engine-owned.
 - **Rough cost to try:** small — one input to the pure decision core, three
   `merge-base --is-ancestor` probes, two log lines, and the regression test.
+
+## R4 — The sync-time harness restart kills the gateway turn that ran the sync
+
+- **Status:** accepted
+- **Observation:** on 2026-10-22 `factory-run sync` for
+  `feature-improvement-plan-cleanup` (PR #7) restarted the OpenClaw gateway
+  immediately after the merge. The restart killed the in-flight
+  `factory-standup-cutoff` cron turn (and `slack-leak-watchdog`), both left
+  `lost` in `openclaw tasks audit`, and — because `syncOneRun()` restarted
+  before it logged and notified — the run's own `sync: … -> done` line and
+  `:tada:` notify were lost too. Flipping app-factory `policy.deploy` to `hold`
+  did not cover it: the sync path never read the policy. Root-caused in
+  decision D35 (`docs/process/decision-log.md`).
+- **Proposed change:** in the engine (`orchestration/bin/factory-run`), gate
+  the restart in the pure `classifyHarnessRestart` on policy (`hold` waits for
+  `factory-run harness-restart --approve`) and on gateway idleness (no running
+  task, no session active within 10 minutes; probe failure defers); log and
+  notify before any restart; persist deferrals as `run.pendingHarnessRestart`
+  and apply them from the launchd reconcile pass via the new `factory-run
+  harness-restart` command (one restart per rig, 24h escalation, never
+  forced). Per D35's anti-instruction, no job name or label may decide
+  anything. Pinned by selftest arms and
+  `orchestration/test/harness-restart-deferral.test.mjs`.
+- **Rough cost to try:** medium — pure-core inputs, a two-command probe, one
+  new command, one reconcile pass, and the sandboxed regression test.
+
+## R5 — Standup-liveness watchdog
+
+- **Status:** open
+- **Observation:** the 08:00 standup and 11:00 cutoff failed for 25 days
+  (Slack OAuth expiry, 25 consecutive errors), and the failure notices piled
+  up in the very Slack channel that was failing. Nothing outside that channel
+  noticed.
+- **Proposed change:** add a launchd check (not openclaw cron: it must survive
+  a wedged gateway) to `openclaw/factory-reconcile.sh`, or a sibling script on
+  the heartbeat cadence. It reads `openclaw cron list --json` / `openclaw tasks
+  list --json --runtime cron` for `factory-daily-standup` and
+  `factory-standup-cutoff`, and flags the loop as stopped when either the last
+  `succeeded` run is older than 26h, or the last two runs are `failed`, `lost`
+  or `timed_out`. Escalation must not depend on the channel that failed: stamp
+  the `#factory-status` topic via `slack-heartbeat.sh`'s direct Web API path
+  (e.g. "standup STALE since <date>"), send a macOS notification
+  (`osascript`), and write a dated entry to the founder's Obsidian inbox via
+  `wt todo`. Dedupe once per day and expose the result in `factory-run
+  status`. Test with a pure `classifyStandupLiveness({ runs, nowMs })` core
+  plus selftest arms.
+- **Rough cost to try:** small-to-medium — one pure core, one reconcile pass,
+  three out-of-band escalation sinks.

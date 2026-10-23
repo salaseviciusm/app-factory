@@ -43,8 +43,13 @@ passes deterministic checks (engine syntax + selftest + script lint), passes
 cross-model review, and then **opens a PR** and parks `awaiting-merge` — like
 every rig. After the founder merges the PR on GitHub, `factory-run sync
 <child_run_id>` flips the run done and restarts the gateway (plus the web
-console when the merge touched it). The factory is live-updated at sync, not
-at deploy.
+console when the merge touched it) — but only when the gateway is idle (no
+running task, no session active in the last 10 minutes) and `policy.deploy`
+allows it. Otherwise sync logs and notifies the merge, records the restart as
+deferred, and the launchd reconcile pass applies it via `factory-run
+harness-restart` once the gateway is idle (`--approve` is the founder's go
+under `hold`). A sync run from inside a gateway turn always defers. The
+factory is live-updated after sync, not at deploy.
 
 ## Cautions
 

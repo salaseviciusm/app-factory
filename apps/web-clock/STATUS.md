@@ -5,11 +5,13 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-09-26 18:00 (EOD sync). Unchanged and still accurate — the last
-  commit touching `apps/web-clock/` is `422b230` (2026-09-20, an EOD sync writing STATUS
+- **Last verified:** 2026-10-22 18:00 (EOD sync). Unchanged and still accurate — the last
+  commit touching `apps/web-clock/` is `24a4689` (2026-09-26, an EOD sync writing STATUS
   files, not product work). Still no device, no accuracy figure, no TestFlight build. Every
   blocker below is unchanged and each is a founder dependency (hardware, an Apple Developer
-  account, four ASO calls).
+  account, four ASO calls). The 25-day standup blackout (2026-09-27 → 2026-10-21) changed
+  nothing here.
+- **Prior verification:** 2026-09-26 18:00 (EOD sync), same conclusion.
 - **Prior verification:** 2026-09-20 18:00 (EOD sync), same conclusion.
 - **Prior verification:** 2026-09-14 18:00 (EOD sync), same conclusion.
 - **Codename:** `web-clock` · working name **Suit Up** · bundle `com.salaseviciusm.suitup`

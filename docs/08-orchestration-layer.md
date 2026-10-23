@@ -714,10 +714,41 @@ PR-gated:
   naming the branch and the manual resolution instead of a bare refusal.
 - On `harness-restart` rigs (app-factory), sync's `done` path also restarts
   the OpenClaw gateway — and rebuilds/restarts the web console when the merge
-  touched it — gated on the rig checkout containing the merge commit after a
-  `git fetch origin`. A checkout that hasn't pulled the merge degrades to a
-  "pull, then restart manually" message; the engine never pushes or pulls a
-  default branch.
+  touched it — but only through an **idle gate** (D35, 2026-10-23; the
+  2026-10-22 sync restart killed the in-flight standup cutoff turn *and* the
+  sync's own `engine.log` line and `:tada:` notify). The pure core
+  `classifyHarnessRestart` decides, in order: non-harness rigs never restart;
+  a rig checkout lacking the merge commit (after `git fetch origin`) degrades
+  to a "pull, then restart manually" message — the engine never pushes or
+  pulls a default branch; `policy.deploy: hold` defers until the founder
+  approves; an unknown gateway (probe failed) defers — fail closed; any
+  running task (`openclaw tasks list --json --status running`) or any session
+  touched within 10 minutes (`openclaw sessions --active 10 --json`) defers,
+  naming each busy item; otherwise restart. Labels and session keys are only
+  printed — no job name, cron special case or allowlist decides anything. A
+  sync invoked from a gateway turn therefore always sees itself busy and
+  defers, by design.
+- **Log and notify before restart**: sync's order is `setState(done)` → gate
+  → persist any deferral → `engine.log` sync line + Slack notify → only then
+  `restartHarness()`, which writes `harness-restart: restarting gateway
+  (merge <sha>)` to `engine.log` before `openclaw gateway restart`. Nothing
+  that must be recorded comes after the restart call.
+- **Deferred restarts** persist as `run.pendingHarnessRestart = {sha,
+  deferredAt, reason, approved, attempts, lastCheckedAt[, escalatedAt]}` and
+  are applied by `factory-run harness-restart [--approve] [--dry-run]
+  [--json]`, which the launchd reconcile pass (`openclaw/factory-reconcile.sh`
+  pass 1b, outside the gateway's process tree) runs every 30 minutes. Per rig
+  it gates once (every pending sha must be in the default branch); on restart
+  it clears every covered record, logs `harness restart applied` to each run,
+  notifies once, then issues ONE gateway restart (the web-console decision is
+  the union of `classifyWebRestart` over every pending sha's diff). On defer
+  it bumps `attempts`/`lastCheckedAt` and prints one line per rig. A record
+  older than 24h escalates to Slack at most once per 24h (deduped by
+  `escalatedAt`), naming the run, sha, age and the manual paths; the command
+  never forces a restart. Under `hold`, `--approve` is the founder's go
+  (persisted per record) — the idle gate still applies after approval. This is
+  separate from `factory-run deploy <id>`, which releases held publish
+  deploys.
 - Legacy `run.recovery` bookkeeping in old run.json files is still displayed
   by `factory-run status` (marked legacy) but is never written again.
 - **Rewind on resume**: `factory-run resume <id> --step <step-id>` restarts a
