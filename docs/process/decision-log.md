@@ -697,3 +697,33 @@ redesign.
 **Anti-instruction:** do not "simplify" the ancestry check away on the grounds that a
 `factory/*` branch is engine-owned and therefore safe to force-delete. That assumption is
 exactly what cost four destructions — the namespace is owned, but the tip is not.
+
+## D35 — an auto harness restart must not fire while an agent turn is in flight (2026-10-23)
+
+**Context:** the 11:00 standup cutoff of 2026-10-22 never posted and never dispatched. The
+cron turn started on time, lived 260 seconds and died at 10:04:20Z with `cron: job
+interrupted by gateway restart` — thirteen seconds after the founder's merge of PR #7 was
+synced. The chain is self-inflicted: the cutoff turn itself ran `factory-run sync`, which
+flipped `feature-improvement-plan-cleanup` to `done` and called `syncHarnessRestart()` →
+`restartHarness()` → `openclaw gateway restart`. The factory restarted itself on top of its
+own steering job. This is the second time a harness improvement has taken out the steering
+loop that shipped it, and the 25-error cutoff streak hid it inside what looked like the
+OAuth outage.
+**Decision:** the sync-time harness restart is deferrable, not immediate. `openclaw gateway
+restart` must be refused or deferred while an OpenClaw agent turn is in flight, decided in
+`classifyHarnessRestart()`'s pure core with a deterministic idleness signal, a regression
+test, and a deferred-restart follow-up so the improvement still goes live. Sent to focused
+self-review run `self-focused-self-review-two` rather than hand-edited, because it sits on
+the path that can kill the editing turn.
+**Why:** a restart is a *deploy*, and every other deploy in the factory is policy-gated. This
+one is not: `classifyHarnessRestart()` and `syncHarnessRestart()` never consult
+`policy.deploy`, so the sync path restarts regardless of rig policy. Deferring costs nothing
+— the merge is already durable on origin and the engine reloads at the next idle moment;
+restarting mid-turn costs a whole day of steering, silently.
+**Also recorded:** `rigs.json` app-factory `policy.deploy` was flipped `auto` → `hold` the
+same morning (and the selftest assertion with it). That flip is a *partial* mitigation only:
+it gates the deploy *step*, not the sync-time restart, so it would not have prevented
+2026-10-22. Do not treat the flip as the fix, and do not close D35 on the strength of it.
+**Anti-instruction:** do not make the restart conditional on "is this a cron job" or on a
+job name. The hazard is any in-flight agent turn, including a founder's own live Slack
+conversation; the signal must be gateway idleness, not identity.

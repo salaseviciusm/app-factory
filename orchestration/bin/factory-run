@@ -5090,7 +5090,7 @@ function cmdSelftest() {
     // app-factory harness rig included.
     ["skip-hero is merge-review deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
     ["running-with-pace defaults to merge-review", (() => { const r = resolveRig("running-with-pace"); return r.policyProblems.length === 0 && r.policy.merge === "review"; })()],
-    ["app-factory is merge-review deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
+    ["app-factory is merge-review deploy-hold (2026-10-23: an auto harness-restart deploy killed the standup cutoff mid-turn)", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "hold"; })()],
     ["running-with-pace defaults to merge-review", resolveRig("running-with-pace").policy.merge === "review"],
     ["awaiting-merge is a terminal state", TERMINAL_STATES.includes("awaiting-merge")],
     ["web lib agrees awaiting-merge is terminal", (() => {

@@ -38,7 +38,7 @@
       "notifyChannelName": "factory-app-factory",
       "policy": {
         "merge": "review",
-        "deploy": "auto"
+        "deploy": "hold"
       },
       "setup": [],
       "checks": [
