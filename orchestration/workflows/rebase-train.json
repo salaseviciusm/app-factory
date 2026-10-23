@@ -1,0 +1,13 @@
+{
+  "name": "rebase-train",
+  "description": "Rebase one open PR onto the rig's default branch, re-run checks and tests, and lease-force-push the PR head (pinned to the sha GitHub reported at run start). No agent, never merges; a conflict is aborted and reported as a founder item. Start with --pr <n> [--dry-run].",
+  "checkout": "pr",
+  "setupBeforeStep": "checks",
+  "steps": [
+    { "id": "rebase", "type": "rebase" },
+    { "id": "checks", "type": "commands", "source": "checks" },
+    { "id": "tests", "type": "commands", "source": "tests" },
+    { "id": "push", "type": "push-pr" },
+    { "id": "notify", "type": "notify", "summaryFile": "rebase-summary.md" }
+  ]
+}

@@ -108,7 +108,15 @@ export const api = {
   },
   settings: () => request<import("./types").SettingsResponse>("/api/settings"),
   usage: () => request<import("./types").UsageResponse>("/api/usage"),
-  start: (body: { rig: string; workflow: string; prompt: string; auto: boolean; preview?: boolean }) =>
+  start: (body: {
+    rig: string;
+    workflow: string;
+    prompt?: string;
+    auto: boolean;
+    preview?: boolean;
+    pr?: number;
+    dryRun?: boolean;
+  }) =>
     post<{ ok: boolean; runId: string }>("/api/runs", body),
   approve: (id: string) => post<{ ok: boolean }>(`/api/runs/${encodeURIComponent(id)}/approve`, {}),
   reject: (id: string, feedback: string) =>

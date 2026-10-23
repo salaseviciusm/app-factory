@@ -1,6 +1,6 @@
 ---
 name: factory-feature
-description: Start, steer, approve, and report orchestrated feature-dev and bug-fix runs on registered rigs (running-with-pace, skip-hero, factory apps) via the factory-run engine. Use when the founder asks for a new feature, a bug fix, a deploy/build of one, or the status of runs. Works from typed or voice-note messages.
+description: Start, steer, approve, and report orchestrated feature-dev, bug-fix, and rebase-train runs on registered rigs (running-with-pace, skip-hero, factory apps) via the factory-run engine. Use when the founder asks for a new feature, a bug fix, a deploy/build of one, or the status of runs. Works from typed or voice-note messages.
 user-invocable: true
 ---
 
@@ -91,6 +91,25 @@ Relay it verbatim when reporting status; for "how much are we spending / which
 step costs most", run `report` (grand total + per-run + per-step cost).
 
 Cancel: `factory-run cancel <run_id>`.
+
+Rebase a PR (the founder says "rebase #78", "fix the conflicts on the pace PRs",
+or approves the standup's `start rebase-train on #n` proposal):
+
+```sh
+~/src/app-factory/orchestration/bin/factory-run start \
+  --rig <rig> --workflow rebase-train --pr <n> [--dry-run]
+```
+
+One PR per run, no prompt needed, no agent, no cost. The engine rebases the PR's
+head onto the rig's default branch, re-runs the rig's checks and tests, and
+force-pushes the PR head with a lease pinned to the sha GitHub reported when the
+run started. **Starting it authorises that lease force-push of that PR's head**,
+and nothing else: it never merges, never pushes the default branch, and never
+resolves a conflict. A conflicted rebase is aborted and the run fails with
+`conflict: needs founder` plus the files; relay that as a founder item, not as a
+broken run. Draft, fork, closed, and non-default-base PRs are refused. Use
+`--dry-run` when the founder wants to see whether it rebases cleanly without
+touching the PR. Several conflicting PRs means several runs, one per PR (D36).
 
 ## Conduct
 

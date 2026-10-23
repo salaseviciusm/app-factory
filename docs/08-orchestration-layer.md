@@ -849,6 +849,112 @@ reports and suggests only — remediation stays a founder action.
   0 * * * * /Users/morkus/src/app-factory/orchestration/bin/factory-run watchdog >> /Users/morkus/src/app-factory/orchestration/watchdog.log 2>&1
   ```
 
+## 12i. rebase-train: lease-pushed PR rebases, never a merge (implemented 2026-10-23)
+
+running-with-pace carried 6 CONFLICTING open PRs, and each night's merges
+conflict more of them. `rebase-train` is the one deterministic verb for that
+pile. It takes one open PR, rebases its head onto the rig's default branch,
+re-runs the rig's `checks` and `tests`, and lease-force-pushes the PR head. It
+has no agent step, so it costs nothing. It never merges, and it never resolves
+a conflict. The force-push exception and its bounds are decision D36.
+
+```sh
+factory-run start --rig <rig> --workflow rebase-train --pr <n> [--dry-run]
+```
+
+- **Workflow** (`workflows/rebase-train.json`): `"checkout": "pr"`,
+  `"setupBeforeStep": "checks"`, and steps `rebase` (type `rebase`), `checks`
+  and `tests` (type `commands`, with no `onFail`), `push` (type `push-pr`) and
+  `notify` (`summaryFile: "rebase-summary.md"`). Run ids are
+  `rebase-pr-<n>`. `run.rebase` holds the PR facts and outcome. `run.json` has
+  no `branch` and no `pr` field, so `pushRunBranch`, `sync` and cleanup's PR
+  probe all treat the run as branchless.
+- **Pure core** (`web/lib/rebase.mjs`, covered by `rebase.test.mjs` and
+  selftest): `classifyRebaseTarget`, `classifyRebaseOutcome`,
+  `classifyPushReadiness`, `pushPrBranchCommand`, the fetch and worktree argv
+  builders, `pushLiteralAllowed` and `composeRebaseSummary`.
+- **Refusals before any worktree exists.** The engine runs `gh pr view <n>
+  --json number,url,title,state,isDraft,isCrossRepository,headRefName,baseRefName,headRefOid`
+  in the rig checkout. It refuses a PR that is not OPEN, a draft, a
+  cross-repository PR, a head equal to the default branch or to the base, a
+  base other than the default branch, a head that is a live run's branch, and
+  a PR already held by an earlier live rebase-train run. A refused run fails at
+  `rebase` and gets no worktree directory.
+- **A ref name is not a commit (D34 applied to push).** The engine runs `git
+  fetch origin <base> <head>` and requires `origin/<head>` to equal gh's
+  `headRefOid`. A mismatch fails the run with `PR head moved` and both shas.
+  It then runs `git worktree add --detach <worktree> <headRefOid>`. No local
+  branch is created, moved or deleted.
+- **Rebase before setup.** The `rebase` step records `baseSha`, `mergeBase`
+  and `commitsBefore`, then runs `git rebase origin/<base>` (logged to
+  `rebase.log`). If the base is already an ancestor of the head, the run skips
+  to notify and ends `done` with `already up to date`. A stopped rebase is
+  aborted with `git rebase --abort`, which leaves the worktree clean at the
+  original head. A stop with unmerged paths fails the run `conflict: needs
+  founder` and names the files and the base-side `<mergeBase>..<baseSha>`
+  range. Any other stop fails it with the last three lines of `rebase.log`.
+  Rig setup runs only when the run reaches `checks`, or a later work step on
+  resume, and only when `setupOk` is absent. A conflicted or no-op run
+  therefore never pays for an install, and setup's lockfile dirt never blocks
+  `git rebase`.
+- **Push invariants.** Before any push, the engine checks that no rebase is in
+  progress, that `origin/<base>` is an ancestor of HEAD, that the PR commit
+  count is unchanged (no commit was dropped as empty), and that HEAD has
+  moved. The push is
+  `git push --force-with-lease=refs/heads/<head>:<headRefOid> origin HEAD:refs/heads/<head>`,
+  executed as argv rather than through a shell. A lease rejection fails once
+  with the branch and both shas, with no re-fetch and no retry. On success the
+  engine records `run.rebase.headShaAfter` and a `push/pr_head` telemetry
+  artifact. `--dry-run`, or `dryRun: true` on `POST /api/runs`, runs every
+  step, checks the invariants, and ends `done` with `dry run: not pushed`.
+- **The push-source scan stays a proof.** Selftest scans the engine and
+  `web/lib/rebase.mjs`. Every `git push` literal must either name `factory/` or
+  carry both `--force-with-lease=refs/heads/` and `HEAD:refs/heads/`, and the
+  predicate is asserted to reject `git push origin main`.
+- **Every exit writes `rebase-summary.md`.** It holds the PR URL and title,
+  both head shas, `<base>@<baseSha>`, the checks and tests results, and the
+  literal `Not merged`. The notify step posts it on a green run. `status <id>`
+  prints a `rebase:` line, and `status --json` exposes `run.rebase` unchanged.
+- **Console and skills.** In the console, NewRun shows a PR-number input and a
+  dry-run toggle for rebase-train, and the prompt is optional there. The
+  `factory-feature` skill documents the verb, including that starting it
+  authorises the lease force-push of that PR head. The `factory-standup` skill
+  proposes `start rebase-train on #n` for each CONFLICTING non-draft PR, and
+  reports a conflict failure as a founder item.
+- **One PR per run.** Rebasing PR A onto `main` changes nothing for PR B, so a
+  sequential train gains nothing over N independent runs, and separate runs
+  let one conflict fail alone. An `--all-conflicting` sweep is a possible
+  follow-up.
+
+**Live validation (2026-10-23, dry runs on running-with-pace from the
+implementation worktree, notifications disabled with `FACTORY_RUN_NO_NOTIFY=1`):**
+
+- `rebase-pr-78` (PR #78 `cursor/aso-visual-system-2ccc`, CONFLICTING):
+  **failed at `rebase`** in about 3 s after preflight, with `conflict: needs
+  founder`. The 3 PR commits at head `d534704f` hit 15 unmerged files against
+  base range `5a0747a2..bcad83ea`. The files were
+  `pace-react-native/app/analytics.tsx`,
+  `components/map/RunModeOverlay.tsx`, `components/ui/AmbientBackground.tsx`,
+  `components/ui/Card.tsx`, `components/ui/RunEndingScreen.tsx`,
+  `components/ui/RunHeadsUpDisplay.tsx`,
+  `components/ui/coach-voice/MidRunCoachMuteButton.tsx`,
+  `components/ui/coach-voice/PreRunCoachSheet.tsx`,
+  `components/ui/journal/JournalAnalyticsEntry.tsx`,
+  `components/ui/journal/JournalRunCard.tsx`,
+  `components/ui/journal/VisibilitySettingsModal.tsx`,
+  `src/impl/coach-voice-runtime.ts`, `styles/brand.ts`,
+  `styles/common-stylesheet.tsx` and `tests/coach-voice-runtime.test.ts`
+  (every path after the first is under `pace-react-native/`). After the abort
+  the worktree was clean at `d534704f`. No setup or push ran, and cleanup
+  reclaimed the detached worktree as branchless (26.7 MB).
+- `rebase-pr-140` (PR #140 `codex/offline-first-contract-doc`, MERGEABLE and
+  3 commits behind `main`): **done, `dry run: not pushed`**. The run rebased
+  1 commit onto `main@bcad83ea`, ran setup (3 `npm install`s, which dirtied 3
+  lockfiles), passed 3 checks and 1 test, and passed the push invariants with
+  a would-be head of `8ca7150e`. The origin ref stayed at `2b9f19c3`. End-of-run
+  cleanup kept the worktree because of the setup lockfile dirt, so it was
+  discarded by hand (`cleanup --discard`, 2.83 GB, no branch involved).
+
 ## 12. Non-goals (this document)
 
 - No production code that accesses Slack, voice APIs, EAS, or model providers.

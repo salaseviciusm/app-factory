@@ -11,6 +11,10 @@
  *
  * Commands:
  *   factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]
+ *   factory-run start --rig <name> --workflow rebase-train --pr <n> [--dry-run]
+ *                                        (rebase one open PR onto the default
+ *                                         branch, re-run checks/tests, lease
+ *                                         force-push its head; never merges — D36)
  *   factory-run exec <run_id>            (internal: runs the step loop in-process)
  *   factory-run resume <run_id> [--step <step-id>|--back]
  *                                        (restart a stopped/failed/cancelled run's
@@ -146,6 +150,23 @@ const {
   sleepProofSpawn,
   classifyAgentStepFailure,
 } = require(path.join(ORCH_DIR, "web", "lib", "agent-spawn.mjs"));
+// Rebase-train pure core (PR target refusals, rebase/push verdicts, the lease
+// push literal, the summary composer) — same web-lib pattern; deep coverage
+// lives in rebase.test.mjs and test/rebase-train.test.mjs (D36).
+const {
+  REBASE_WORKFLOW,
+  prViewCommand,
+  parsePrNumber,
+  classifyRebaseTarget,
+  fetchRefsCommand,
+  worktreeAddCommand,
+  classifyRebaseOutcome,
+  conflictSummary,
+  classifyPushReadiness,
+  pushPrBranchCommand,
+  pushLiteralAllowed,
+  composeRebaseSummary,
+} = require(path.join(ORCH_DIR, "web", "lib", "rebase.mjs"));
 
 // ---------- telemetry (SQLite, node:sqlite — structured artifacts; each agent
 // step's full stream-json transcript lives in its run dir, see runAgentStep) ----------
@@ -2413,6 +2434,249 @@ function setupFailureSummary(cmds, failedIndex) {
   );
 }
 
+/** Run the rig's setup commands in the run worktree, then record the
+ *  post-setup dirty snapshot and setupOk. Called before the first step, or —
+ *  for workflows declaring "setupBeforeStep" (rebase-train) — just before
+ *  that step, so a conflicted or no-op rebase never pays for an install and
+ *  setup's lockfile dirt can never block `git rebase`. Throws on a failed
+ *  command (the executor's crash path records it). */
+function provisionWorktree(run, rig) {
+  const runDir = runDirOf(run.id);
+  setState(run, "setup", `provisioning worktree (${(rig.setup || []).length} rig.setup command(s))`);
+  const setupLog = path.join(runDir, "setup.log");
+  const setupCmds = rig.setup || [];
+  for (let c = 0; c < setupCmds.length; c++) {
+    log(runDir, `setup: ${setupCmds[c]}`);
+    const r = runCommand(setupCmds[c], run.worktree, setupLog, 30);
+    if (!r.ok) {
+      const summary = setupFailureSummary(setupCmds, c);
+      fs.appendFileSync(setupLog, `${summary}\n`);
+      throw new Error(summary);
+    }
+  }
+  // Post-setup snapshot: tracked-file churn the setup commands left behind
+  // (lockfile metadata, generated files) is recorded as {path, hash} so
+  // the deploy readiness gate can tolerate exactly that dirt — and nothing
+  // else. Empty array = setup left the tree clean; field absent entirely =
+  // legacy run (the gate stays strict). A failed status probe snapshots
+  // empty too: never tolerate dirt we could not attribute. Re-taken on
+  // every (re-)provision so the gate matches what this pass churned.
+  const postSetup = git(run.worktree, ["status", "--porcelain"]);
+  run.setupDirtyPaths =
+    postSetup.status === 0
+      ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
+      : [];
+  saveRun(run);
+  if (run.setupDirtyPaths.length) {
+    log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
+  }
+  // Provisioning completion is explicit run state, written in exactly one
+  // place — after every setup command exited 0 and the post-setup snapshot
+  // was saved. No failure path writes it.
+  run.setupOk = true;
+  saveRun(run);
+}
+
+// ---------- rebase-train (D36) ----------
+//
+// One open PR per run: resolve it with gh, refuse unsafe targets before any
+// worktree exists, check out the reported head sha detached (no local branch
+// is ever created, moved, or deleted), rebase onto origin/<default>, re-run
+// checks and tests, then lease-force-push the PR head pinned to the sha gh
+// reported at run start. Never merges, never resolves a conflict: a stopped
+// rebase is aborted and reported as a founder item.
+
+/** Persist the rebase outcome and rewrite rebase-summary.md — called on
+ *  every rebase-train exit so the run dir always says how it ended. */
+function recordRebaseOutcome(run, outcome) {
+  if (!run.rebase) return;
+  run.rebase.outcome = outcome;
+  saveRun(run);
+  try {
+    fs.writeFileSync(path.join(runDirOf(run.id), "rebase-summary.md"), composeRebaseSummary(run.rebase));
+  } catch {}
+}
+
+/** One git invocation in `cwd`, appended to a run-dir log like runCommand. */
+function gitLogged(cwd, args, logFile) {
+  const r = git(cwd, args);
+  const output = (r.stdout || "") + (r.stderr || "");
+  fs.appendFileSync(logFile, `\n$ git ${args.join(" ")}\n${output}\n(exit ${r.status})\n`);
+  return { ok: r.status === 0, stdout: r.stdout || "", output };
+}
+
+/** Resolve the run's PR, apply the refusals, and create the detached
+ *  worktree at gh's headRefOid. Returns {ok: true} or {ok: false, summary};
+ *  on refusal no worktree directory exists. */
+function checkoutPrWorktree(run, rig, workflow) {
+  const runDir = runDirOf(run.id);
+  const prLog = path.join(runDir, "pr.log");
+  setState(run, "setup", `resolving PR #${run.rebase.pr}`);
+  const view = ghRun(run, prViewCommand(run.rebase.pr), 2, rig.path);
+  let pr = null;
+  try {
+    pr = view.ok ? JSON.parse(view.stdout) : null;
+  } catch {}
+  if (!pr) return { ok: false, summary: `gh pr view ${run.rebase.pr} failed: ${view.output.trim().split("\n").slice(-1)[0] || "no output"}` };
+  Object.assign(run.rebase, {
+    url: pr.url || null,
+    title: pr.title || null,
+    headRef: pr.headRefName || null,
+    baseRef: pr.baseRefName || null,
+    headShaBefore: pr.headRefOid || null,
+    headShaAfter: null,
+  });
+  saveRun(run);
+  // Earlier-created live runs only: two rebase runs started together must not
+  // refuse each other — the older one holds the PR.
+  const liveRuns = [];
+  for (const otherId of listRunIds()) {
+    if (otherId === run.id) continue;
+    let other;
+    try {
+      other = loadRun(otherId);
+    } catch {
+      continue;
+    }
+    if (TERMINAL_STATES.includes(other.state)) continue;
+    const isRebase = other.workflow === REBASE_WORKFLOW;
+    if (isRebase && !(other.createdAt < run.createdAt || (other.createdAt === run.createdAt && otherId < run.id))) continue;
+    liveRuns.push({
+      id: otherId,
+      workflow: other.workflow,
+      branch: isRebase ? null : runBranch(other),
+      rebasePr: other.rebase ? other.rebase.pr : null,
+    });
+  }
+  const target = classifyRebaseTarget({ pr, defaultBranch: rig.defaultBranch, liveRuns });
+  if (!target.ok) return { ok: false, summary: `refused: ${target.reason}` };
+  const { baseRef, headRef, headShaBefore } = run.rebase;
+  const fetch = gitLogged(rig.path, fetchRefsCommand({ baseRef, headRef }), prLog);
+  if (!fetch.ok) return { ok: false, summary: `git fetch origin ${baseRef} ${headRef} failed (see pr.log)` };
+  const remote = git(rig.path, ["rev-parse", `origin/${headRef}`]);
+  const remoteSha = remote.status === 0 ? remote.stdout.trim() : "unknown";
+  if (remoteSha !== headShaBefore) {
+    return { ok: false, summary: `PR head moved: gh reported ${headShaBefore}, origin/${headRef} is ${remoteSha}` };
+  }
+  fs.mkdirSync(WORKTREES_DIR, { recursive: true });
+  const add = gitLogged(rig.path, worktreeAddCommand({ worktree: run.worktree, sha: headShaBefore }), prLog);
+  if (!add.ok) return { ok: false, summary: `git worktree add --detach failed: ${add.output.trim().split("\n").slice(-1)[0]}` };
+  log(runDir, `worktree created at ${run.worktree} (detached at ${headShaBefore}, PR #${run.rebase.pr} ${headRef})`);
+  // A just-created worktree is unprovisioned, and on a resume whose worktree
+  // was reclaimed the rebased commits are gone with it: start from the top.
+  if (run.setupOk !== undefined) delete run.setupOk;
+  if (run.stepIndex) {
+    log(runDir, `worktree recreated; rewinding to step '${workflow.steps[0].id}'`);
+    run.stepIndex = 0;
+  }
+  saveRun(run);
+  return { ok: true };
+}
+
+/** The `rebase` step: record the base, rebase onto it, and abort on any
+ *  stop. A head already containing the base is a no-op that skips straight
+ *  to notify (no setup, checks, tests, or push). */
+function rebaseStep(run) {
+  const runDir = runDirOf(run.id);
+  const wt = run.worktree;
+  const rb = run.rebase;
+  const logFile = path.join(runDir, "rebase.log");
+  const base = `origin/${rb.baseRef}`;
+  const probe = (args) => {
+    const r = git(wt, args);
+    return r.status === 0 ? r.stdout.trim() : null;
+  };
+  rb.baseSha = probe(["rev-parse", base]);
+  rb.mergeBase = probe(["merge-base", "HEAD", base]);
+  rb.commitsBefore = parseInt(probe(["rev-list", "--count", `${base}..HEAD`]) || "", 10);
+  rb.conflicted = false;
+  saveRun(run);
+  if (!rb.baseSha || !rb.mergeBase || !Number.isInteger(rb.commitsBefore)) {
+    return { ok: false, summary: `could not resolve ${base} against HEAD (baseSha ${rb.baseSha}, merge-base ${rb.mergeBase})` };
+  }
+  if (git(wt, ["merge-base", "--is-ancestor", base, rb.headShaBefore]).status === 0) {
+    recordRebaseOutcome(run, "already up to date");
+    return { ok: true, summary: `already up to date (${base} is an ancestor of ${rb.headShaBefore.slice(0, 12)})`, skipTo: "notify" };
+  }
+  log(runDir, `rebase: git rebase ${base} (PR #${rb.pr} ${rb.headRef}, ${rb.commitsBefore} commit(s), base ${rb.baseSha.slice(0, 12)})`);
+  const r = runCommand(`git rebase ${base}`, wt, logFile, 10);
+  if (r.ok) {
+    rb.rebasedSha = probe(["rev-parse", "HEAD"]);
+    saveRun(run);
+    return { ok: true, summary: `rebased ${rb.commitsBefore} commit(s) onto ${rb.baseRef}@${rb.baseSha.slice(0, 12)}` };
+  }
+  const unmerged = (probe(["diff", "--name-only", "--diff-filter=U"]) || "").split("\n").filter(Boolean);
+  const verdict = classifyRebaseOutcome({ rebaseOk: false, unmergedFiles: unmerged });
+  // The error tail is the failed rebase's own last lines, read before the
+  // abort appends to the same log.
+  const tail = fs.readFileSync(logFile, "utf8").split("\n").filter((l) => l.trim()).slice(-3).join(" | ");
+  runCommand("git rebase --abort", wt, logFile, 2);
+  let summary;
+  if (verdict.outcome === "conflict") {
+    rb.conflicted = true;
+    rb.unmergedFiles = unmerged;
+    summary = conflictSummary({ unmergedFiles: unmerged, mergeBase: rb.mergeBase, baseSha: rb.baseSha });
+  } else {
+    summary = `rebase error: ${tail}`;
+  }
+  saveRun(run);
+  return { ok: false, summary };
+}
+
+/** The `push-pr` step: verify the push invariants, then (unless dry run)
+ *  lease-force-push HEAD to the PR head. A lease rejection fails once — no
+ *  re-fetch, no retry. */
+function pushPrStep(run, rig) {
+  const runDir = runDirOf(run.id);
+  const wt = run.worktree;
+  const rb = run.rebase;
+  const base = `origin/${rb.baseRef}`;
+  const gitPath = git(wt, ["rev-parse", "--git-path", "rebase-merge"]);
+  const gitPathApply = git(wt, ["rev-parse", "--git-path", "rebase-apply"]);
+  const inProgress = [gitPath, gitPathApply].some((g) => g.status !== 0 || fs.existsSync(path.resolve(wt, g.stdout.trim())));
+  const headProbe = git(wt, ["rev-parse", "HEAD"]);
+  const head = headProbe.status === 0 ? headProbe.stdout.trim() : null;
+  const countProbe = git(wt, ["rev-list", "--count", `${base}..HEAD`]);
+  const readiness = classifyPushReadiness({
+    rebaseInProgress: inProgress,
+    baseIsAncestor: git(wt, ["merge-base", "--is-ancestor", base, "HEAD"]).status === 0,
+    commitsBefore: rb.commitsBefore,
+    commitsAfter: countProbe.status === 0 ? parseInt(countProbe.stdout.trim(), 10) : null,
+    head,
+    headShaBefore: rb.headShaBefore,
+  });
+  if (!readiness.ok) return { ok: false, summary: `push refused: ${readiness.reason}` };
+  if (rb.dryRun) {
+    recordRebaseOutcome(run, "dry run: not pushed");
+    return { ok: true, summary: `dry run: not pushed (would lease-push ${head.slice(0, 12)} to ${rb.headRef})` };
+  }
+  let cmd;
+  try {
+    cmd = pushPrBranchCommand({ headRef: rb.headRef, expectedSha: rb.headShaBefore, defaultBranch: rig.defaultBranch });
+  } catch (err) {
+    return { ok: false, summary: `push refused: ${err.message}` };
+  }
+  log(runDir, `push: ${cmd}`);
+  // argv, not a shell string: pushPrBranchCommand guarantees no whitespace
+  // in the ref, so the split is exact and no ref character reaches a shell.
+  const argv = cmd.split(" ").slice(1);
+  const r = gitLogged(wt, argv, path.join(runDir, "push.log"));
+  if (!r.ok) {
+    return {
+      ok: false,
+      summary: `push rejected for ${rb.headRef}: lease expected ${rb.headShaBefore}, attempted ${head} — the PR head moved since run start (no retry)`,
+    };
+  }
+  rb.headShaAfter = head;
+  saveRun(run);
+  log(runDir, `pushed rebased PR head ${rb.headRef}: ${rb.headShaBefore.slice(0, 12)} -> ${head.slice(0, 12)}`);
+  try {
+    tArtifact(run.id, "push", "pr_head", `${rb.headRef} ${rb.headShaBefore}..${head}`);
+  } catch {}
+  recordRebaseOutcome(run, `pushed ${rb.headRef} (${rb.headShaBefore.slice(0, 12)} → ${head.slice(0, 12)})`);
+  return { ok: true, summary: `lease-pushed ${rb.headRef} ${rb.headShaBefore.slice(0, 12)} → ${head.slice(0, 12)}` };
+}
+
 function deployStep(run, rig) {
   const deploy = rig.deploy || { type: "none" };
   const policy = rig.policy || POLICY_DEFAULTS;
@@ -2910,7 +3174,7 @@ function fmtBytes(n) {
  *  grounds that factory/* is engine-owned — the namespace is, the tip is not
  *  (D34). `tipSha`/`prHeadSha` are short shas for the reason text only. */
 function classifyCleanup(
-  { state, worktreeExists, branchExists, dirty, merged, prMerged, tipMerged, tipSha = "unknown", prHeadSha = "unknown" },
+  { state, worktreeExists, branchExists, dirty, merged, prMerged, tipMerged, tipSha = "unknown", prHeadSha = "unknown", branchless = false },
   opts = {}
 ) {
   if (!TERMINAL_STATES.includes(state)) return { action: "skip", reason: `state '${state}' is not terminal` };
@@ -2935,6 +3199,7 @@ function classifyCleanup(
   if (branchExists && !merged && prMerged) {
     return { action: "clean", reason: "PR merged on GitHub (squash/rebase merge — forced local branch delete)", forceBranch: true };
   }
+  if (branchless) return { action: "clean", reason: "branchless run (detached worktree, no branch to delete); reclaiming clean worktree" };
   return { action: "clean", reason: branchExists ? "merged and clean" : "branch already deleted; reclaiming clean worktree" };
 }
 
@@ -2950,6 +3215,9 @@ function classifyCleanup(
 function cleanupRun(run, opts = {}) {
   const worktree = path.join(WORKTREES_DIR, run.id);
   const branch = runBranch(run);
+  // Rebase-train runs own no branch (a detached checkout of a PR head that
+  // belongs to someone else): never probed, never deleted.
+  const branchless = run.workflow === REBASE_WORKFLOW && !run.branch;
   let rig;
   try {
     rig = resolveRig(run.rig);
@@ -2974,7 +3242,7 @@ function cleanupRun(run, opts = {}) {
     return { id: run.id, action: "skip", reason: `branch/worktree shared with live run ${liveSharer}`, freedBytes: 0 };
   }
   const worktreeExists = fs.existsSync(worktree);
-  const branchExists = git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
+  const branchExists = !branchless && git(rig.path, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).status === 0;
   let dirty = false;
   if (worktreeExists && !opts.discard) {
     const st = git(worktree, ["status", "--porcelain"]);
@@ -3038,6 +3306,7 @@ function cleanupRun(run, opts = {}) {
       tipMerged,
       tipSha: shortSha(tipSha),
       prHeadSha: shortSha(prHeadSha),
+      branchless,
     },
     opts
   );
@@ -3193,7 +3462,19 @@ function execRun(id) {
       run.worktree = rig.path;
       saveRun(run);
     } else {
-      if (!fs.existsSync(run.worktree)) {
+      if (workflow.checkout === "pr" && !fs.existsSync(run.worktree)) {
+        // Rebase-train (D36): a detached checkout of the PR head sha gh
+        // reported — refusals run before any worktree exists, and a refused
+        // or moved PR ends the run failed at its first step.
+        const co = checkoutPrWorktree(run, rig, workflow);
+        if (!co.ok) {
+          run.stepIndex = 0;
+          recordRebaseOutcome(run, co.summary);
+          setState(run, "failed", co.summary);
+          notify(run, `:x: Run ${id} FAILED at step *${workflow.steps[0].id}*: ${co.summary}\nRun dir: ${runDir}`);
+          return;
+        }
+      } else if (workflow.checkout !== "pr" && !fs.existsSync(run.worktree)) {
         setState(run, "setup", "creating worktree");
         fs.mkdirSync(WORKTREES_DIR, { recursive: true });
         // Follow-up runs (and restarts of a closed chain) continue an existing
@@ -3218,41 +3499,7 @@ function execRun(id) {
           saveRun(run);
         }
       }
-      if (setupNeeded(run, workflow)) {
-        setState(run, "setup", `provisioning worktree (${(rig.setup || []).length} rig.setup command(s))`);
-        const setupLog = path.join(runDir, "setup.log");
-        const setupCmds = rig.setup || [];
-        for (let c = 0; c < setupCmds.length; c++) {
-          log(runDir, `setup: ${setupCmds[c]}`);
-          const r = runCommand(setupCmds[c], run.worktree, setupLog, 30);
-          if (!r.ok) {
-            const summary = setupFailureSummary(setupCmds, c);
-            fs.appendFileSync(setupLog, `${summary}\n`);
-            throw new Error(summary);
-          }
-        }
-        // Post-setup snapshot: tracked-file churn the setup commands left behind
-        // (lockfile metadata, generated files) is recorded as {path, hash} so
-        // the deploy readiness gate can tolerate exactly that dirt — and nothing
-        // else. Empty array = setup left the tree clean; field absent entirely =
-        // legacy run (the gate stays strict). A failed status probe snapshots
-        // empty too: never tolerate dirt we could not attribute. Re-taken on
-        // every (re-)provision so the gate matches what this pass churned.
-        const postSetup = git(run.worktree, ["status", "--porcelain"]);
-        run.setupDirtyPaths =
-          postSetup.status === 0
-            ? porcelainPaths(postSetup.stdout).map((p) => ({ path: p, hash: dirtyPathHash(run.worktree, p) }))
-            : [];
-        saveRun(run);
-        if (run.setupDirtyPaths.length) {
-          log(runDir, `setup dirtied ${run.setupDirtyPaths.length} tracked path(s): ${run.setupDirtyPaths.map((d) => d.path).join(", ")}`);
-        }
-        // Provisioning completion is explicit run state, written in exactly one
-        // place — after every setup command exited 0 and the post-setup snapshot
-        // was saved. No failure path writes it.
-        run.setupOk = true;
-        saveRun(run);
-      }
+      if (!workflow.setupBeforeStep && setupNeeded(run, workflow)) provisionWorktree(run, rig);
     }
 
     let i = run.stepIndex || 0;
@@ -3267,6 +3514,13 @@ function execRun(id) {
       }
       const step = workflow.steps[i];
       run.stepIndex = i;
+      // "setupBeforeStep" workflows (rebase-train) provision lazily: at the
+      // named step, or at any later work step a resume lands on — never for
+      // a notify reached by a no-op skip.
+      if (workflow.setupBeforeStep && step.type !== "notify" && setupNeeded(run, workflow)) {
+        const setupIdx = workflow.steps.findIndex((s) => s.id === workflow.setupBeforeStep);
+        if (setupIdx !== -1 && i >= setupIdx) provisionWorktree(run, rig);
+      }
       let result;
       const stepStarted = nowIso();
       execCounts[step.id] = (execCounts[step.id] || 0) + 1;
@@ -3317,6 +3571,16 @@ function execRun(id) {
       } else if (step.type === "commands") {
         setState(run, `running:${step.id}`, null);
         result = runCommandsStep(run, step, rig);
+        if (run.rebase) {
+          run.rebase[step.id] = result.summary;
+          saveRun(run);
+        }
+      } else if (step.type === "rebase") {
+        setState(run, `running:${step.id}`, null);
+        result = rebaseStep(run);
+      } else if (step.type === "push-pr") {
+        setState(run, `running:${step.id}`, null);
+        result = pushPrStep(run, rig);
       } else if (step.type === "gate") {
         result = waitForGate(run, step);
         if (result.ok) {
@@ -3514,6 +3778,7 @@ function execRun(id) {
             continue;
           }
         }
+        recordRebaseOutcome(run, `failed at ${step.id}: ${result.summary}`);
         setState(run, "failed", result.summary);
         {
           const usage = usageLine(id);
@@ -3521,7 +3786,14 @@ function execRun(id) {
         }
         return;
       }
-      i += 1;
+      if (result.skipTo) {
+        // A step that settles the run early (rebase-train's no-op) jumps
+        // forward to the named step — never backwards.
+        const skipIdx = workflow.steps.findIndex((s) => s.id === result.skipTo);
+        i = skipIdx > i ? skipIdx : i + 1;
+      } else {
+        i += 1;
+      }
       run.stepIndex = i;
       saveRun(run);
     }
@@ -3542,7 +3814,9 @@ function execRun(id) {
           : `branch ${runBranch(run)} awaits founder merge into ${run.baseBranch} (no PR recorded — \`factory-run sync ${id}\` prints the manual exit)`
       );
     } else {
-      setState(run, "done", null);
+      // Rebase-train records how it ended (pushed / already up to date / dry
+      // run: not pushed) on the done transition itself.
+      setState(run, "done", run.rebase ? run.rebase.outcome || null : null);
     }
     // End-of-run cleanup is a no-op for awaiting-merge runs (branch unmerged
     // — the "worktree kept for merge review" flow); the reclaim happens via
@@ -3557,6 +3831,7 @@ function execRun(id) {
   } catch (err) {
     // A crash racing an external cancel must not overwrite the terminal state.
     if (!terminalStateOnDisk(id)) {
+      recordRebaseOutcome(run, `crashed: ${String(err.message || err).slice(0, 300)}`);
       setState(run, "failed", String(err.message || err));
       notify(run, `:x: Run ${id} crashed: ${String(err.message || err).slice(0, 500)}${prChecksLine(run)}`);
     }
@@ -3587,14 +3862,18 @@ function inheritedRunSetup(baseRun, id, defaultBranch, worktreesDir = WORKTREES_
   };
 }
 
-function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview, baseRun }) {
+/** Create a run record and detach its executor. `idBase` overrides the
+ *  prompt-derived id base (rebase-train: rebase-pr-<n>); `rebase` seeds
+ *  run.rebase ({pr, dryRun}) and makes the run branchless — no `branch`
+ *  field, so pushRunBranch, sync, and cleanup's PR probe never apply. */
+function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, preview, baseRun, idBase, rebase }) {
   const rig = resolveRig(rigName);
   const wf = loadWorkflow(wfName);
   // Fail before the run dir or worktree exists on a broken step reference.
   const wfProblems = validateWorkflowAgentSteps(wfName, wf);
   if (wfProblems.length) throw new Error(wfProblems.join("; "));
   const slug = slugify(prompt);
-  const base = `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
+  const base = idBase || `${wfName.split("-")[0]}-${slug || Date.now().toString(36)}`;
   const id = uniqueRunId(base, (candidate) => fs.existsSync(runDirOf(candidate)));
   const runDir = runDirOf(id);
   fs.mkdirSync(runDir, { recursive: true });
@@ -3626,6 +3905,10 @@ function createRun({ rig: rigName, workflow: wfName, prompt, auto, parentRun, pr
     updatedAt: nowIso(),
     history: [],
   };
+  if (rebase) {
+    delete run.branch;
+    run.rebase = { pr: rebase.pr, dryRun: !!rebase.dryRun };
+  }
   saveRun(run);
   try {
     tRun(run);
@@ -3641,9 +3924,35 @@ function cmdStart(argv) {
   const prompt = argOf(argv, "--prompt");
   const auto = argv.includes("--auto");
   const preview = argv.includes("--preview") ? true : argv.includes("--no-preview") ? false : null;
-  if (!rigName || !prompt) {
-    console.error('usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]');
+  const usage =
+    'usage: factory-run start --rig <name> --workflow <wf> --prompt "<text>" [--auto] [--preview|--no-preview]\n' +
+    "       factory-run start --rig <name> --workflow rebase-train --pr <n> [--dry-run]";
+  const isRebase = wfName === REBASE_WORKFLOW;
+  const hasPr = argv.includes("--pr");
+  const pr = hasPr ? parsePrNumber(argOf(argv, "--pr")) : null;
+  const dryRun = argv.includes("--dry-run");
+  let problem = null;
+  if (!rigName) problem = "--rig is required";
+  else if (!isRebase && (hasPr || dryRun)) problem = `--pr/--dry-run apply to the ${REBASE_WORKFLOW} workflow only`;
+  else if (isRebase && !hasPr) problem = `${REBASE_WORKFLOW} requires --pr <n>`;
+  else if (isRebase && pr === null) problem = `--pr must be an integer in 1..999999 (got '${argOf(argv, "--pr")}')`;
+  else if (!isRebase && !prompt) problem = "--prompt is required";
+  if (problem) {
+    console.error(`${problem}\n${usage}`);
     process.exit(1);
+  }
+  if (isRebase) {
+    console.log(
+      createRun({
+        rig: rigName,
+        workflow: wfName,
+        prompt: prompt || `Rebase PR #${pr} onto the default branch${dryRun ? " (dry run)" : ""}`,
+        auto,
+        idBase: `rebase-pr-${pr}`,
+        rebase: { pr, dryRun },
+      })
+    );
+    return;
   }
   console.log(createRun({ rig: rigName, workflow: wfName, prompt, auto, preview }));
 }
@@ -4430,6 +4739,13 @@ function cmdStatus(argv) {
         const detail = a.map((x) => `${x.conflicted ? "conflicted" : "clean"}→${x.outcome}`).join(", ");
         console.log(`  recovery (legacy): ${r.recovery.iterations} cycle(s)${detail ? ` — ${detail}` : ""}`);
       }
+      if (r.rebase) {
+        const rb = r.rebase;
+        console.log(
+          `  rebase: pr #${rb.pr} headRef ${rb.headRef || "-"} headShaBefore ${rb.headShaBefore || "-"} ` +
+            `headShaAfter ${rb.headShaAfter || "-"} outcome ${rb.outcome || "pending"}${rb.dryRun ? " (dry run)" : ""}`
+        );
+      }
       if (r.artifactUrl) console.log(`  artifact: ${r.artifactUrl}`);
       if (r.pr) console.log(`  pr: #${r.pr.number} ${r.pr.url}${r.pr.state ? ` (${r.pr.state}, checked ${r.pr.checkedAt || "never"})` : ""}`);
       if (r.state === "awaiting-merge") {
@@ -5090,7 +5406,7 @@ function cmdSelftest() {
     // app-factory harness rig included.
     ["skip-hero is merge-review deploy-auto", (() => { const r = resolveRig("skip-hero"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
     ["running-with-pace defaults to merge-review", (() => { const r = resolveRig("running-with-pace"); return r.policyProblems.length === 0 && r.policy.merge === "review"; })()],
-    ["app-factory is merge-review deploy-auto", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "auto"; })()],
+    ["app-factory is merge-review deploy-hold (2026-10-23: an auto harness-restart deploy killed the standup cutoff mid-turn)", (() => { const r = resolveRig("app-factory"); return r.policyProblems.length === 0 && r.policy.merge === "review" && r.policy.deploy === "hold"; })()],
     ["running-with-pace defaults to merge-review", resolveRig("running-with-pace").policy.merge === "review"],
     ["awaiting-merge is a terminal state", TERMINAL_STATES.includes("awaiting-merge")],
     ["web lib agrees awaiting-merge is terminal", (() => {
@@ -5107,14 +5423,19 @@ function cmdSelftest() {
     // (pushRunBranchCommand — console commit links, agents' upstream), so
     // the scan targets command literals, not call sites (a call site split
     // across lines must not dodge it): every non-comment `git push` string
-    // in the source must name factory/. The scan's own lines, and selftest
-    // lines that quote the literal for other checks, carry the no-push-scan
-    // marker and are excluded.
-    ["every git push in the engine targets factory/<id>, never the base branch", (() => {
-      const lines = fs.readFileSync(__filename, "utf8").split("\n"); // no-push-scan
+    // in the source must name factory/ — or, since D36, be rebase-train's
+    // PR-head lease push (web/lib/rebase.mjs, scanned too), which must carry
+    // both an explicit --force-with-lease=refs/heads/ lease and an explicit
+    // HEAD:refs/heads/ refspec (pushLiteralAllowed). The scan's own lines,
+    // and selftest lines that quote the literal for other checks, carry the
+    // no-push-scan marker and are excluded.
+    ["every git push in the engine targets factory/<id> or is the PR-head lease push, never the base branch", (() => {
+      const lines = [__filename, path.join(ORCH_DIR, "web", "lib", "rebase.mjs")].flatMap((f) => fs.readFileSync(f, "utf8").split("\n")); // no-push-scan
       const pushes = lines.filter((l) => !l.includes("no-push-scan") && /git +push/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)); // no-push-scan
-      return pushes.length > 0 && pushes.every((l) => /git +push[^"'`]*factory\//.test(l)); // no-push-scan
+      return pushes.length > 1 && pushes.every((l) => pushLiteralAllowed(l)) && pushes.some((l) => l.includes("--force-with-lease=refs/heads/")); // no-push-scan
     })()],
+    ["push scan predicate rejects a base-branch push", pushLiteralAllowed("git push origin main") === false], // no-push-scan
+    ["push scan predicate rejects a bare force push", pushLiteralAllowed("git push --force origin HEAD:refs/heads/x") === false], // no-push-scan
     ["engine's only push command is the run branch push", /^git push --force-with-lease -u origin factory\/x$/.test(pushRunBranchCommand("x"))], // no-push-scan
     // greenTerminalState: awaiting-merge only when a merge was actually in
     // play (worktree + deploy step + review policy + nothing merged).
@@ -5169,6 +5490,11 @@ function cmdSelftest() {
     ["discard removes even dirty/unmerged", cls({ state: "cancelled", dirty: true, merged: false }, { discard: true }) === "discard"],
     ["discard still refuses in-flight runs", cls({ state: "running:implement" }, { discard: true }) === "skip"],
     ["discard with nothing left is a no-op", cls({ worktreeExists: false, branchExists: false, merged: false }, { discard: true }) === "none"],
+    // Rebase-train (D36): branchless — a clean detached worktree is reclaimed
+    // with no branch probe or delete; a dirty one is still kept.
+    ["branchless rebase run reclaims its clean detached worktree", (() => { const d = classifyCleanup({ state: "done", worktreeExists: true, branchExists: false, dirty: false, merged: false, prMerged: false, branchless: true }); return d.action === "clean" && /branchless run/.test(d.reason) && d.forceBranch !== true; })()],
+    ["branchless failed run reclaimed too", cls({ state: "failed", branchExists: false, merged: false, branchless: true }) === "clean"],
+    ["branchless dirty worktree kept", cls({ branchExists: false, merged: false, dirty: true, branchless: true }) === "skip"],
   ];
   for (const [name, ok] of cleanupChecks) {
     console.log(`cleanup ${name}: ${ok ? "ok" : "FAIL"}`);
@@ -5856,6 +6182,52 @@ function cmdSelftest() {
   for (const [name, ok] of publishChecks) {
     console.log(`publish-args ${name}: ${ok ? "ok" : "FAIL"}`);
     if (!ok) problems.push(`publish-args check failed: ${name}`);
+  }
+  // Rebase-train pure core (web/lib/rebase.mjs; deep coverage in
+  // rebase.test.mjs) — this proves the engine's require(esm) wiring and pins
+  // every refusal, outcome, and push invariant the executor acts on (D36).
+  const rbPr = (over) => ({
+    number: 78, url: "https://github.com/o/r/pull/78", title: "t", state: "OPEN", isDraft: false, isCrossRepository: false,
+    headRefName: "codex/x", baseRefName: "main", headRefOid: "abc1234def", ...over,
+  });
+  const rbT = (over, liveRuns = []) => classifyRebaseTarget({ pr: rbPr(over), defaultBranch: "main", liveRuns });
+  const refused = (v) => v.ok === false && typeof v.reason === "string" && v.reason.length > 0;
+  const rbReady = (over) =>
+    classifyPushReadiness({ rebaseInProgress: false, baseIsAncestor: true, commitsBefore: 2, commitsAfter: 2, head: "def5678", headShaBefore: "abc1234", ...over });
+  const rbWf = loadWorkflow("rebase-train");
+  const rebaseChecks = [
+    ["open same-repo non-draft PR on the default branch accepted", rbT({}).ok === true],
+    ["merged PR refused", refused(rbT({ state: "MERGED" }))],
+    ["closed PR refused", refused(rbT({ state: "CLOSED" }))],
+    ["draft PR refused", refused(rbT({ isDraft: true }))],
+    ["cross-repository PR refused", refused(rbT({ isCrossRepository: true }))],
+    ["head ref equal to the default branch refused", refused(rbT({ headRefName: "main" }))],
+    ["head ref equal to the base refused", refused(rbT({ headRefName: "develop", baseRefName: "develop" }))],
+    ["base other than the default branch refused", refused(rbT({ baseRefName: "release" }))],
+    ["head ref owned by a live run refused", refused(rbT({}, [{ id: "feature-x", workflow: "feature-dev", branch: "codex/x", rebasePr: null }]))],
+    ["PR held by a live rebase-train run refused", refused(rbT({}, [{ id: "rebase-pr-78", workflow: "rebase-train", branch: null, rebasePr: 78 }]))],
+    ["clean rebase outcome", classifyRebaseOutcome({ rebaseOk: true }).outcome === "clean"],
+    ["stopped rebase with unmerged files is a conflict", classifyRebaseOutcome({ rebaseOk: false, unmergedFiles: ["a.ts"] }).outcome === "conflict"],
+    ["stopped rebase without unmerged files is an error", classifyRebaseOutcome({ rebaseOk: false, unmergedFiles: [] }).outcome === "error"],
+    ["conflict summary leads with the founder item", /^conflict: needs founder/.test(conflictSummary({ unmergedFiles: ["a.ts"], mergeBase: "m", baseSha: "b" }))],
+    ["push ready when every invariant holds", rbReady({}).ok === true],
+    ["push refused mid-rebase", refused(rbReady({ rebaseInProgress: true }))],
+    ["push refused when the base is not an ancestor", refused(rbReady({ baseIsAncestor: false }))],
+    ["push refused when a commit was dropped", refused(rbReady({ commitsAfter: 1 }))],
+    ["push refused when HEAD is unchanged", refused(rbReady({ head: "abc1234" }))],
+    ["lease push literal is exact", pushPrBranchCommand({ headRef: "codex/x", expectedSha: "abc1234", defaultBranch: "main" }) === "git push --force-with-lease=refs/heads/codex/x:abc1234 origin HEAD:refs/heads/codex/x"], // no-push-scan
+    ["lease push refuses the default branch", throws(() => pushPrBranchCommand({ headRef: "main", expectedSha: "abc1234", defaultBranch: "main" }), /default branch/)],
+    ["lease push refuses a bad ref or sha", throws(() => pushPrBranchCommand({ headRef: "a:b", expectedSha: "abc1234", defaultBranch: "main" }), /ref/) && throws(() => pushPrBranchCommand({ headRef: "x", expectedSha: "zz", defaultBranch: "main" }), /sha/)],
+    ["PR number parse rejects 0 and non-integers", parsePrNumber("78") === 78 && parsePrNumber("0") === null && parsePrNumber("abc") === null && parsePrNumber(1000000) === null],
+    ["rebase-train workflow: pr checkout, setup before checks", rbWf.checkout === "pr" && rbWf.setupBeforeStep === "checks"],
+    ["rebase-train workflow: rebase, checks, tests, push, notify in order", rbWf.steps.map((st) => `${st.id}:${st.type}`).join(",") === "rebase:rebase,checks:commands,tests:commands,push:push-pr,notify:notify"],
+    ["rebase-train workflow: no agent, discussion, or deploy step, no loop-back", rbWf.steps.every((st) => !["agent", "discussion", "deploy"].includes(st.type) && !st.onFail)],
+    ["rebase-train workflow: notify posts rebase-summary.md", rbWf.steps[rbWf.steps.length - 1].summaryFile === "rebase-summary.md"],
+    ["rebase summary says Not merged", composeRebaseSummary({ pr: 78, outcome: "x" }).includes("Not merged")],
+  ];
+  for (const [name, ok] of rebaseChecks) {
+    console.log(`rebase ${name}: ${ok ? "ok" : "FAIL"}`);
+    if (!ok) problems.push(`rebase check failed: ${name}`);
   }
   // Dirty-rigs preflight decision (pure): only non-empty porcelain output for
   // orchestration/rigs.json is a problem, and the message names the file and

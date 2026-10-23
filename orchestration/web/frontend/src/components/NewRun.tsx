@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { SettingsResponse } from "../types";
 
-/** Start a run: rig + workflow pickers from the registry, prompt, --auto toggle. */
+/** Start a run: rig + workflow pickers from the registry, prompt, --auto toggle.
+ *  rebase-train takes a PR number (and a dry-run toggle) instead of a prompt. */
 export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -12,6 +13,8 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
   const [prompt, setPrompt] = useState("");
   const [auto, setAuto] = useState(false);
   const [preview, setPreview] = useState<"default" | "on" | "off">("default");
+  const [prNumber, setPrNumber] = useState("");
+  const [dryRun, setDryRun] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,19 +37,32 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
 
   const workflows = settings?.workflows ?? [];
   const effectiveRig = rig === "__factory__" ? (customRig.trim() ? `factory:${customRig.trim()}` : "") : rig;
+  const isRebase = workflow === "rebase-train";
+  const pr = /^[0-9]{1,6}$/.test(prNumber.trim()) ? Number(prNumber.trim()) : null;
+  const validPr = pr !== null && pr >= 1;
+  const canSubmit = !!effectiveRig && (isRebase ? validPr : !!prompt.trim());
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const r = await api.start({
-        rig: effectiveRig,
-        workflow,
-        prompt: prompt.trim(),
-        auto,
-        ...(preview === "default" ? {} : { preview: preview === "on" }),
-      });
+      const r = isRebase
+        ? await api.start({
+            rig: effectiveRig,
+            workflow,
+            auto,
+            pr: pr!,
+            dryRun,
+            ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
+          })
+        : await api.start({
+            rig: effectiveRig,
+            workflow,
+            prompt: prompt.trim(),
+            auto,
+            ...(preview === "default" ? {} : { preview: preview === "on" }),
+          });
       onStarted(r.runId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -103,14 +119,40 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
         <p className="field-hint">{workflows.find((w) => w.name === workflow)!.description}</p>
       )}
 
+      {isRebase && (
+        <>
+          <label className="field">
+            <span>PR number</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={prNumber}
+              onChange={(e) => setPrNumber(e.target.value)}
+              placeholder="78"
+              pattern="[0-9]{1,6}"
+              required
+            />
+          </label>
+          <label className="field field-check">
+            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+            <span>
+              Dry run — rebase, check and test, but never push (<code>--dry-run</code>)
+            </span>
+          </label>
+          <p className="field-hint">
+            Starting this authorises a lease force-push of that PR's head after green checks and tests. It never merges.
+          </p>
+        </>
+      )}
+
       <label className="field">
-        <span>Prompt</span>
+        <span>{isRebase ? "Prompt (optional)" : "Prompt"}</span>
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          rows={6}
-          placeholder="What should this run build or fix?"
-          required
+          rows={isRebase ? 2 : 6}
+          placeholder={isRebase ? "Optional note for the run record" : "What should this run build or fix?"}
+          required={!isRebase}
         />
       </label>
 
@@ -133,7 +175,7 @@ export function NewRun({ onStarted }: { onStarted: (runId: string) => void }) {
       )}
 
       {error && <div className="error-box">{error}</div>}
-      <button type="submit" className="btn btn-primary" disabled={busy || !effectiveRig || !prompt.trim()}>
+      <button type="submit" className="btn btn-primary" disabled={busy || !canSubmit}>
         {busy ? "Starting…" : "Start run"}
       </button>
     </form>

@@ -6,7 +6,19 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-09-27 11:00 (standup cutoff — no founder reply, so the posted proposal
+> Last updated: 2026-10-23 11:00 (standup cutoff — no founder reply for the third day running,
+> so the posted proposal proceeded. The app-factory deploy policy is flipped `auto` → `hold`,
+> and the engine selftest assertion with it — but reading the restart path proved the flip is
+> only a PARTIAL mitigation: `classifyHarnessRestart()`/`syncHarnessRestart()` never consult
+> `policy.deploy`, so the sync-time restart that killed yesterday's cutoff would still fire.
+> D35 records that and the real fix went to focused self-review run
+> `self-focused-self-review-two`. PR #8 closed and rebase-train re-run on current main per the
+> stated default. skip-hero was NOT shelved: that default reverses the priority half of D27 and
+> the standup itself said it needs the founder — it is now a three-day-unanswered blocker, not a
+> default I may take.
+> Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-09-27 11:00 (standup cutoff — no founder reply, so the posted proposal
 > proceeded. Rebase-train gate approved after 14 days (approve alone did nothing; the parked
 > executor had died and needed `factory-run resume`), spawning child run
 > `feature-improvement-plan-rebase`. The cleanup force-delete guard went to
@@ -2506,3 +2518,49 @@ Asked of the founder (posted to #factory-standup, defaults stated):
 2. skip-hero is 24 days past an unnamed launch date with 12 quiet days — default **formally
    shelve it and make Pace the priority app**, reversing the priority half of D27.
 3. Send the standup-liveness watchdog to `factory-self-review` — default **yes**.
+
+## 2026-10-23 11:00 — standup cutoff (no founder reply, third day running; proposal proceeded)
+
+**What proceeded.** The 08:03 standup posted on time and the 11:00 cutoff ran to completion —
+`factory-standup-cutoff` is live again after a 25-error streak. No founder reply arrived, so
+the posted proposal and the stated defaults took effect, with one deliberate exception
+(skip-hero, below).
+
+### Done this turn
+
+1. **`policy.deploy` `auto` → `hold` on the app-factory rig** (`orchestration/rigs.json`), plus
+   the engine selftest assertion that pinned it to `auto` (`factory-run` ~line 5093). `selftest`
+   green, `node --test orchestration/test/*.test.mjs` 26/26 pass.
+2. **Correction to the proposal, from reading the code:** the flip does **not** close the fault.
+   Yesterday's cutoff was killed by the *sync-time* restart, not the deploy step —
+   `syncHarnessRestart()` (~line 4734) and `classifyHarnessRestart()` (~line 2080) never consult
+   `policy.deploy`, so a merged app-factory PR still restarts the gateway on sync regardless of
+   policy. The flip covers the deploy-step path only. **Recorded as D35**, with the `hold` flip
+   explicitly marked partial so no one closes D35 on the strength of it.
+3. **Focused self-review run `self-focused-self-review-two` started** on the app-factory rig
+   (first attempt failed preflight — `rigs:committed` — correctly, because the rigs.json edit was
+   uncommitted; resumed after the commit). Scope: the in-flight-restart guard as THE one change
+   (deterministic idleness signal, deferred-restart follow-up, regression test in D34's style),
+   with yesterday's standup-liveness watchdog going to the backlog rather than competing with it.
+   It parks at the plan gate in #factory-builds and needs a founder approve/steer there.
+4. **PR #8 closed and rebase-train re-run on current main**, per the stated default. The original
+   run `feature-improvement-plan-rebase` had been `awaiting-merge` for 26 days with $17.76 sunk
+   and was CONFLICTING; its `plan.md` and branch are kept as reference for the re-run.
+
+### Not done, and why
+
+**skip-hero was not shelved.** The default was *formally shelve it and make Pace the priority
+app*, and this is the third standup it has gone unanswered. I am still not taking it: it reverses
+the priority half of **D27**, and this morning's own standup said so in writing — "that needs
+you, not me." A default may resolve a question inside existing policy; it may not overturn a
+founder decision by silence. skip-hero therefore stands as the priority app on paper while
+being 25 days past a launch date nobody named, 13 days quiet, with the marketing-calendar gate
+at day 39. That contradiction is now the oldest live item in the factory and it is a founder
+decision, escalated as such in-channel.
+
+### No dispatch
+
+No sub-agent dispatch, as proposed. The founder merged 5 PRs himself last night and the engine
+is not short of hands; the two runs started today are harness self-repair, not product work. The
+Pace queue (19 open, 12 green and mergeable, 6 conflicting — #126 and #139 newly conflicted by
+last night's merges) still needs founder review, not more agents.

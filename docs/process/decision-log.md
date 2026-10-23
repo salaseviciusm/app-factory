@@ -697,3 +697,67 @@ redesign.
 **Anti-instruction:** do not "simplify" the ancestry check away on the grounds that a
 `factory/*` branch is engine-owned and therefore safe to force-delete. That assumption is
 exactly what cost four destructions — the namespace is owned, but the tip is not.
+
+## D35 — an auto harness restart must not fire while an agent turn is in flight (2026-10-23)
+
+**Context:** the 11:00 standup cutoff of 2026-10-22 never posted and never dispatched. The
+cron turn started on time, lived 260 seconds and died at 10:04:20Z with `cron: job
+interrupted by gateway restart` — thirteen seconds after the founder's merge of PR #7 was
+synced. The chain is self-inflicted: the cutoff turn itself ran `factory-run sync`, which
+flipped `feature-improvement-plan-cleanup` to `done` and called `syncHarnessRestart()` →
+`restartHarness()` → `openclaw gateway restart`. The factory restarted itself on top of its
+own steering job. This is the second time a harness improvement has taken out the steering
+loop that shipped it, and the 25-error cutoff streak hid it inside what looked like the
+OAuth outage.
+**Decision:** the sync-time harness restart is deferrable, not immediate. `openclaw gateway
+restart` must be refused or deferred while an OpenClaw agent turn is in flight, decided in
+`classifyHarnessRestart()`'s pure core with a deterministic idleness signal, a regression
+test, and a deferred-restart follow-up so the improvement still goes live. Sent to focused
+self-review run `self-focused-self-review-two` rather than hand-edited, because it sits on
+the path that can kill the editing turn.
+**Why:** a restart is a *deploy*, and every other deploy in the factory is policy-gated. This
+one is not: `classifyHarnessRestart()` and `syncHarnessRestart()` never consult
+`policy.deploy`, so the sync path restarts regardless of rig policy. Deferring costs nothing
+— the merge is already durable on origin and the engine reloads at the next idle moment;
+restarting mid-turn costs a whole day of steering, silently.
+**Also recorded:** `rigs.json` app-factory `policy.deploy` was flipped `auto` → `hold` the
+same morning (and the selftest assertion with it). That flip is a *partial* mitigation only:
+it gates the deploy *step*, not the sync-time restart, so it would not have prevented
+2026-10-22. Do not treat the flip as the fix, and do not close D35 on the strength of it.
+**Anti-instruction:** do not make the restart conditional on "is this a cron job" or on a
+job name. The hazard is any in-flight agent turn, including a founder's own live Slack
+conversation; the signal must be gateway idleness, not identity.
+
+## D36 — rebase-train may lease-force-push a PR head; it never merges or resolves (2026-10-23)
+
+**Context:** running-with-pace carries 6 CONFLICTING open PRs, and the five merges of
+2026-10-22 conflicted two of them. Rebasing them is mechanical and the founder is the
+bottleneck. Every engine push until now targeted the run's own `factory/<id>` branch, and
+the selftest push-source scan proved that structurally (D26's surviving half). Rebasing a
+PR that the engine did not author means rewriting a branch outside `factory/*`.
+**Decision:** the `rebase-train` workflow is the engine's one exception: it may
+force-push the head of one open PR per run, within these bounds. (1) *The lease is pinned
+to gh's `headRefOid`* read at run start, not a ref the engine fetched later. The remote ref
+must equal that sha before the detached checkout, and the push is
+`--force-with-lease=refs/heads/<head>:<headRefOid>`. A rejection fails once, with no
+re-fetch and no retry. (2) *The push happens only after green checks and tests*, and only
+when the invariants hold: no rebase in progress, `origin/<base>` an ancestor of HEAD, the
+PR commit count unchanged, and HEAD moved. (3) *Never the default branch.* The head ref
+may not be the default branch or the base. The base must be the default branch, and
+`pushPrBranchCommand` throws otherwise. Draft, fork, and closed PRs are refused, and so
+are PRs whose head is a live run's branch. (4) *No conflict resolution.* A stopped rebase
+is aborted, and the run fails `conflict: needs founder` with the files and the base-side
+range. There is no agent step and no `onFail` loop. (5) *The scan proves both literal
+shapes:* every `git push` literal in the engine and in `web/lib/rebase.mjs` either names
+`factory/` or carries both `--force-with-lease=refs/heads/` and `HEAD:refs/heads/`
+(`pushLiteralAllowed`). Selftest asserts that the predicate rejects `git push origin main`.
+Starting the run is the founder's authorisation for that one push.
+**Why:** the lease pinned to what GitHub showed when the run started is the strongest
+guard available without a lock. Any commit pushed to the PR after that moment, by the
+founder, Codex, or another agent, makes the push fail instead of being overwritten. Doing
+the rebase first and the checks second means a pushed head always passed the rig's own
+gates. Refusing to resolve conflicts keeps judgment with the founder, because a wrong
+resolution that passes the tests is the expensive failure.
+**Anti-instruction:** do not add a retry-after-refetch on lease rejection, and do not
+"helpfully" resolve trivial conflicts. Both turn a guard into a race. Do not widen the
+push-scan predicate beyond these two shapes.
