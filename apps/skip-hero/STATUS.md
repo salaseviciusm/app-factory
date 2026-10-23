@@ -6,15 +6,16 @@
   is contested and unenforced**; see "Blocked on the founder". Registered rig in
   `orchestration/rigs.json` with a production deploy path.
   **Pre-launch: no ship date, no marketing executed, nothing posted or paid for.**
-- **Last updated:** 2026-10-22 (EOD sync — D34's durable fix held through a 25-day blackout; launch date 24 days lapsed)
-- **Last verified:** 2026-10-22 18:00
+- **Last updated:** 2026-10-23 (EOD sync — the spike finally has a remote git ref; fourth standup unanswered)
+- **Last verified:** 2026-10-23 18:00
+- **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
 ## Repo state (verified)
 
 - `origin/main` at **`c2bb590`** — "Merge pull request #11 from salaseviciusm/codex/ui",
-  2026-10-10. **Twelve quiet days** since; zero open PRs (`gh pr list` empty, re-verified
-  2026-10-22 18:00). The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work,
+  2026-10-10. **Thirteen quiet days** since; zero open PRs (`gh pr list` empty, re-verified
+  2026-10-23 18:00). The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work,
   not by the factory; no engine run has touched this rig since 2026-09-13.
 - The local clone sits on branch **`codex/ui`** at `b969447`, **1 behind** `origin/main`
   (`b969447` is the parent of merge commit `c2bb590`). *Correction: this morning's standup
@@ -35,13 +36,24 @@
   **Do not be reassured by `origin/factory/feature-android-pose-parity-spike`.** That
   remote ref exists but is `bede20f` (2026-08-11), an unrelated older branch of the same
   name, 2071 deletions away from the spike. It is not a backup.
-  The real backup is `apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` (+ the
-  `-stat.txt` sidecar), committed in `84b1ded` and pushed to `origin/main` in app-factory.
-  That habit has now saved this spike twice.
+  The committed backup is `apps/skip-hero/notes/2026-09-14-pose-parity-spike.diff` (90KB, +
+  the `-stat.txt` sidecar) in `84b1ded`, **confirmed present on app-factory's `origin/main`**
+  (`git cat-file -e`, 2026-10-23). That habit has now saved this spike twice.
+  **Corrected 2026-10-23: "safe" was overstated, and D34 is not the whole story.** Until
+  tonight there was **no remote git ref** for `893ab34` —
+  `git rev-parse origin/spike/android-pose-parity` returned `fatal: Needed a single
+  revision`. The spike was restorable only by hand-applying that 90KB patch, on a branch the
+  engine had already destroyed three times, with the guard as the only thing standing between
+  it and a fourth. **Now pushed: `origin/spike/android-pose-parity` = `893ab34`**, verified by
+  fetch (skip-hero has no GitHub Actions, so nothing fired). D34's engine half stays closed;
+  the *durability* of this particular spike is now a git ref rather than a habit.
 
 ## In flight
 
-- **Marketing-calendar gate — OPEN, awaiting founder.** Week-one calendar
+- **Marketing-calendar gate — OPEN, awaiting founder.** *(This is a founder gate tracked in
+  prose, not an engine gate: `factory-run status --json` reports zero gates open and zero
+  non-terminal runs on this rig, verified 2026-10-23 18:00. Nothing in the engine is holding
+  it; it moves only when the founder answers.)* Week-one calendar
   (D-3 → D+7) drafted today by the product-lead sub-agent and committed at
   `59fd17f`: `docs/marketing/apps/skip-hero-week-one-calendar.md`. Built against a
   **provisional** launch day of 2026-09-28 chosen by the factory, with every entry
@@ -50,10 +62,10 @@
 
 ## Blocked on the founder
 
-- **Ship date — day 61 unanswered.** Everything in the calendar hangs off it.
-- **Marketing-calendar gate — day 38 unanswered** (open since `59fd17f`, 2026-09-14) —
+- **Ship date — day 62 unanswered.** Everything in the calendar hangs off it.
+- **Marketing-calendar gate — day 39 unanswered** (open since `59fd17f`, 2026-09-14) —
   yes/no on the draft above.
-- **The provisional launch day 2026-09-28 PASSED 24 DAYS AGO and was never replaced.**
+- **The provisional launch day 2026-09-28 PASSED 25 DAYS AGO and was never replaced.**
   D-3 (2026-09-25) lapsed with none of its content done: @skiphero was never registered on
   IG or YouTube (~20 min, founder-only) and the store listing never reached Ready for Sale.
   Per the calendar's own failure column, that meant "D0 does not happen" — and it didn't.

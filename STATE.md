@@ -6,7 +6,22 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-10-23 11:00 (standup cutoff — no founder reply for the third day running,
+> Last updated: 2026-10-23 18:00 (EOD sync — thirteen findings, two of them real exposure.
+> BOTH of today's runs finished: `self-focused-self-review-two` is `done` and its child
+> `feature-improvement-plan-sync-time` is `awaiting-merge` with **PR #9** (the D35 fix), and
+> the rebase-train re-run is `awaiting-merge` with **PR #10**. Neither is parked at a gate;
+> both need a MERGE. Zero engine gates are open. Local `main` is **ahead 2 and unpushed**, so
+> `origin/main` still advertises app-factory `deploy: auto` — merge #9 or push to publish the
+> `hold` flip, and merge #9 OUTSIDE the 08:00/11:00 windows because until it lands a sync can
+> still restart the gateway mid-turn. PR #7 was merged 10-22 and must stop being carried as an
+> ask. **Fixed tonight:** the skip-hero pose-parity commit `893ab34` (+2,071 lines) had no
+> remote git ref after three engine deletions — restorable only by hand-applying a committed
+> 90KB patch — so it is now pushed to `origin/spike/android-pose-parity`. Both standup crons ran clean for a second day, so the
+> OAuth recovery is durable. skip-hero is now FOUR standups unanswered and is still the oldest
+> live item in the factory.
+> Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-10-23 11:00 (standup cutoff — no founder reply for the third day running,
 > so the posted proposal proceeded. The app-factory deploy policy is flipped `auto` → `hold`,
 > and the engine selftest assertion with it — but reading the restart path proved the flip is
 > only a PARTIAL mitigation: `classifyHarnessRestart()`/`syncHarnessRestart()` never consult
@@ -2564,3 +2579,156 @@ No sub-agent dispatch, as proposed. The founder merged 5 PRs himself last night 
 is not short of hands; the two runs started today are harness self-repair, not product work. The
 Pace queue (19 open, 12 green and mergeable, 6 conflicting — #126 and #139 newly conflicted by
 last night's merges) still needs founder review, not more agents.
+
+## 2026-10-23 18:00 — EOD sync (git-, GitHub-, engine-, cron- and disk-verified)
+
+Every in-flight claim in this file and in the four `apps/*/STATUS.md` records was checked
+against `origin` (all three rigs fetched), `gh`, `factory-run status --json`, `openclaw cron
+list --all` and the disk. Thirteen findings; two of them are real exposure, one of which is
+fixed by this sync.
+
+### Correction 1 — `self-focused-self-review-two` is NOT parked at a plan gate; it finished and shipped a PR
+
+This morning's cutoff block says the run "parks at the plan gate in #factory-builds and needs
+a founder approve/steer there." That was true for about eighty minutes. The engine says
+`self-focused-self-review-two` is **`done`** (step 2/2, $1.21), and the child it spawned,
+**`feature-improvement-plan-sync-time`**, is **`awaiting-merge`** at step 11/11 with
+**PR #9 — "Idle-gated, deferrable sync-time harness restart (D35)"**, opened 10:20Z,
+**MERGEABLE**, $2.92. What it needs is a *merge*, not a plan approval. Anyone reading the
+cutoff block would have gone looking for a gate that does not exist.
+
+### Correction 2 — the rebase-train re-run also finished: PR #10 is open and mergeable
+
+The cutoff recorded the re-run starting but no outcome. `feature-build-rebase-train-workflow`
+is **`awaiting-merge`**, step 11/11, **PR #10 — "rebase-train workflow (v2, against
+0be6416)"**, opened 10:32Z, **MERGEABLE**, $5.83. Both of today's runs completed inside the
+hour after the cutoff was written, so the file has been understating the factory's position
+all day: not "two runs started", but **two finished PRs waiting on the founder**.
+
+### Correction 3 — local app-factory `main` is two commits ahead of origin, and the `hold` flip is not on origin
+
+`main` is **ahead 2, unpushed**: `a4e17ab` (STATUS refresh) and `0be6416` (standup
+2026-10-23: `policy.deploy` `auto` → `hold`, D35). Clean tree. The work is **not at risk** —
+both PR #9 and PR #10 branch off `0be6416` and carry it, verified by ancestry — but
+`origin/main` is still `739d25c`, which means **anything that reads the app-factory rig
+policy from origin still sees `deploy: auto`.** The flip is real locally and in two PR
+branches; it is not yet the published state. `rigs.json` locally: app-factory
+`deploy=hold merge=review`, skip-hero `deploy=auto merge=review` — as intended.
+
+### Correction 4 — PR #7 is merged; stop carrying it as an ask
+
+The 10-22 standup asked the founder to merge **#7**, and the 10-23 cutoff block repeats the
+ask in its "asked of the founder" list without noting the outcome. **#7 was merged 2026-10-22
+11:01** as `739d25c`. That ask is closed. (It is also the merge whose sync restarted the
+gateway and killed the 10-22 cutoff — D35.)
+
+### Correction 5 — the pose-parity commit had no remote git ref. Now it does.
+
+This file says `893ab34` is "intact at `spike/android-pose-parity` — D34's durable fix held
+through the blackout, as designed", and `apps/skip-hero/STATUS.md` calls the spike "safe" and
+D34 "closed, not carried". Checked properly: **no remote ref existed.**
+`git rev-parse origin/spike/android-pose-parity` → `fatal: Needed a single revision`. The
+commit is **38 files, +2,071/-169** and is **not** contained in
+`origin/factory/feature-android-pose-parity-spike` — the STATUS record was already right to
+warn against that ref; it is `bede20f`, an older unrelated branch of the same name, 2,071
+deletions away. So after three engine deletions, the *commit* was reachable from exactly one
+branch on one disk.
+
+**But not single-copy, and the STATUS record is why.** `apps/skip-hero/notes/
+2026-09-14-pose-parity-spike.diff` (90KB, plus its `-stat.txt` sidecar) is committed in
+`84b1ded` and **present on app-factory's `origin/main`** — verified by `git cat-file -e`. The
+content had a remote home all along. The real gap was weaker than "the work could vanish": it
+was **restorable only by hand-applying a 90KB patch**, with no git ref to check out, on a
+branch our own engine had already destroyed three times.
+
+**Fixed:** pushed to **`origin/spike/android-pose-parity` = `893ab34`**, verified by fetch.
+skip-hero has no GitHub Actions workflows, so nothing fired. The spike now has a real remote
+ref rather than a patch file and a guard.
+
+### Correction 6 — Pace moved twice today; the 10-22 STATUS record is stale
+
+`apps/running-with-pace/STATUS.md` still claims `origin/main` at **`8f5d2df6`** with "five
+quiet days, nothing merged today" and "21 PRs now queued". Actual: `origin/main` is
+**`bcad83ea`** (2026-10-23), **five further founder merges** since that record — #132 and #136
+on 10-22, then #135, #133 and #142 on 10-23. The queue is **19 open**: **13 MERGEABLE** (12
+with all three checks green, plus #83 with no checks) and **6 CONFLICTING** (#139, #126, #112,
+#81, #78, and #86 draft). #141 and #140 are new since the cutoff. The cutoff's own count —
+"19 open, 12 green and mergeable, 6 conflicting" — was right at 11:00 and is still right by
+count tonight, but the membership has churned underneath it.
+
+### Correction 7 — local Pace `main` is behind again
+
+The 10-22 record's "level with `origin/main` for the first time in weeks" no longer holds:
+local `main` is **behind 5**, tree clean bar the 5 untracked `.agents/skills/` dirs. Benign,
+but the sentence reads as a standing achievement and is not one.
+
+### Correction 8 — zero engine gates are open, so "marketing-calendar gate, day 39" is narrative, not engine state
+
+`factory-run status --json` reports **no run holding a gate** and **zero non-terminal runs
+other than the two `awaiting-merge`**. The skip-hero marketing-calendar gate is a *founder*
+gate tracked in prose, not something the engine is parked on. The day count is correct — 39
+days since `59fd17f` (09-14) — but this file's header rule ("gate status is engine-owned")
+cuts the other way here: the engine is holding nothing, and the item lives or dies on the
+founder's attention alone.
+
+### Verified correct, no change
+
+- **Engine health:** `factory-run selftest` → **green**; `node --test
+  orchestration/test/*.test.mjs` → **26/26 pass, 0 fail** on local `main`. This morning's
+  claim holds exactly.
+- **D35** is in `docs/process/decision-log.md` at line 701, with the "the `hold` flip is a
+  PARTIAL mitigation, do not close D35 on it" caveat intact. **D36** exists only on PR #10's
+  branch — correct, it lands with the PR.
+- **Crons: all four enabled jobs `ok`.** `factory-daily-standup` ran 10h ago,
+  `factory-standup-cutoff` 7h ago, both clean — **the OAuth recovery is durable past a single
+  day and the 25-error streak is cleared.** That was this morning's top contingency and it
+  did not materialise.
+- **skip-hero repo:** `origin/main` `c2bb590` (2026-10-10) confirmed, **zero open PRs**, 13
+  quiet days. Local clone still on `codex/ui`.
+- **No single-copy work in the founder's `wt` worktrees.** All four Pace worktrees and
+  `harness/rust` are level with their upstreams; the only dirt in each is a modified
+  `package-lock.json` (install churn). `impl-todos` has no upstream but **zero** commits
+  beyond `origin/main`, so there is nothing in it to lose. The **13G** under
+  `~/src/.worktrees/running-with-pace` is disk cost, not risk — and it is the founder's, not
+  the factory's, so it is not mine to reclaim.
+- **Engine worktrees are 83M across exactly two dirs**, both belonging to the two
+  `awaiting-merge` runs. Correctly retained until merge.
+- **pullup** dormant under D27 — now **78 days**. **web-clock** unchanged; every blocker still
+  a founder dependency.
+
+### Fixed by this sync
+
+1. `origin/spike/android-pose-parity` created at `893ab34` — the skip-hero pose-parity spike
+   now has a remote git ref, not just a committed patch file (Correction 5).
+2. All four `apps/*/STATUS.md` records refreshed against tonight's verified state, and this
+   file's header reconciled to point at this block.
+
+### Carried, unfixed, and ageing
+
+- **`slack-leak-watchdog` delivery is still dead.** The job runs every 10 minutes and is
+  `ok`, but it routes `announce -> last` with **no route, failing closed** — exactly the fault
+  recorded on 2026-09-14. **39 days unfixed.** A watchdog that cannot deliver is not a
+  watchdog; it is a cron job burning tokens.
+- **`factory-weekly-self-review` is still `disabled`**, last run **47 days ago**.
+
+### Needs founder attention tomorrow (ranked)
+
+1. **skip-hero — the contradiction, not the app.** Fourth standup unanswered. Priority app on
+   paper under D27, **25 days past a launch date nobody named**, 13 quiet days, marketing gate
+   day 39, zero open PRs. I will not shelve it by default because that reverses a founder
+   decision; so it sits as the factory's stated priority while nothing happens to it. One
+   sentence from the founder ends this.
+2. **Merge PR #9, then PR #10 — and mind the order and the clock.** #9 *is* the D35 fix. Until
+   it lands, syncing a merged app-factory PR can still restart the gateway on top of a live
+   agent turn — which is precisely how 10-22's cutoff died. **Merge #9 outside the 08:00 and
+   11:00 windows.** Expect #10 to need a rebase afterwards: both branches share `a4e17ab` and
+   `0be6416` and both touch the docs/backlog.
+3. **`origin/main` still advertises `deploy: auto` for app-factory.** Resolved either by
+   pushing local `main` or by merging #9/#10, which carry the flip. Until then the published
+   policy and the intended policy disagree.
+4. **The Pace queue is the founder's bottleneck, not the factory's.** 13 mergeable (12 fully
+   green) and 6 conflicting; #78, #81 and #83 are the stale tail. Twenty-six founder merges
+   have landed since 09-27 and zero engine PRs — the engine is not short of hands, the review
+   seat is.
+5. **Two dead automations:** `slack-leak-watchdog` delivery (39 days), `factory-weekly-self-review`
+   (disabled, 47 days). Both cheap; neither is in anyone's plan.

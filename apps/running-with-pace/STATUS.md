@@ -5,50 +5,61 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-10-22 (EOD sync — 21 merges landed, the day-18 dirty tree is genuinely resolved, 21 PRs now queued)
-- **Last verified:** 2026-10-22 18:00
+- **Last updated:** 2026-10-23 (EOD sync — 5 further founder merges, queue recomposed to 19 open, local `main` behind again)
+- **Last verified:** 2026-10-23 18:00
+- **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
 ## Repo state (verified)
 
-- `origin/main` at **`8f5d2df6`** — "Author geographic workout boundaries and advance live
-  sections (#123)", 2026-10-17. **21 merges landed between 09-27 and 10-17** in three waves
-  (10-10, 10-11, 10-17) — **every one from the founder's own `codex/*` branches, none from
-  the engine.** Five quiet days since the last merge; nothing merged today.
-- **The local `main` checkout is level with `origin/main`** at `8f5d2df6` — first time in
-  weeks. The tree is clean apart from 5 untracked `.agents/skills/` dirs.
-- **The day-18 dirty tree is RESOLVED, and the resolution is verified rather than assumed.**
-  A clean tree on its own is equally consistent with the work having been *discarded*, so
-  this was traced rather than inferred. The 13 modified files are intact in **`stash@{0}`**
-  ("On main: sep9 watch prototype (superseded by codex/watch-restacked-20261018)",
-  13 files / +206), and the supersession claim checks out: the distinctive markers are
-  absent from `origin/main`, but the device-attribution SQL reappears in a **strictly more
-  developed form** on `codex/watch-restacked-20261018` —
-  `coalesce(user_events.device_id, excluded.device_id)` guarded by a
-  `CASE WHEN EXISTS (SELECT 1 FROM event_acceptances …)`, where the stash had only
-  `coalesce(excluded.device_id, …)`. That branch's tip `b1e4d89e` **is the head of PR #88
-  on origin**, so the work has a remote copy. **The ~128 lines carried as single-copy and
-  at-risk for 18 days are no longer at risk.** `stash@{0}` is a redundant older copy, safe
-  to drop once #88 merges.
+- `origin/main` at **`bcad83ea`** — "todo-crunch: name branches after the agent doing the
+  work (#142)", **2026-10-23**. **Five further merges since the 10-22 record:** #132 and #136
+  on 10-22, then #135, #133 and #142 today. That makes **26 founder merges since 09-27** —
+  **every one from his own `codex/*` branches, still zero from the engine.** The "five quiet
+  days, nothing merged today" line in the previous record was true on 10-22 and is now wrong;
+  the repo has moved on two consecutive days.
+- **Local `main` is `behind 5`** — the 10-22 record's "level with `origin/main`, first time in
+  weeks" no longer holds. Benign (nothing local to lose) but it is not a standing achievement.
+  Tree clean apart from the same 5 untracked `.agents/skills/` dirs.
+- **The day-18 dirty tree stays RESOLVED**, and the 10-22 trace of it is unchanged and still
+  correct. The 13 modified files are intact in **`stash@{0}`** (13 files / +206), and the
+  supersession claim checks out: the distinctive markers are absent from `origin/main`, but
+  the device-attribution SQL reappears in a **strictly more developed form** on
+  `codex/watch-restacked-20261018` — `coalesce(user_events.device_id, excluded.device_id)`
+  guarded by a `CASE WHEN EXISTS (SELECT 1 FROM event_acceptances …)`, where the stash had
+  only `coalesce(excluded.device_id, …)`. That branch's tip `b1e4d89e` **is the head of PR #88
+  on origin**, so the work has a remote copy. **The ~128 lines once carried as single-copy are
+  not at risk.** `stash@{0}` is a redundant older copy, safe to drop once #88 merges.
+- **No single-copy work in the founder's `wt` worktrees** (checked this sync). All four Pace
+  worktrees are level with their upstreams; the only dirt in each is a modified
+  `package-lock.json`. `impl-todos` has no upstream but **zero** commits beyond `origin/main`.
+  The **13G** under `~/src/.worktrees/running-with-pace` is disk cost, not risk, and it is the
+  founder's to reclaim, not the factory's.
 
-## Open PRs — 20 non-draft + 1 draft = 21 open (`gh`, 2026-10-22 18:00)
+## Open PRs — 18 non-draft + 1 draft = 19 open (`gh`, 2026-10-23 18:00)
 
-The queue more than doubled (9 → 21) across the blackout. Eight of them are under 36 hours
-old. **Nothing merged today.**
+Net 21 → 19 across today: #132, #133, #135, #136 and #142 merged out; #140 and #141 came in.
+**13 MERGEABLE** (12 with all three checks green, plus #83 with no checks) and
+**6 CONFLICTING**. The cutoff's count this morning — "19 open, 12 green and mergeable, 6
+conflicting" — still holds by count tonight, but the membership churned underneath it.
 
 | PRs | State | Note |
 | --- | --- | --- |
-| #131–#138 | MERGEABLE, all three checks green | Opened in the last ~36 hours; #134–#138 were still being updated today. |
-| #126–#130 | MERGEABLE, all three checks green | Opened 10-18 → 10-20. |
-| #115, #116 | MERGEABLE, all three checks green | Updated 10-20. |
-| #88 | **MERGEABLE, checks green** | Apple Watch integration — *no longer CONFLICTING.* Head `b1e4d89e`, the restacked branch that supersedes the sep-9 dirty tree. **43 days old, the oldest thing in the merge queue.** |
-| #83 | MERGEABLE, **no checks configured** | Profile avatars, 46 days. Local `pr83-rebase` @ `71ee06d` still unpushed. |
-| #112, #81 | CONFLICTING, checks green | #81 is the referral code system (never a draft, despite pre-09-14 records). |
-| #78 | CONFLICTING, no checks | ASO visual system, 48 days — the oldest open PR. **Recommend close**: 66 conflict hunks across 12 files. Salvage at `pr78-salvage` @ `37efb30`, unpushed. |
+| #141, #140, #137, #134 | MERGEABLE, three checks green | Opened 10-22. #140 is docs-only (offline-first contract). |
+| #131 | MERGEABLE, three checks green | Opened 10-20. |
+| #130, #129, #128, #127 | MERGEABLE, three checks green | The 10-11 account-journal wave. |
+| #116, #115 | MERGEABLE, three checks green | Design PRs, opened 10-10. |
+| #88 | **MERGEABLE, checks green** | Apple Watch recording. Head `b1e4d89e`, the restacked branch superseding the sep-9 dirty tree. **44 days old, the oldest thing in the merge queue.** |
+| #83 | MERGEABLE, **no checks configured** | Profile avatars, 47 days. Local `pr83-rebase` @ `71ee06d` still unpushed. |
+| #139 | CONFLICTING, checks green | todo-crunch review-wait; **newly conflicted** by its own sibling #142 merging today. |
+| #126 | CONFLICTING, checks green | Account-journal isolation; conflicted by the 10-22/10-23 merges. |
+| #112, #81 | CONFLICTING, checks green | Places catalog; referral code system. #81 was never a draft, despite pre-09-14 records. |
+| #78 | CONFLICTING, no checks | ASO visual system, **49 days — the oldest open PR. Recommend close**: 66 conflict hunks across 12 files. Salvage at `pr78-salvage` @ `37efb30`, unpushed. |
 | #86 | draft **and** CONFLICTING | ASO visuals, splash handoff, NativeTabs. |
 
-**16 PRs are MERGEABLE with all three checks green and need nothing but founder review.**
-#96, #97, #101 and #102 have all merged since the last sync and are no longer open.
+**12 PRs are MERGEABLE with all three checks green and need nothing but founder review.** The
+review seat, not the engine, is the bottleneck on this app: 26 founder merges and zero engine
+PRs since 09-27.
 
 Full working: `apps/running-with-pace/notes/2026-09-14-rebase-prep.md`.
 
