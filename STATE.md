@@ -6,7 +6,18 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-10-23 18:00 (EOD sync — thirteen findings, two of them real exposure.
+> Last updated: 2026-10-24 11:00 (standup cutoff — **no founder reply for the fourth day
+> running**, so the posted proposal proceeded. The day's one task is **done**: the
+> `slack-leak-watchdog` delivery route is repointed from `last` (no route, fail-closed) to
+> `slack:C0BN28A8DNW` = `#factory-status`, ending **40 days** of a watchdog that could not
+> deliver. Bot membership in that channel verified. **No runs dispatched** — that was the
+> proposal, not an omission: the factory is merge-blocked on **PR #9 then PR #10** (both green,
+> both MERGEABLE, no rebase needed) and starting app-factory work under two open PRs would
+> collide. The matching `setup-automations.sh` fix that would otherwise revert the cron edit is
+> deliberately **not committed** until #9/#10 land. skip-hero is now **five** standups
+> unanswered. Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-10-23 18:00 (EOD sync — thirteen findings, two of them real exposure.
 > BOTH of today's runs finished: `self-focused-self-review-two` is `done` and its child
 > `feature-improvement-plan-sync-time` is `awaiting-merge` with **PR #9** (the D35 fix), and
 > the rebase-train re-run is `awaiting-merge` with **PR #10**. Neither is parked at a gate;
@@ -2732,3 +2743,57 @@ founder's attention alone.
    seat is.
 5. **Two dead automations:** `slack-leak-watchdog` delivery (39 days), `factory-weekly-self-review`
    (disabled, 47 days). Both cheap; neither is in anyone's plan.
+
+## 2026-10-24 11:00 — standup cutoff (no founder reply, fourth day running; proposal proceeded)
+
+Standup posted 08:00 (07:02 UTC). **No founder reply by the 11:00 cutoff**, so the posted
+proposal proceeded under its stated defaults. Both standup crons ran clean again — third
+consecutive day, so the OAuth recovery is durable.
+
+### Done
+
+1. **`slack-leak-watchdog` delivery route revived.** The live cron job
+   `d67eec83-8f23-4191-b9ed-f22778e1fcea` had `delivery: { mode: announce, channel: last }`
+   with no route, failing closed on every one of ~5,760 fires since 2026-09-14 —
+   `lastDeliveryStatus: not-delivered` for **40 days**. Resolved `#factory-status` to
+   `C0BN28A8DNW` via `openclaw/lib/slack-channel.mjs` (no `FACTORY_STATUS_CHANNEL` was pinned
+   in `secrets.env`), then `openclaw cron edit … --announce --channel slack --to
+   channel:C0BN28A8DNW`. Verified: `announce -> slack:C0BN28A8DNW (explicit)`, and
+   `conversations.info` confirms the bot is `is_member: true` in that channel, so delivery will
+   not fail closed on the receiving end either.
+   - **Caveat recorded honestly:** a clean watchdog run produces no output
+     (`command ok with no output`), so `lastDeliveryStatus` will legitimately stay
+     `not-delivered` on quiet runs. The route is proven by config + membership, not yet by a
+     delivered message. First real leak is the end-to-end test.
+   - The matching fix to `openclaw/setup-automations.sh` — which still writes `channel: last`
+     and would revert this cron edit on the next setup run — is **deliberately deferred** until
+     #9/#10 merge, per the proposal. Until then the live cron and the committed script
+     disagree, and the script is the one that is wrong.
+
+### Not done, by design
+
+- **No runs dispatched.** The proposal was explicitly one small task and no new runs, because
+  the factory is merge-blocked on two finished green PRs and starting app-factory work under
+  them would collide. `factory-dispatch` had nothing to dispatch; this is an honest idle day,
+  not a missed one.
+- **Introspection change (escalate `awaiting-merge` runs older than 24h out of Slack — topic
+  stamp + macOS notification + `wt todo` into the Obsidian inbox)** — default was *yes*, queued
+  behind #9/#10. Not started. Still needs the founder's yes before ~$3–6 is spent on it.
+
+### Carried, unchanged, and ageing
+
+1. **Merge PR #9, then PR #10.** Both app-factory, both green, both MERGEABLE — `gh` now
+   reports no rebase needed between them, so they can go back to back. **#9 first, outside the
+   08:00 and 11:00 windows:** #9 *is* the D35 fix, and until it lands a sync of a merged
+   app-factory PR can still restart the gateway on top of a live agent turn. $8.75 of finished
+   work waiting on one click.
+2. **`origin/main` still advertises app-factory `deploy: auto`** while local `main` holds the
+   `hold` flip, now **3 commits unpushed**. Merging #9/#10 publishes it.
+3. **skip-hero — five standups unanswered.** Priority app on paper under D27; `c2bb590`, zero
+   open PRs, 14 quiet days, marketing-calendar gate day 40. I will not shelve it by default
+   because that reverses half of D27. One sentence from the founder ends this.
+4. **Pace queue is the founder's bottleneck, not the engine's.** 19 open: 13 mergeable (12
+   fully green), 6 conflicting (#78 at 50d, #81 at 47d, #86 draft, #112, #126, #139). The
+   stale tail #78/#81/#83 has been open seven weeks.
+5. **`factory-weekly-self-review` still `disabled`**, last run 48 days ago. One of the two dead
+   automations; the other one is fixed as of today.
