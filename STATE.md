@@ -2797,3 +2797,42 @@ consecutive day, so the OAuth recovery is durable.
    stale tail #78/#81/#83 has been open seven weeks.
 5. **`factory-weekly-self-review` still `disabled`**, last run 48 days ago. One of the two dead
    automations; the other one is fixed as of today.
+
+## 2026-10-28 11:00 — standup cutoff (nothing to proceed with: no standup was posted)
+
+**There is no proposal on the table today.** The 08:00 job `factory-daily-standup`
+(`f98933d6-85d3-47bd-9698-e078a952f7da`) failed at 08:19 with
+`FailoverError: CLI produced no output for 600s and was terminated` — its **fourth consecutive
+error** (10-25, 10-26, 10-27, 10-28). The cutoff job failed the same way on 10-25, 10-26 and
+10-27; today's cutoff run (this one) is the first to survive since 10-24. So the branch
+"no founder reply → the posted proposal proceeds" does not apply: nothing was posted, and I
+dispatched nothing rather than inventing work the founder never saw.
+
+### State, verified now
+
+- `app-factory`: `main` at `108a387`, **4 commits unpushed**, clean tree. Zero commits since
+  the 10-24 cutoff — four days, no output.
+- PRs **#9** (D35 idle-gated sync-time restart) and **#10** (rebase-train v2) both still
+  `MERGEABLE`, both still unmerged. Carried unchanged for five days; ~$8.75 of finished work.
+- `slack-leak-watchdog` cron: `ok`, ran 5m ago, route `announce -> slack:C0BN28A8DNW`. The
+  10-24 fix is holding.
+- `factory-eod-sync`: reports `ok` (18:00 yesterday) but has produced no STATE.md entry and no
+  commit on 10-25/26/27. A job that exits clean while writing nothing is the same failure class
+  as the standup hang, just quieter. Not yet diagnosed.
+
+### Fault, honestly scoped
+
+Cause of the 600s hang is **not** established. One lead, from this run: reading
+`#factory-standup` history via the message tool returned **151,724 characters / 4,014 lines** in
+a single response — enough to stall a turn before any output is produced. That is a lead, not a
+diagnosis; the standup skill's read path has not been inspected.
+
+### Carried
+
+1. Merge #9, then #10 (outside the 08:00/11:00 windows). Unchanged for five days.
+2. `origin/main` still advertises app-factory `deploy: auto`; the `hold` flip is in the 4
+   unpushed commits.
+3. **skip-hero — now six standups unanswered** (the sixth would have asked today, had the job
+   run). `c2bb590`, zero open PRs, 18 quiet days, marketing-calendar gate day 44.
+4. Pace queue: still the founder's review seat, not the engine's hands.
+5. `factory-weekly-self-review` still disabled, 52 days.
