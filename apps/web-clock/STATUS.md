@@ -5,7 +5,13 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-10-23 18:00 (EOD sync). Unchanged and still accurate — the last
+- **Last verified:** 2026-11-08 18:00 (EOD sync). Unchanged and still accurate. The last
+  commit touching `apps/web-clock/` is `0775591` (2026-10-23, an EOD sync writing STATUS
+  files, not product work). Still no device, no accuracy figure, no TestFlight build. Every
+  blocker below is unchanged and every one is a founder dependency — hardware, an Apple
+  Developer account, four ASO calls. **None of them can move while the factory is the only
+  party acting**, and the 16-day standup outage (2026-10-24 → today) changed nothing here.
+- **Prior verification:** 2026-10-23 18:00 (EOD sync). Unchanged and still accurate — the last
   commit touching `apps/web-clock/` is `24a4689` (2026-09-26, an EOD sync writing STATUS
   files, not product work). Still no device, no accuracy figure, no TestFlight build. Every
   blocker below is unchanged and each is a founder dependency (hardware, an Apple Developer

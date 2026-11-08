@@ -2836,3 +2836,90 @@ diagnosis; the standup skill's read path has not been inspected.
    run). `c2bb590`, zero open PRs, 18 quiet days, marketing-calendar gate day 44.
 4. Pace queue: still the founder's review seat, not the engine's hands.
 5. `factory-weekly-self-review` still disabled, 52 days.
+
+## 2026-11-08 18:00 — EOD sync (git-, GitHub-, engine-, cron- and task-verified)
+
+**First record of any kind since 2026-10-28, and the first EOD entry since 2026-10-23.**
+Eleven days with a cron reporting `ok` and writing nothing. The steering loop is down, not
+slow: **no standup has been posted since 2026-10-23 — 16 days.**
+
+### The outage, cause now partly established (and the 10-28 entry was wrong about it)
+
+`factory-daily-standup` is at **15 consecutive errors** (2026-10-25 → 2026-11-08);
+`factory-standup-cutoff` at **11**. The 10-28 entry framed this as one fault — a 600s hang
+of unknown cause, with the 151,724-char Slack history read as the lead. **That is not what
+the task records show.** There are **two** modes:
+
+| Window | Failures | Error |
+| --- | --- | --- |
+| 2026-11-02 → 11-06 | 10 (both jobs, 5 days) | `FailoverError: Failed to authenticate: OAuth session expired and could not be refreshed` |
+| 2026-11-07 → 11-08 | 4 (both jobs, 2 days) | `FailoverError: CLI produced no output for 600s and was terminated` |
+
+(`openclaw tasks list` retains 14 failures, back to 11-02; 10-25 → 11-01 is no longer in the
+task store, so those 16 earlier failures cannot be attributed.)
+
+**OAuth expiry recurred.** That is the same root cause as the 25-day blackout
+(2026-09-27 → 2026-10-21), five weeks later, with nothing in place to catch it — exactly the
+gap R5 (standup-liveness watchdog) was filed to close. R5 is still only a backlog line inside
+unmerged PR #9.
+
+**One theory is now ruled out, and it is worth recording as ruled out:** this is not a
+host-wide auth fault and not an `isolated`-session fault. `slack-leak-watchdog` runs
+`isolated` on the same host every 10 minutes and has **succeeded continuously throughout**,
+including 18:00 today. This EOD job (`main` target) also runs fine. The failure is specific
+to the two heavy jobs, which is consistent with the 10-28 Slack-read lead for the 600s mode —
+but that lead still has not been tested against the standup skill's read path, and it does
+not explain the OAuth window at all.
+
+### State, verified now
+
+- **app-factory**: `main` at `f06e959`, clean tree, **5 commits unpushed** (the 10-28 entry
+  said 4; its own cutoff commit made 5). **Zero commits since 10-28.**
+- **Engine: idle 16 days.** 94 runs on record; exactly **two non-terminal**, both
+  `awaiting-merge` at step 11, both untouched since 2026-10-23 —
+  `feature-improvement-plan-sync-time` (PR #9) and `feature-build-rebase-train-workflow`
+  (PR #10). No run has started on any rig since 10-23.
+- **PRs #9 and #10**: both still open, both still `MERGEABLE`. **Carried 16 days now**, ~$8.75
+  of finished work. #9 is the D35 idle-gated restart fix; until it merges, the sync-time
+  restart that killed the 10-22 cutoff turn is still live.
+- `origin/main` **still advertises app-factory `deploy: auto`** — the `hold` flip remains in
+  the 5 unpushed commits. Unchanged for 16 days.
+- `factory-weekly-self-review`: still `disabled`, last ran **63 days** ago.
+- `slack-leak-watchdog`: `ok`, route `announce -> slack:C0BN28A8DNW`. The 10-24 fix holds.
+- `openclaw tasks`: 0 running, 0 queued, **audit clean**, 14 issues (the failures above).
+
+### Corrections to carried claims
+
+1. **"skip-hero — six standups unanswered" cannot be carried forward as a count.** No
+   standup has been posted since 10-23, so the founder has not declined to answer anything
+   since then — the asking mechanism is broken. The honest statement is: skip-hero's
+   questions have been unasked for 16 days, not unanswered.
+2. **Pace is not quiet.** `origin/main` moved from `bcad83ea` to **`7328ce8c`** — **14
+   merges since 10-23**, all founder `codex/*` work again. Local `main` is **behind 14**.
+3. **Open-PR count on Pace rose, not fell**: 19 → **21** (15 MERGEABLE, 6 CONFLICTING).
+   #88 did **not** merge, so `stash@{0}` is still not droppable on that basis.
+4. The three single-copy Pace branches are **unchanged and still exposed** — re-tested by
+   reachability, not name: `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+   `codex/referrals-entitlements-review` `87f9a844`. None is reachable from any remote ref.
+   Time Machine still unconfigured. 16 days of no change on a known data-loss risk.
+
+### Needs founder attention tomorrow
+
+1. **The steering loop is dead and cannot fix itself.** Re-auth is a founder action: the
+   OAuth session must be refreshed on the host. Until then there is no 08:00 standup, no
+   11:00 cutoff, and no mechanism by which the factory can ask him anything.
+2. **Merge #9, then #10.** Sixteen days. #9 contains both the D35 fix and the R5 watchdog
+   line that would have caught this outage.
+3. **skip-hero's priority question is still live and still unasked** — 29 quiet days, zero
+   open PRs, no engine run since 2026-09-13, while Pace took 14 more merges. D27 stands
+   unamended by default, not by decision.
+4. **No launch date exists for skip-hero.** Ship date unanswered 78 days; marketing-calendar
+   gate 55 days; the provisional 2026-09-28 passed 41 days ago. Nothing executed, nothing
+   wasted, nothing scheduled.
+5. **Three single-copy Pace branches, no second copy anywhere.** Push or drop.
+
+### Not done by this sync, deliberately
+
+Nothing was dispatched. No standup was posted out-of-band — the founder's loop is the 08:00
+slot, and inventing a 18:00 substitute would be the factory choosing its own cadence. Nothing
+was pushed, merged or re-authed: #9/#10 are his merge seat, and the OAuth refresh is his host.

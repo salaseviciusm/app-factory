@@ -6,21 +6,25 @@
   is contested and unenforced**; see "Blocked on the founder". Registered rig in
   `orchestration/rigs.json` with a production deploy path.
   **Pre-launch: no ship date, no marketing executed, nothing posted or paid for.**
-- **Last updated:** 2026-10-23 (EOD sync — the spike finally has a remote git ref; fourth standup unanswered)
-- **Last verified:** 2026-10-23 18:00
+- **Last updated:** 2026-11-08 (EOD sync — 29 quiet days; the standup loop that asks this app's questions has been dead for 16 days)
+- **Last verified:** 2026-11-08 18:00
+- **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
 ## Repo state (verified)
 
 - `origin/main` at **`c2bb590`** — "Merge pull request #11 from salaseviciusm/codex/ui",
-  2026-10-10. **Thirteen quiet days** since; zero open PRs (`gh pr list` empty, re-verified
-  2026-10-23 18:00). The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work,
+  2026-10-10. **Twenty-nine quiet days** since; zero open PRs (`gh pr list` empty, re-verified
+  2026-11-08 18:00). No engine run has touched this rig since **2026-09-13 — 56 days.** The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work,
   not by the factory; no engine run has touched this rig since 2026-09-13.
 - The local clone sits on branch **`codex/ui`** at `b969447`, **1 behind** `origin/main`
   (`b969447` is the parent of merge commit `c2bb590`). *Correction: this morning's standup
   said 4 behind — `git rev-list --count HEAD..origin/main` is 1.*
 - Untracked and unignored: `.agents/`, `.codex/`.
+- **The spike's remote ref holds.** `git rev-parse origin/spike/android-pose-parity` returns
+  **`893ab34b`**, re-verified 2026-11-08 — the push made on 10-23 is still there, so this
+  spike's durability is still a git ref and not a habit. Nothing below needs revising.
 - **The pose-parity spike is safe, and D34's fix is now proven.** `893ab34` (MediaPipe live
   Android module, hip-oscillation v2 adaptive, session jump-height window, decision docs
   0028/0029/0030; 38 files, +2071/-169) is reachable at **`spike/android-pose-parity`**,
@@ -52,7 +56,8 @@
 
 - **Marketing-calendar gate — OPEN, awaiting founder.** *(This is a founder gate tracked in
   prose, not an engine gate: `factory-run status --json` reports zero gates open and zero
-  non-terminal runs on this rig, verified 2026-10-23 18:00. Nothing in the engine is holding
+  non-terminal runs on this rig, re-verified 2026-11-08 18:00 — the engine's only two
+  non-terminal runs both belong to the app-factory rig. Nothing in the engine is holding
   it; it moves only when the founder answers.)* Week-one calendar
   (D-3 → D+7) drafted today by the product-lead sub-agent and committed at
   `59fd17f`: `docs/marketing/apps/skip-hero-week-one-calendar.md`. Built against a
@@ -62,23 +67,35 @@
 
 ## Blocked on the founder
 
-- **Ship date — day 62 unanswered.** Everything in the calendar hangs off it.
-- **Marketing-calendar gate — day 39 unanswered** (open since `59fd17f`, 2026-09-14) —
+> **Correction (2026-11-08): these are no longer "unanswered" — they are UNASKED.** Prior
+> records counted days of founder silence. That framing is now wrong: **no standup has been
+> posted since 2026-10-23** (`factory-daily-standup` at 15 consecutive failures — OAuth
+> session expiry recurring from the 25-day blackout, plus a 600s no-output mode since 11-07).
+> For 16 of the days counted below, the factory had no working channel to ask on. **The
+> founder has not declined to decide; he has not been asked.** Fixing the loop is the
+> precondition for every item here.
+
+- **Ship date — day 78 since first asked.** Everything in the calendar hangs off it.
+- **Marketing-calendar gate — day 55** (open since `59fd17f`, 2026-09-14) —
   yes/no on the draft above.
-- **The provisional launch day 2026-09-28 PASSED 25 DAYS AGO and was never replaced.**
+- **The provisional launch day 2026-09-28 PASSED 41 DAYS AGO and was never replaced.**
   D-3 (2026-09-25) lapsed with none of its content done: @skiphero was never registered on
   IG or YouTube (~20 min, founder-only) and the store listing never reached Ready for Sale.
   Per the calendar's own failure column, that meant "D0 does not happen" — and it didn't.
   **There is now no launch date at all.** The calendar remains slidable intact onto any
   date the founder names; nothing in it has been executed, posted or paid for, so nothing
   has been wasted.
-- **The priority question is live.** D27 (2026-08-06) made skip-hero the priority app
-  taking all product capacity. It has had 12 quiet days, zero open PRs and zero engine runs
-  since 2026-09-13, while running-with-pace took 21 founder merges in the same window.
-  This morning's standup proposed, as its stated default, **formally shelving skip-hero and
-  making Pace the priority app** — reversing the priority half of D27. **The founder did
-  not reply, and the 11:00 cutoff that would have enacted the default crashed, so D27
-  still stands unamended.** This is the single biggest open question on this app.
+- **The priority question is live, and has now gone a fortnight without a forum.** D27
+  (2026-08-06) made skip-hero the priority app taking all product capacity. It has had
+  **29 quiet days**, zero open PRs and zero engine runs since 2026-09-13, while
+  running-with-pace took **40 founder merges** since 09-27 in the same window.
+  The 2026-10-23 standup proposed, as its stated default, **formally shelving skip-hero and
+  making Pace the priority app** — reversing the priority half of D27. The founder did not
+  reply; the 11:00 cutoff that would have enacted the default crashed; and **every standup
+  and cutoff since has failed outright.** So D27 **stands unamended by accident, not by
+  decision** — the stated default was never enacted and the question was never re-put. This
+  is still the single biggest open question on this app, and the evidence for shelving has
+  only grown since.
 
 ## Carry-over
 

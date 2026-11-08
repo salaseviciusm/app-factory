@@ -8,7 +8,14 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-10-23 18:00 (EOD sync). Still correct, still dormant: the last
+- **Last verified:** 2026-11-08 18:00 (EOD sync). Still correct, still dormant. **Dormant 94
+  days.** The last commit to touch `apps/pullup/` is `0775591` (2026-10-23) — an EOD sync
+  editing this file, not product work. Still zero pullup runs in the engine, re-confirmed
+  against its full 94-run history: none has ever existed. D27 was not mentioned in the
+  16 days since the last record, and could not have been: no standup has been posted since
+  2026-10-23 (OAuth expiry, 15 consecutive job failures). **Nothing here is waiting on the
+  founder, so the broken steering loop costs this app nothing.**
+- **Prior verification:** 2026-10-23 18:00 (EOD sync). Still correct, still dormant: the last
   commit to touch `apps/pullup/` is `24a4689` (2026-09-26) — an EOD sync editing this file,
   not product work. No pullup run exists in the engine (none has ever existed). D27 was not
   mentioned again, and the 25-day standup blackout (2026-09-27 → 2026-10-21, Slack OAuth

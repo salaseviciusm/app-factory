@@ -5,12 +5,32 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-10-23 (EOD sync — 5 further founder merges, queue recomposed to 19 open, local `main` behind again)
-- **Last verified:** 2026-10-23 18:00
+- **Last updated:** 2026-11-08 (EOD sync — 14 further founder merges, queue grew to 21 open, three single-copy branches unchanged for 16 days)
+- **Last verified:** 2026-11-08 18:00
+- **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (verified)
+## Repo state (verified 2026-11-08 18:00)
+
+- `origin/main` at **`7328ce8c`** — "Compact, legible routes panel: stat strip, one start
+  action, content-sized (#154)". **Fourteen merges since the 10-23 record** (#143, #144,
+  #145, #146, #154 and the rest), which makes **40 founder merges since 09-27 — still every
+  one from his own `codex/*` branches, still zero from the engine.** The factory has not
+  touched this repo in 16 days; the engine has run nothing on any rig since 2026-10-23.
+- **Local `main` is `behind 14`.** Benign — nothing local to lose — but the 10-22 record's
+  "level with `origin/main`" is now two records out of date. Tree clean apart from two
+  untracked `.agents/skills/` dirs (down from five).
+- **`#141` did not stay merged in the form recorded.** The 10-23 record listed #141 as
+  MERGEABLE and opened 10-22; it landed and was then **re-landed as #143** ("Saved routes
+  from real history (re-land #141)"). Worth knowing before trusting a PR number as shipped.
+- **The day-18 dirty tree stays RESOLVED**, but the exit condition has *not* been met:
+  **PR #88 is still open and still MERGEABLE.** The 10-23 record said `stash@{0}` would be
+  "safe to drop once #88 merges" — it has not merged, so do not drop it. The supersession
+  claim itself still checks out (#88's head is on origin), so the ~128 lines are not at risk;
+  only the cleanup is still pending.
+
+### Prior repo state (2026-10-23, kept for the trace)
 
 - `origin/main` at **`bcad83ea`** — "todo-crunch: name branches after the agent doing the
   work (#142)", **2026-10-23**. **Five further merges since the 10-22 record:** #132 and #136
@@ -36,30 +56,29 @@
   The **13G** under `~/src/.worktrees/running-with-pace` is disk cost, not risk, and it is the
   founder's to reclaim, not the factory's.
 
-## Open PRs — 18 non-draft + 1 draft = 19 open (`gh`, 2026-10-23 18:00)
+## Open PRs — 18 non-draft + 3 drafts = 21 open (`gh`, 2026-11-08 18:00)
 
-Net 21 → 19 across today: #132, #133, #135, #136 and #142 merged out; #140 and #141 came in.
-**13 MERGEABLE** (12 with all three checks green, plus #83 with no checks) and
-**6 CONFLICTING**. The cutoff's count this morning — "19 open, 12 green and mergeable, 6
-conflicting" — still holds by count tonight, but the membership churned underneath it.
+**Net 19 → 21 across sixteen days: the queue grew while the factory watched.**
+**15 MERGEABLE, 6 CONFLICTING, 3 of the 21 are drafts (#153, #150, #86).**
 
 | PRs | State | Note |
 | --- | --- | --- |
-| #141, #140, #137, #134 | MERGEABLE, three checks green | Opened 10-22. #140 is docs-only (offline-first contract). |
-| #131 | MERGEABLE, three checks green | Opened 10-20. |
-| #130, #129, #128, #127 | MERGEABLE, three checks green | The 10-11 account-journal wave. |
-| #116, #115 | MERGEABLE, three checks green | Design PRs, opened 10-10. |
-| #88 | **MERGEABLE, checks green** | Apple Watch recording. Head `b1e4d89e`, the restacked branch superseding the sep-9 dirty tree. **44 days old, the oldest thing in the merge queue.** |
-| #83 | MERGEABLE, **no checks configured** | Profile avatars, 47 days. Local `pr83-rebase` @ `71ee06d` still unpushed. |
-| #139 | CONFLICTING, checks green | todo-crunch review-wait; **newly conflicted** by its own sibling #142 merging today. |
-| #126 | CONFLICTING, checks green | Account-journal isolation; conflicted by the 10-22/10-23 merges. |
-| #112, #81 | CONFLICTING, checks green | Places catalog; referral code system. #81 was never a draft, despite pre-09-14 records. |
-| #78 | CONFLICTING, no checks | ASO visual system, **49 days — the oldest open PR. Recommend close**: 66 conflict hunks across 12 files. Salvage at `pr78-salvage` @ `37efb30`, unpushed. |
-| #86 | draft **and** CONFLICTING | ASO visuals, splash handoff, NativeTabs. |
+| #152, #151, #149, #148, #147 | MERGEABLE | New since the 10-23 record. |
+| #153 | MERGEABLE, **draft** | New since 10-23. |
+| #131, #130, #129, #128, #127 | MERGEABLE | Carried unchanged 16 days (the 10-11 account-journal wave plus #131). |
+| #116, #115 | MERGEABLE | Design PRs, opened 10-10, carried unchanged. |
+| #88 | MERGEABLE | Apple Watch recording. **60 days old, still the oldest thing in the merge queue, still unmerged.** Blocks the `stash@{0}` cleanup. |
+| #83 | MERGEABLE | Profile avatars, **62 days**. Local `pr83-rebase` @ `71ee06d5` still unpushed. |
+| #150 | CONFLICTING, **draft** | New since 10-23. |
+| #126, #112, #81 | CONFLICTING | Account-journal isolation; places catalog; referral code system (#81 now **63 days**). |
+| #78 | CONFLICTING | ASO visual system, **65 days — the oldest open PR. Recommend close** (unchanged recommendation, 16 days unactioned): 66 conflict hunks across 12 files. Salvage at `pr78-salvage` @ `37efb30b`, unpushed. |
+| #86 | draft **and** CONFLICTING | ASO visuals, splash handoff, NativeTabs. **61 days.** |
 
-**12 PRs are MERGEABLE with all three checks green and need nothing but founder review.** The
-review seat, not the engine, is the bottleneck on this app: 26 founder merges and zero engine
-PRs since 09-27.
+**#139 and #142 are gone from the queue** — #139 was CONFLICTING on 10-23 and has since
+merged (`67b9a72e`), so that conflict resolved itself without intervention.
+
+**15 PRs are MERGEABLE and need nothing but founder review.** The review seat, not the
+engine, remains the bottleneck: 40 founder merges and zero engine PRs since 09-27.
 
 Full working: `apps/running-with-pace/notes/2026-09-14-rebase-prep.md`.
 
@@ -75,7 +94,7 @@ This is why #88's finished rebase and today's three rebase branches all sit loca
   unreachable. Small brief on top of #97; **nothing filed, and nothing will be until
   #97 merges.**
 
-## Single-copy exposure (re-verified 2026-10-22 by reachability from origin, not by name)
+## Single-copy exposure (re-verified 2026-11-08 by reachability from origin, not by name)
 
 Down from five items to three. Each tip was tested with
 `git ls-remote --heads origin <name>` **and** `git branch -r --contains <tip>` — a branch
@@ -96,7 +115,10 @@ No longer exposed:
   origin under that name, but `git branch -r --contains 83feb888` resolves it to the remote
   ref **`pr/80`**. It has a remote copy.
 
-With Time Machine still unconfigured, the three above have no second copy anywhere.
+**All three re-tested 2026-11-08** with `git branch -r --contains <tip>`: each still returns
+nothing, and each local branch still exists at the same tip. **Unchanged for 16 days.** With
+Time Machine still unconfigured, the three above have no second copy anywhere — this is the
+oldest unactioned data-loss risk on the app and it has now survived two records untouched.
 
 **Not** exposed, contrary to prior records: `~/.codex/worktrees/0378/running-with-pace`
 (2.0GB) is #97's head `c36cada`, clean and fully on `origin`. 1.6GB of it is
