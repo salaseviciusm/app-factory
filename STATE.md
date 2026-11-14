@@ -6,7 +6,28 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-10-24 11:00 (standup cutoff — **no founder reply for the fourth day
+> Last updated: 2026-11-14 11:00 (standup cutoff — **no founder reply**, so the posted
+> proposal proceeded. Both of the day's tasks are **done**. (1) The standup watchdog is fixed:
+> `agents.defaults.cliBackends.claude-cli.reliability.watchdog` now sets `fresh` **and**
+> `resume` to ratio 0.8 / min 180 000 ms / max **1 500 000 ms**, so the 1800s job budget
+> finally governs instead of the hard-coded 600 000 ms cap that killed 7 of 7 recorded
+> standups. The standup's one-key proposal (`fresh.maxMs` only) would **not** have worked —
+> for a resumed cron turn `pickWatchdogProfile` reads the `resume` block, and configuring
+> `fresh` alone leaves resumed runs on the 600s constant. Both blocks are set. Config
+> merged, not clobbered; backup at `~/.openclaw/openclaw.json.bak.pre-watchdog-20261114`;
+> `openclaw status` loads clean; `cron list` clean (4 jobs). **Caveat:** the running gateway
+> (pid 87286) loaded the old config and was **not restarted** — restarting mid-cron-turn
+> would have killed this turn, and CLI lifecycle is a founder call. If tomorrow's 08:00 still
+> dies at 600s, `openclaw gateway restart` is the one-line follow-up. (2) The three
+> single-copy Pace branches are **pushed** — `pr78-salvage` `37efb30b`, `pr83-rebase`
+> `71ee06d5`, `codex/referrals-entitlements-review` `87f9a844` — verified by `git ls-remote`.
+> 21 days of single-disk data-loss exposure ended. Nothing merged, nothing rewritten.
+> **No runs dispatched** — that was the proposal, not an omission: still merge-blocked behind
+> **PR #9 then PR #10** (21 days, both MERGEABLE). Two founder questions went unanswered
+> again: skip-hero's priority designation and the #9/#10 merge. Weekly model limit was hit
+> 11-13 and resets **16 Nov 23:00**. Read the newest dated block at the END of this file.)
+>
+> Prior: 2026-10-24 11:00 (standup cutoff — **no founder reply for the fourth day
 > running**, so the posted proposal proceeded. The day's one task is **done**: the
 > `slack-leak-watchdog` delivery route is repointed from `last` (no route, fail-closed) to
 > `slack:C0BN28A8DNW` = `#factory-status`, ending **40 days** of a watchdog that could not
@@ -2923,3 +2944,67 @@ not explain the OAuth window at all.
 Nothing was dispatched. No standup was posted out-of-band — the founder's loop is the 08:00
 slot, and inventing a 18:00 substitute would be the factory choosing its own cadence. Nothing
 was pushed, merged or re-authed: #9/#10 are his merge seat, and the OAuth refresh is his host.
+
+---
+
+## 2026-11-14 11:00 — standup cutoff (no founder reply; proposal proceeded)
+
+First standup since 2026-10-24. The 08:00 job landed today for the first time in 21 days.
+No founder reply by 11:00, in channel or in thread, so the posted proposal executed as written.
+
+### Done
+
+1. **Standup watchdog fixed** (app-factory / OpenClaw host config).
+   Root cause confirmed by reading the shipped code, not inferred:
+   `CLI_FRESH_WATCHDOG_DEFAULTS` in `dist/cli-watchdog-defaults-*.js` is
+   `{ noOutputTimeoutRatio: 0.8, minMs: 180_000, maxMs: 600_000 }`, and
+   `resolveCliNoOutputTimeoutMs` bounds the computed timeout by `maxMs` **before** the job
+   budget cap. So `--timeout-seconds 1800` never mattered: any turn silent for 10 minutes
+   was killed. That is 7 of 7 recorded failures 11-07 → 11-12.
+   **Correction to the standup proposal:** patching `fresh.maxMs` alone would not have
+   fixed it. `pickWatchdogProfile` selects the `resume` block whenever the run resumes a
+   session, and falls back to the *hard-coded* fresh constants only when `resume` is
+   **unconfigured**. Setting `fresh` alone therefore leaves resumed cron turns on 600 000 ms,
+   and setting `resume.maxMs` alone would have been worse (ratio drops to 0.3 → 540 000 ms).
+   Both blocks are now set to ratio 0.8 / min 180 000 / max 1 500 000 ms. Effective watchdog
+   for an 1800s job: 1 440 000 ms (24 min).
+   Path: `agents.defaults.cliBackends.claude-cli.reliability.watchdog.{fresh,resume}`
+   (not `agents.backends.*` as the standup wrote — that key does not exist in the schema).
+   DoD: config patched by JSON merge, not clobbered; backup
+   `~/.openclaw/openclaw.json.bak.pre-watchdog-20261114`; `openclaw status` parses it with no
+   schema error; `openclaw cron list` clean — 4 jobs, standup `ok`, cutoff `running` (this turn).
+   **Not merged into app-factory** — this is host config, not repo state, and the matching
+   `setup-automations.sh` work stays uncommitted until #9/#10 land, per 10-24.
+   **Open caveat:** the gateway (pid 87286) is still running the config it loaded at start.
+   A restart would make the fix certain; it would also have killed this turn, and gateway
+   lifecycle is a founder call. Tomorrow's 08:00 is the test. If it dies at 600s again,
+   `openclaw gateway restart` is the whole fix.
+
+2. **Three single-copy Pace branches pushed.** 21 days of exposure on a known data-loss
+   risk, closed. Push-only; nothing merged, nothing rewritten, no force.
+   Verified by `git ls-remote origin`:
+   - `pr78-salvage` → `37efb30b53d35f91a5ffc5698af2ac8bb51a2a27`
+   - `pr83-rebase` → `71ee06d55986e0fcdc8637b790b51c7395f6b1d1`
+   - `codex/referrals-entitlements-review` → `87f9a8441f2d3523b3b9af5ead6a6c654da54e90`
+
+### Not done, deliberately
+
+**Nothing dispatched on any rig.** That was proposal item 3, not an omission. The factory is
+merge-blocked behind [#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10); starting app-factory work under
+two open PRs collides. The `factory-dispatch` skill was correctly not invoked.
+
+**skip-hero's priority designation was not dropped.** The standup's default was *drop it*,
+but that default was attached to a question, and a designation that outlives D27 should die
+by the founder's word, not by a cutoff timer. It stands, unanswered, and is now the oldest
+live question in the factory.
+
+### Still needs founder
+
+1. **Merge #9, then #10.** 21 days, both MERGEABLE, no checks configured. That single merge
+   also publishes the 6 stranded local commits and the `deploy: hold` flip that
+   `origin/main` still contradicts.
+2. **skip-hero: priority app or not?** 35 quiet days, zero PRs, no run in 62 days, ship date
+   unanswered 78+ days, the provisional 28 Sep launch 47 days past. One word settles it.
+3. **Weekly model limit** was hit 11-13; resets **16 Nov 23:00 (Europe/London)**. The 15th
+   and 16th standups may not run regardless of the watchdog fix.
