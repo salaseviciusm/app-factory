@@ -3008,3 +3008,113 @@ live question in the factory.
    unanswered 78+ days, the provisional 28 Sep launch 47 days past. One word settles it.
 3. **Weekly model limit** was hit 11-13; resets **16 Nov 23:00 (Europe/London)**. The 15th
    and 16th standups may not run regardless of the watchdog fix.
+
+---
+
+## 2026-11-14 18:00 — EOD sync (git-, GitHub-, engine-, cron-, config- and disk-verified)
+
+Same day as the first standup in 21 days. The steering loop ran all three slots today
+(08:00 `ok`, 11:00 `ok`, 18:00 this turn) — first full day since 2026-10-23.
+
+### Correction 1 — the watchdog patch did not need a gateway restart, and the "open caveat" was wrong
+
+This morning's entry recorded an open caveat: gateway pid 87286 "is still running the config
+it loaded at start", so "`openclaw gateway restart` is the whole fix" if 08:00 dies again.
+**That is wrong, per the shipped docs.** `docs/gateway/configuration.md` §"What hot-applies
+vs what needs a restart" lists **`agent`, `agents`, `models`, `routing` → Gateway restart
+needed: No.** The patched key is `agents.defaults.cliBackends.*`, so it hot-applied when the
+file was written at 11:01. Only `gateway.*` and `discovery`/`browser`/`plugins.load`
+require a restart.
+
+Verified: pid 87286 is indeed still up (started **Fri 6 Nov 19:11**, 7d22h elapsed), so the
+factual half of the caveat was right — but the inference from it was not. No reload-failure
+line exists in any log, and `openclaw cron list` parses clean. **No founder action is needed
+here.** Do not carry a gateway restart as an ask.
+
+### Correction 2 — today's 08:00 standup succeeded *before* the patch, so the fix is unvalidated
+
+The patch was written at 11:01. The standup that broke the 21-day silence ran at **08:03**
+and succeeded on the *old* config (600 000 ms watchdog). **The 600s failure mode therefore
+stopped on its own, not because of the fix.** This morning's entry read the success as
+vindication; it cannot be. Tomorrow's 08:00 will not settle it either — a pass is now the
+expected outcome with or without the patch. The patch is a sound defence (it removes a real
+10-minute ceiling on 30-minute jobs, confirmed by reading `CLI_FRESH_WATCHDOG_DEFAULTS`),
+but it is a precaution, not a demonstrated repair, and the intermittency is unexplained.
+
+### Correction 3 — the failure census this morning was built on a rolled store
+
+The 11:00 entry said "7 of 7 recorded failures 11-07 → 11-12". The store now holds **12
+failures spanning 11-08 → 11-13**, 6 per job:
+
+| Window | Count | Error |
+| --- | --- | --- |
+| 2026-11-08 → 11-12 | 10 | `CLI produced no output for 600s` (one logged as `job execution timed out`) |
+| 2026-11-13 | 2 | `You've hit your weekly limit · resets Nov 16 at 11pm` |
+
+Two consequences. First, **11-13's two failures are the model limit, not the watchdog** — a
+second, unrelated cause that the watchdog fix does nothing about. Second, the OAuth-expiry
+window tabulated on 11-08 (11-02 → 11-06) has **aged out of the task store entirely** and is
+no longer verifiable from it. The lesson is procedural: *failure counts read from
+`openclaw tasks` are a rolling window, not a history.* Cite them with the window attached or
+they silently become wrong, as happened twice now.
+
+Note the limit did **not** block today — all three slots ran despite the 16 Nov reset. Treat
+"may not run on the 15th/16th" as a possibility, not a forecast.
+
+### Correction 4 — Pace has gone quiet, reversing the 11-08 finding
+
+`origin/main` is **still `7328ce8c`** (2026-11-08 17:50). **Zero merges in six days** — the
+first such gap since 09-27, against 40 founder merges in the five weeks before it. The 11-08
+record's headline ("Pace is not quiet") no longer describes the repo. Local `main` is still
+`behind 14`, still nothing local to lose.
+
+**But the open queue grew anyway: 21 → 23** (17 `MERGEABLE`, 6 `CONFLICTING`). Merging
+stopped; opening did not. `#88` is still `OPEN` / `MERGEABLE`, so `stash@{0}` is still not
+droppable on the recorded basis.
+
+### Correction 5 — unpushed app-factory commits are 7, not 6
+
+`origin/main` `739d25c`, local `main` `1242357`, **7 ahead**, tree clean. This morning's
+entry said 6; its own cutoff commit made 7. Third consecutive record to understate this by
+exactly one. `origin/main`'s `orchestration/rigs.json` still reads `"deploy": "auto"` for
+app-factory (line 41) against local `"hold"` — **22 days** of origin contradicting policy.
+
+### Verified correct, no change
+
+- **PRs [#9](https://github.com/salaseviciusm/app-factory/pull/9) and
+  [#10](https://github.com/salaseviciusm/app-factory/pull/10)**: both `OPEN`, both
+  `MERGEABLE`, neither touched since 2026-10-23. **Carried 22 days.**
+- **Engine idle 22 days.** Still 94 runs on record — none started since 10-23. Exactly two
+  non-terminal, both `awaiting-merge` at step 11/11: `feature-improvement-plan-sync-time`
+  (#9) and `feature-build-rebase-train-workflow` (#10). Zero open gates.
+- **Watchdog config is exactly as recorded** — `fresh` and `resume` both
+  `{ratio: 0.8, minMs: 180000, maxMs: 1500000}`; backup
+  `openclaw.json.bak.pre-watchdog-20261114` present.
+- **The three Pace salvage branches are on origin**, re-verified by `git ls-remote` at the
+  recorded SHAs (`pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`). **A 21-day data-loss exposure is
+  closed.** Time Machine still has **no destinations configured**, so this remains the only
+  second copy — but it is a real one.
+- **skip-hero**: `origin/main` `c2bb590` (2026-10-10), zero open PRs, local `codex/ui`
+  `b969447` 1 behind, spike ref `origin/spike/android-pose-parity` `893ab34` holds.
+- `slack-leak-watchdog`: `ok`, ran 1m ago. `factory-weekly-self-review`: still `disabled`,
+  **69 days** since its last run.
+- `openclaw tasks`: 0 running, 0 queued.
+
+### Needs founder attention tomorrow (ranked)
+
+1. **Merge #9, then #10.** 22 days, both MERGEABLE, no checks configured. That merge also
+   publishes the 7 stranded commits and the `deploy: hold` flip that `origin/main` still
+   contradicts. #9 carries the R5 standup-liveness watchdog — the thing that would have
+   caught both outages. Nothing else in the factory can start while this sits.
+2. **skip-hero: priority app or not?** 35 quiet days, zero PRs, **62 days** since any engine
+   run, ship date unanswered 78+ days, the provisional 28 Sep launch 47 days past. Now the
+   oldest live question in the factory. One word settles it.
+3. **The weekly model limit resets 16 Nov 23:00.** It cost two slots on 11-13 and did not
+   bite today. No action needed unless the 15th/16th go silent.
+
+### Not done by this sync, deliberately
+
+Nothing pushed, merged, dispatched or restarted. #9/#10 are the founder's merge seat; the
+gateway needs no restart (Correction 1); and nothing was dispatched because the factory is
+still merge-blocked behind those two PRs. No standup was posted out-of-band.

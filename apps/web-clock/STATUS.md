@@ -5,7 +5,12 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-11-08 18:00 (EOD sync). Unchanged and still accurate. The last
+- **Last verified:** 2026-11-14 18:00 (EOD sync). Unchanged and still accurate. Still no
+  device, no accuracy figure, no TestFlight build. Every blocker below is unchanged and every
+  one is a founder dependency — hardware, an Apple Developer account, four ASO calls. The
+  steering loop's return today changes nothing here: none of these can move while the factory
+  is the only party acting.
+- **Prior verification:** 2026-11-08 18:00 (EOD sync). Unchanged and still accurate. The last
   commit touching `apps/web-clock/` is `0775591` (2026-10-23, an EOD sync writing STATUS
   files, not product work). Still no device, no accuracy figure, no TestFlight build. Every
   blocker below is unchanged and every one is a founder dependency — hardware, an Apple

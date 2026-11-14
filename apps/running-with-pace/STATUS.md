@@ -5,13 +5,33 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-11-08 (EOD sync — 14 further founder merges, queue grew to 21 open, three single-copy branches unchanged for 16 days)
-- **Last verified:** 2026-11-08 18:00
+- **Last updated:** 2026-11-14 (EOD sync — repo went quiet for the first time since 09-27, queue grew to 23 open anyway, three single-copy branches now pushed)
+- **Last verified:** 2026-11-14 18:00
+- **Prior verification:** 2026-11-08 18:00
 - **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (verified 2026-11-08 18:00)
+## Repo state (verified 2026-11-14 18:00)
+
+- **The repo has gone quiet.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
+  **zero merges in six days**, the first such gap since 2026-09-27 and a reversal of the
+  trend every prior record described. The 11-08 headline ("Pace is not quiet") no longer
+  holds. Local `main` is still **behind 14**; nothing local to lose. Untracked
+  `.agents/skills/` dirs are back to **five** (the 11-08 record noted two).
+- **The open queue grew while merging stopped: 21 → 23** (17 `MERGEABLE`, 6 `CONFLICTING`).
+  **`#88` is still `OPEN` and `MERGEABLE`**, so `stash@{0}` is still not droppable on the
+  recorded basis.
+- **The three single-copy branches are now on origin — a 21-day data-loss exposure is
+  closed.** Pushed by the 11-14 cutoff turn, re-verified here by `git ls-remote origin`:
+  `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`. Push-only — nothing merged, rewritten
+  or force-pushed. Time Machine still has **no destinations configured**, so origin is the
+  only second copy, but it is a real one.
+- No engine run has touched this rig since 2026-10-23 (**22 days**); the engine has started
+  nothing on any rig in that time.
+
+## Repo state (prior verification, 2026-11-08 18:00)
 
 - `origin/main` at **`7328ce8c`** — "Compact, legible routes panel: stat strip, one start
   action, content-sized (#154)". **Fourteen merges since the 10-23 record** (#143, #144,

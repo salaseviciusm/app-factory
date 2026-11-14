@@ -6,8 +6,16 @@
   is contested and unenforced**; see "Blocked on the founder". Registered rig in
   `orchestration/rigs.json` with a production deploy path.
   **Pre-launch: no ship date, no marketing executed, nothing posted or paid for.**
-- **Last updated:** 2026-11-08 (EOD sync — 29 quiet days; the standup loop that asks this app's questions has been dead for 16 days)
-- **Last verified:** 2026-11-08 18:00
+- **Last updated:** 2026-11-14 (EOD sync — 35 quiet days; the steering loop is back up, so the priority question is now askable again and still unasked)
+- **Last verified:** 2026-11-14 18:00. Everything below re-verified unchanged:
+  `origin/main` `c2bb590` (2026-10-10), **35 quiet days**; zero open PRs; local `codex/ui`
+  `b969447`, 1 behind; spike ref `origin/spike/android-pose-parity` **`893ab34`** holds;
+  untracked `.agents/`, `.codex/`. **No engine run since 2026-09-13 — 62 days.**
+  The standup loop ran all three slots today for the first time since 10-23, so this app's
+  priority question is askable again. It was not asked at the 11:00 cutoff, by design: the
+  designation should die by the founder's word, not a cutoff timer. It is now the oldest
+  live question in the factory.
+- **Prior verification:** 2026-11-08 18:00
 - **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
