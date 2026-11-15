@@ -3118,3 +3118,37 @@ app-factory (line 41) against local `"hold"` — **22 days** of origin contradic
 Nothing pushed, merged, dispatched or restarted. #9/#10 are the founder's merge seat; the
 gateway needs no restart (Correction 1); and nothing was dispatched because the factory is
 still merge-blocked behind those two PRs. No standup was posted out-of-band.
+
+## 2026-11-15 08:00 — standup posted
+
+**Yesterday (11-14 → now):** zero merges and zero pushes in every rig. `origin/main`:
+app-factory `739d25c` (local `main` **8 ahead**, clean), Pace `7328ce8c` (2026-11-08, now
+**7 quiet days**), skip-hero `c2bb590` (2026-10-10, **36 quiet days**). What did land
+yesterday was the watchdog fix (`fresh` + `resume`, maxMs 1 500 000) and the three Pace
+salvage branches on origin — both verified in last night's EOD sync. **The watchdog fix
+holds:** this 08:00 turn started clean, so the 600s cap that killed 7 of 7 recorded standups
+is no longer governing, and **no `openclaw gateway restart` is needed**.
+
+**Engine:** idle **23 days**. 94 runs on record, none started since 10-23, `report --days 7`
+totals are null (**$0 spend, 7 days**). Exactly two non-terminal runs, both `awaiting-merge`
+at step 11/11 and both `deployHeld: true`: `feature-improvement-plan-sync-time` (PR #9,
+$2.92) and `feature-build-rebase-train-workflow` (PR #10, $5.83). Zero open gates.
+
+**PR census (gh, not the engine feed):** 25 open non-draft — 2 app-factory, 23 Pace (20
+non-draft), 0 skip-hero. Pace: 17 MERGEABLE / 6 CONFLICTING, unchanged count from yesterday.
+Engine `prs` feed returned 22 with no rig errors, consistent with gh once drafts are excluded.
+
+**Today's plan:** one task, no dispatch, no specialist — I build a merge-order plan for the
+Pace queue by hand (which of the 23 PRs conflict with which, a safe sequence, the six
+CONFLICTING ones named with what they collide on). Read-only; it lowers the cost of the
+founder's merge seat, which is the actual bottleneck. Nothing dispatched on app-factory while
+#9/#10 are open.
+
+**Introspection proposed:** the rebase-train workflow built to sequence exactly this queue
+*is* PR #10, unmerged 22 days. Ask = merge #9 then #10, then run rebase-train on the six
+CONFLICTING Pace PRs (~$6-18 by prior usage). Not started; it is a founder yes/no.
+
+**Carried asks:** (1) merge #9 then #10 — 23 days, both MERGEABLE, also publishes the 8
+stranded commits and the `deploy: hold` flip that `origin/main` still contradicts.
+(2) skip-hero: priority app or not — now **36** quiet days, 63 days since any engine run,
+unanswered across 7 standups. (3) Weekly model limit resets 16 Nov 23:00.
