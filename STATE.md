@@ -21,7 +21,8 @@
 > contradicted its own body ("Twenty-nine"/56); fixed and re-dated. **Exposure closed:** those
 > 9 app-factory commits had been single-copy for 24 days with Time Machine still reporting no
 > destinations, so `main` is now mirrored to origin branch **`records-backup-20261115`**
-> (`04ae23c`, push-only, fresh ref, `main` untouched, review policy not bypassed). Nothing
+> and re-pushed after each commit of this sync so the mirror ends the day identical to local
+> `main` (push-only to a fresh ref, `main` untouched, review policy not bypassed). Nothing
 > merged, rebased, closed or dispatched; engine untouched. **Nothing new needs the founder —
 > that is the finding:** merge #9→#10 (23 days), skip-hero priority (8th standup), introspection
 > approval, plus the three evidence-backed PR closures. Weekly model limit resets 16 Nov 23:00;
@@ -3289,7 +3290,10 @@ Fixed; the body now carries its own verification date so the two can't drift aga
 commits (oldest `a4e17ab`, 2026-10-22) are records, the `deploy: hold` flip and a
 `factory-run` one-liner; `tmutil destinationinfo` still returns **no destinations
 configured**, so this disk was the only copy. Pushed `main` to a new origin branch
-**`records-backup-20261115`** (`04ae23c`, verified by `git ls-remote`). Push-only to a fresh
+**`records-backup-20261115`**, and re-pushed after each records commit of this sync so the
+mirror ends the day identical to local `main` — verified by `git ls-remote` against
+`git rev-parse main`. **Local `main` is 10+ ahead of `origin/main`, all of it mirrored.**
+Push-only to a fresh
 ref: `main` untouched, no PR opened, the `merge: review` policy not bypassed, #9/#10
 unaffected. Same pattern as yesterday's three Pace salvage pushes.
 
