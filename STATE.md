@@ -6,7 +6,46 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-11-14 11:00 (standup cutoff — **no founder reply**, so the posted
+> Last updated: 2026-11-15 18:00 (EOD sync — today's records **verified accurate**; two
+> corrections and one closed exposure. Re-verified from primary sources: all three
+> `origin/main`s unmoved (Pace `7328ce8c` 7 quiet days, app-factory `739d25c`, skip-hero
+> `c2bb590` 36 quiet days); PR census exact (2 app-factory both MERGEABLE+CLEAN, 23 Pace =
+> 20 non-draft/3 draft, 17 MERGEABLE/6 CONFLICTING, 0 skip-hero) with **zero Pace PR activity
+> today**, so the 11:04 merge-order plan still holds as written; engine idle **23 days**, 94
+> runs, **$0 over 7 days**, two `awaiting-merge` runs, **zero open gates** (`status --json`);
+> `cron list` all four jobs `ok` and **3/3 steering slots ran — second consecutive full day,
+> so the watchdog fix is a trend, not a fluke, and no gateway restart is needed**; #factory-standup
+> read back 7 days contains **zero human messages**, so the three asks are unanswered at the
+> source. **Correction 1:** the "8 stranded commits" figure was stale when posted — the 11:00
+> turn's own commit made it **9**. **Correction 2:** skip-hero's STATUS.md header (35 days/62)
+> contradicted its own body ("Twenty-nine"/56); fixed and re-dated. **Exposure closed:** those
+> 9 app-factory commits had been single-copy for 24 days with Time Machine still reporting no
+> destinations, so `main` is now mirrored to origin branch **`records-backup-20261115`**
+> (`04ae23c`, push-only, fresh ref, `main` untouched, review policy not bypassed). Nothing
+> merged, rebased, closed or dispatched; engine untouched. **Nothing new needs the founder —
+> that is the finding:** merge #9→#10 (23 days), skip-hero priority (8th standup), introspection
+> approval, plus the three evidence-backed PR closures. Weekly model limit resets 16 Nov 23:00;
+> it did not bind today.)
+>
+> Prior: 2026-11-15 11:00 (standup cutoff — **no founder reply**, so the posted
+> proposal proceeded: the day's one task is **done** and **nothing was dispatched** — that
+> was the proposal, not an omission. The Pace merge-order plan is posted to #factory-pace
+> (`1794740611.236079`). Read-only: nothing merged, rebased, closed or pushed; `origin/main`
+> is still `7328ce8c`. Two findings beyond the ask: **#86 is a strict superset of #78**
+> (same base `5a0747a2`, same three ASO commits plus the splash/NativeTabs cold-start fixes),
+> and **#152 supersedes #88 and #150** by its own body while being the only MERGEABLE+green
+> one of the three — so the effective queue is **20 PRs, not 23**, with 3 closable on
+> evidence. Real conflict counts measured with `git merge-tree` against `origin/main`, not
+> GitHub's flag: #112 **41** files, #86 20, #78 15, #126 10, #81 8, #150 4. Order posted:
+> wave 0 free (#147, #115, #116, #148 — zero overlap with anything) → wave 1 small leaves
+> (#83, #149→#151, #155→#156) → wave 2 #86 (un-draft, close #78) → wave 3 #152 (close #88,
+> #150) → wave 4 recovery stack #126→#127→#128/#129→#130 (retarget base to main)→#131 →
+> wave 5 #81 then #112 last. #153 stays out of the queue. All three carried asks are
+> **unchanged and unanswered**: merge #9 then #10 (23 days), skip-hero priority yes/no
+> (8th standup), introspection approval for rebase-train. Weekly model limit resets 16 Nov
+> 23:00. Watchdog fix held through both of today's cron turns.)
+>
+> Prior: 2026-11-14 11:00 (standup cutoff — **no founder reply**, so the posted
 > proposal proceeded. Both of the day's tasks are **done**. (1) The standup watchdog is fixed:
 > `agents.defaults.cliBackends.claude-cli.reliability.watchdog` now sets `fresh` **and**
 > `resume` to ratio 0.8 / min 180 000 ms / max **1 500 000 ms**, so the 1800s job budget
@@ -3152,3 +3191,115 @@ CONFLICTING Pace PRs (~$6-18 by prior usage). Not started; it is a founder yes/n
 stranded commits and the `deploy: hold` flip that `origin/main` still contradicts.
 (2) skip-hero: priority app or not — now **36** quiet days, 63 days since any engine run,
 unanswered across 7 standups. (3) Weekly model limit resets 16 Nov 23:00.
+
+
+## 2026-11-15 11:00 — standup cutoff: no founder reply, proposal proceeded
+
+**Decision path:** read #factory-standup back to 11-04. The 08:00 standup posted in two
+parts (`1794729738.018999`, `1794729738.036829`); **no founder message since**, and no human
+message in the channel across the whole window. So the posted proposal governed: one task,
+no dispatch, no specialist.
+
+**Done — Pace merge-order plan, posted to #factory-pace** (`1794740611.236079`).
+Method: full paginated file lists for all 23 open PRs via `gh api .../pulls/N/files`
+(`gh pr view --json files` silently truncates at 100 — #150 is 354 files, #112 195, #153 131),
+pairwise file-collision matrix, and `git merge-tree --write-tree` of each CONFLICTING head
+against `origin/main` for *actual* conflict files. Read-only throughout.
+
+**Findings worth keeping:**
+- **#86 ⊃ #78.** Both sit on base `5a0747a2` and share commits `7d08ad68` (ASO visuals) and
+  `bf977779` (coach state through first GPS fix) plus an identically-titled Android-theme
+  commit; #86 adds `7180aa94` (splash stops blocking taps) and `57c438aa` (NativeTabs
+  deferred-focus cold-start fix). #78 is non-draft and #86 is draft, which is why the queue
+  has been carrying the weaker one. Merge #86, close #78.
+- **#152 supersedes #88 and #150** (stated in #152's and #150's own bodies) and is the only
+  MERGEABLE + passing one of the three. Effective queue: **20 PRs**, 3 closable on evidence.
+- **Measured conflicts** (not the GitHub flag): #112 41 files, #86 20, #78 15, #126 10,
+  #81 8, #150 4.
+- **Collision hotspots**, each touched by 9-10 of the 23 PRs: `run-rebuilds.ts`, `events.ts`,
+  `routes/api.ts`, `src/impl/api.ts`, `run-lifecycle.test.tsx`, `app-pipeline.ts`,
+  `hooks/api.ts`. Any rebase-train run will spend its time in exactly these files.
+- **The one real fork:** #152 is built on main *without* the recovery stack (#126-#131).
+  Taking #152 first leaves #126 as the stack's only conflicted base; taking the stack first
+  costs six sequential heavy rebases and still leaves #152 to rebuild. Plan takes #152 first.
+- #130 must have its **base retargeted to `main`** before merging (its body says so — it was
+  reviewed against a feature base combining #128, #129 and the #124 preview).
+
+**Not done, deliberately:** nothing merged, rebased, closed, pushed or dispatched. No engine
+run started, so Pace/app-factory/skip-hero `origin/main` are untouched (`7328ce8c`,
+`739d25c`, `c2bb590`). The merge seat and the three closures are the founder's call; the
+plan names them rather than taking them.
+
+**Still blocked on the founder, 8th consecutive standup for item 2:** (1) merge
+[#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10) — 23 days, both MERGEABLE,
+also publishes 8 stranded local commits and the `deploy: hold` flip; (2) skip-hero priority
+yes/no — 36 quiet days, 63 days since any engine run; (3) introspection approval
+(merge → rebase-train on the conflicting Pace PRs, ~$6-18). Engine still idle 23 days,
+$0 spend for 7 days. Weekly model limit resets 16 Nov 23:00.
+
+
+## 2026-11-15 18:00 — EOD sync (git-, GitHub-, engine-, cron-, Slack- and disk-verified)
+
+**Verdict: today's records are accurate.** Every substantive claim in the 08:00 standup and
+the 11:00 cutoff block re-verified against primary sources. Two corrections and one closed
+exposure, below. No new work dispatched; the engine is untouched.
+
+**Re-verified unchanged (so the 11:00 block stands):**
+- `origin/main` in all three rigs: Pace `7328ce8c` (**7 quiet days**), app-factory `739d25c`,
+  skip-hero `c2bb590` (**36 quiet days**). Nothing merged, rebased, closed or pushed to any
+  default branch today.
+- **PR census exact:** 2 app-factory ([#9](https://github.com/salaseviciusm/app-factory/pull/9),
+  [#10](https://github.com/salaseviciusm/app-factory/pull/10), both non-draft, both
+  `MERGEABLE` + `CLEAN`), 23 Pace (20 non-draft / 3 draft; **17 MERGEABLE / 6 CONFLICTING**),
+  0 skip-hero. **Zero Pace PRs have any activity dated today** — so the merge-order plan
+  posted at 11:04 is still valid as written, with no drift to re-measure.
+- **Engine:** 94 runs, latest start `2026-10-23T10:08:23Z` → **idle 23 days**.
+  `report --days 7`: **0 runs, $0.00**. Exactly two non-terminal runs, both `awaiting-merge`
+  at step 11/11 with `gate: null` and `deployHeld: true` — #9 ($2.92) and #10 ($5.83).
+  **Zero open gates**, confirmed from `status --json`, not from narrative. The engine's PR
+  poller is alive: both PRs show `checkedAt` 2026-11-15 17:37.
+- **Steering loop: 3/3 slots ran today** (`cron list` — standup 10h ago, cutoff 7h ago, this
+  EOD sync now; all four jobs `ok`). **That is the second consecutive full day since the
+  watchdog fix**, which upgrades yesterday's single data point to a trend: the 1 500 000 ms
+  `fresh`+`resume` maxMs is governing, and the gateway still does **not** need restarting
+  despite running the pre-fix config.
+- **No founder reply, re-verified at the source.** Read #factory-standup back 7 days:
+  **every message in the window is from the bot** — the 11-09→11-13 failure warnings, then
+  11-14 and 11-15's standup/cutoff posts. Zero human messages. All three carried asks are
+  unanswered, not merely unactioned.
+- Pace salvage branches still on origin (`git ls-remote`): `pr78-salvage` `37efb30b`,
+  `pr83-rebase` `71ee06d5`, `codex/referrals-entitlements-review` `87f9a844`. skip-hero
+  spike ref `origin/spike/android-pose-parity` `893ab34b` holds. Pace stash still 5 entries,
+  `stash@{0}` still not droppable (#88 still open).
+- The **`deploy: hold` contradiction is real and still live**: `origin/main`'s `rigs.json`
+  says `app-factory.policy.deploy: "auto"`; local says `"hold"`. It stays contradicted until
+  #9/#10 land.
+
+**Correction 1 — "8 stranded commits" was already stale when posted.** The 08:00 standup
+counted 8 ahead; the 11:00 cutoff turn then committed `04ae23c`, making it **9**. Both the
+08:00 and 11:00 blocks above say 8. Correct figure: **9 commits on local `main`, 0 behind.**
+
+**Correction 2 — skip-hero's STATUS.md contradicted itself.** Its header said 35 quiet days /
+62 days since an engine run, while the "Repo state (verified)" body section below it still
+read "Twenty-nine quiet days" and "56 days" — text re-verified on 11-08 but never re-dated.
+Fixed; the body now carries its own verification date so the two can't drift again.
+
+**Exposure closed — app-factory records were single-copy for 24 days.** The 9 unpushed
+commits (oldest `a4e17ab`, 2026-10-22) are records, the `deploy: hold` flip and a
+`factory-run` one-liner; `tmutil destinationinfo` still returns **no destinations
+configured**, so this disk was the only copy. Pushed `main` to a new origin branch
+**`records-backup-20261115`** (`04ae23c`, verified by `git ls-remote`). Push-only to a fresh
+ref: `main` untouched, no PR opened, the `merge: review` policy not bypassed, #9/#10
+unaffected. Same pattern as yesterday's three Pace salvage pushes.
+
+**Needs founder attention tomorrow — nothing new, and that is the finding.** Three asks,
+all older than the work they block: (1) **merge #9 then #10** — 23 days, both green and
+`MERGEABLE`; #10 *is* the rebase-train tool built to sequence the Pace queue the factory
+spent today planning by hand, and the merge also publishes the 9 stranded commits and ends
+the `deploy` policy contradiction. (2) **skip-hero priority yes/no** — 36 quiet days, 63
+days since any engine run, **8 standups unanswered**, now the oldest live question in the
+factory. (3) **introspection approval** for merge → rebase-train on the conflicting Pace PRs
+(~$6-18). Plus the three evidence-backed closures from today's plan (#78 under #86; #88 and
+#150 under #152), which are a founder call, not mine. Weekly model limit resets **16 Nov
+23:00**; it did not bind today.

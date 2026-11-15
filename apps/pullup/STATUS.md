@@ -8,7 +8,13 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-11-14 18:00 (EOD sync). Still correct, still dormant. **Dormant 100
+- **Last verified:** 2026-11-15 18:00 (EOD sync). Still correct, still dormant. **Dormant 101
+  days** under D27. Re-confirmed against the engine's full 94-run history: **no pullup run has
+  ever existed** (every run belongs to running-with-pace, skip-hero or app-factory). The last
+  commit touching `apps/pullup/` is `c91af5c` (2026-11-14) — an EOD sync editing this file, not
+  product work. The steering loop ran all three slots again today (second consecutive full day
+  since the watchdog fix) and D27 was not revisited. Nothing here waits on the founder.
+- **Prior verification:** 2026-11-14 18:00 (EOD sync). Still correct, still dormant. **Dormant 100
   days.** Re-confirmed against the engine's full 94-run history: **zero pullup runs have ever
   existed.** The last commit touching `apps/pullup/` is an EOD sync editing this file, not
   product work. The steering loop came back up today (all three slots ran, first full day

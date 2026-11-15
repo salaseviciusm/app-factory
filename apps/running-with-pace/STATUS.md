@@ -5,14 +5,42 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-11-14 (EOD sync — repo went quiet for the first time since 09-27, queue grew to 23 open anyway, three single-copy branches now pushed)
-- **Last verified:** 2026-11-14 18:00
+- **Last updated:** 2026-11-15 (EOD sync — 7 quiet days, queue static at 23, a merge-order plan now exists for it)
+- **Last verified:** 2026-11-15 18:00
+- **Prior verification:** 2026-11-14 18:00
 - **Prior verification:** 2026-11-08 18:00
 - **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (verified 2026-11-14 18:00)
+## Repo state (verified 2026-11-15 18:00)
+
+- **Still quiet, now 7 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
+  zero merges in a week, the longest gap since 2026-09-27. Local `main` is still **behind 14**
+  with nothing of its own; untracked `.agents/skills/` dirs still **five**.
+- **The queue is static, not just unchanged in count: 23 open** (20 non-draft / 3 draft,
+  **17 MERGEABLE / 6 CONFLICTING**), and **not one of the 23 has any activity dated today**.
+  `#88` is still `OPEN` and `MERGEABLE`, so `stash@{0}` (5 stash entries) is still not
+  droppable on the recorded basis.
+- **A merge-order plan now exists for this queue**, posted to #factory-pace today
+  (`1794740611.236079`) and recorded in STATE.md. Built read-only from full paginated file
+  lists for all 23 PRs, a pairwise collision matrix, and `git merge-tree` against
+  `origin/main`. Two findings shrink the queue to an **effective 20**: **#86 is a strict
+  superset of #78** (merge #86, close #78), and **#152 supersedes #88 and #150** by their own
+  bodies while being the only MERGEABLE + green one of the three. Measured conflict spread
+  (not GitHub's flag): #112 **41** files, #86 20, #78 15, #126 10, #81 8, #150 4. Collision
+  hotspots touched by 9-10 PRs each: `run-rebuilds.ts`, `events.ts`, `routes/api.ts`,
+  `src/impl/api.ts`, `run-lifecycle.test.tsx`, `app-pipeline.ts`, `hooks/api.ts`.
+  #130 needs its **base retargeted to `main`** before merging. **Nothing in the plan has been
+  executed** — the merge seat and the three closures are the founder's call.
+- **The three single-copy branches are still on origin**, re-verified by `git ls-remote`:
+  `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`. `tmutil` still reports **no Time Machine
+  destinations**, so origin remains the only second copy — but a real one.
+- No engine run has touched this rig since 2026-10-23 (**23 days**); the engine has started
+  nothing on any rig in that time, and spent **$0 over the last 7 days**.
+
+## Repo state (prior verification, 2026-11-14 18:00)
 
 - **The repo has gone quiet.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
   **zero merges in six days**, the first such gap since 2026-09-27 and a reversal of the

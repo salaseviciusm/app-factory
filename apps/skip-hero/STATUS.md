@@ -6,8 +6,17 @@
   is contested and unenforced**; see "Blocked on the founder". Registered rig in
   `orchestration/rigs.json` with a production deploy path.
   **Pre-launch: no ship date, no marketing executed, nothing posted or paid for.**
-- **Last updated:** 2026-11-14 (EOD sync — 35 quiet days; the steering loop is back up, so the priority question is now askable again and still unasked)
-- **Last verified:** 2026-11-14 18:00. Everything below re-verified unchanged:
+- **Last updated:** 2026-11-15 (EOD sync — 36 quiet days; 8th standup with the priority question unanswered, now the factory's oldest live question)
+- **Last verified:** 2026-11-15 18:00. Re-verified unchanged: `origin/main` `c2bb590`
+  (2026-10-10), **36 quiet days**; **zero open PRs** (`gh pr list` empty); local `codex/ui`
+  `b969447`, **1 behind**; spike ref `origin/spike/android-pose-parity` **`893ab34b`** holds;
+  untracked `.agents/`, `.codex/`. **No engine run since 2026-09-13 — 63 days.** The steering
+  loop ran 3/3 slots for the second consecutive day, so the priority question was askable and
+  was carried in both the 08:00 standup and the 11:00 cutoff. **#factory-standup contains no
+  human message in the last 7 days**, so this is unanswered at the source, not merely
+  unactioned — the **8th consecutive standup**. The designation should die by the founder's
+  word, not a cutoff timer, so it still stands on paper.
+- **Prior verification:** 2026-11-14 18:00. Everything below re-verified unchanged:
   `origin/main` `c2bb590` (2026-10-10), **35 quiet days**; zero open PRs; local `codex/ui`
   `b969447`, 1 behind; spike ref `origin/spike/android-pose-parity` **`893ab34`** holds;
   untracked `.agents/`, `.codex/`. **No engine run since 2026-09-13 — 62 days.**
@@ -20,12 +29,17 @@
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (verified)
+## Repo state (verified 2026-11-15 18:00)
+
+> *Correction (2026-11-15 EOD): this section previously read "Twenty-nine quiet days" and
+> "56 days" — figures re-verified on 2026-11-08 but never re-dated, so it contradicted the
+> header above it. It now carries its own verification date and is recomputed each sync.*
 
 - `origin/main` at **`c2bb590`** — "Merge pull request #11 from salaseviciusm/codex/ui",
-  2026-10-10. **Twenty-nine quiet days** since; zero open PRs (`gh pr list` empty, re-verified
-  2026-11-08 18:00). No engine run has touched this rig since **2026-09-13 — 56 days.** The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work,
-  not by the factory; no engine run has touched this rig since 2026-09-13.
+  2026-10-10. **Thirty-six quiet days** since; **zero open PRs** (`gh pr list` empty,
+  re-verified 2026-11-15 18:00). No engine run has touched this rig since **2026-09-13 — 63
+  days.** The 09-10 → 10-10 gap was closed by the founder's own `codex/ui` work, not by the
+  factory.
 - The local clone sits on branch **`codex/ui`** at `b969447`, **1 behind** `origin/main`
   (`b969447` is the parent of merge commit `c2bb590`). *Correction: this morning's standup
   said 4 behind — `git rev-list --count HEAD..origin/main` is 1.*
