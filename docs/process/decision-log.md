@@ -774,3 +774,24 @@ merge-block worse. Both halves of the default are honoured: approved, and not wa
 **Anti-instruction:** do not re-ask for approval when #9/#10 land — this entry *is* the approval;
 dispatch it. And do not narrow R5 back to "last success >26 h": the clean-exit-no-artifact half is
 the half that 16 November actually proved, and it is new since R5 was first written.
+
+## D38 — R5 asserts on artifacts for *every* steering slot, not standup liveness (2026-11-17, amends D37)
+
+**Context:** the 2026-11-17 EOD sync re-checked the 16 Nov record and found the clean-exit
+failure is not a one-off. `openclaw tasks list` shows `factory-eod-sync` reported **`succeeded`**
+on **11-10, 11-11, 11-12, 11-13 and 11-16** while `git log -- STATE.md` shows **no commit
+between `895058d` (11-08 18:04) and `1242357` (11-14 11:02)** — five verifiable silent successes
+and a six-day hole in the records, none of which any status surface reported. Critically, on
+11-10 and 11-14 the **08:00 standup ran fine**; the task that lied was the EOD sync.
+**Decision:** R5's assertion is **per-slot and artifact-based**. For each of the three daily
+steering slots, the check is "did this slot's expected artifact appear today?" — a STATE.md block
+dated today for the cutoff and EOD slots, a message posted to #factory-standup for the 08:00
+slot. Exit status is an input, never the test. D37's "last success >26 h" stays as a second,
+weaker trigger.
+**Why:** D37 was framed as a *standup*-liveness watchdog. Measured against the five real
+failures, standup liveness would have caught **none of them** — it watches the one slot that was
+working. A watchdog scoped to the symptom its author happened to witness is how this failure
+mode survived six days of green status.
+**Anti-instruction:** do not implement this as a check on the cron job's recorded status, however
+it is spelled. The whole point is that the job's own report of itself is the unreliable witness.
+Read the artifact from disk or from Slack.

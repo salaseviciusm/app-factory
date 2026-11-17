@@ -5,7 +5,12 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-11-15 18:00 (EOD sync). Unchanged and still accurate. Still no
+- **Last verified:** 2026-11-17 18:00 (EOD sync). Unchanged and still accurate. Still no
+  device, no accuracy figure, no TestFlight build. The last commit touching `apps/web-clock/`
+  is `a98cd73` (2026-11-15) — an EOD sync writing STATUS files, not product work. Every
+  blocker below is a founder dependency (hardware, an Apple Developer account, four ASO
+  calls) and none of them moved. Not listed as an open factory concern.
+- **Prior verification:** 2026-11-15 18:00 (EOD sync). Unchanged and still accurate. Still no
   device, no accuracy figure, no TestFlight build. The last commit touching `apps/web-clock/`
   is `c91af5c` (2026-11-14) — an EOD sync writing STATUS files, not product work. Every blocker
   below is unchanged and every one is a founder dependency: hardware, an Apple Developer

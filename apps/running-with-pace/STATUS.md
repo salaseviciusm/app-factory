@@ -5,21 +5,32 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-11-15 (EOD sync — 7 quiet days, queue static at 23, a merge-order plan now exists for it)
-- **Last verified:** 2026-11-15 18:00
+- **Last updated:** 2026-11-17 (EOD sync — 9 quiet days, queue bit-identical at 23, merge-order plan re-verified with zero drift)
+- **Last verified:** 2026-11-17 18:00. **Nine quiet days.** `origin/main` still `7328ce8c`
+  (2026-11-08 17:50); local `main` still **behind 14** with nothing of its own; the five
+  untracked `.agents/skills/` dirs are unchanged. The queue is **bit-identical** to the
+  11-15 reading: **23 open** (20 non-draft / 3 draft — #86, #150, #153), **17 MERGEABLE /
+  6 CONFLICTING** (#78, #81, #86, #112, #126, #150), and the **most recent `updatedAt` on
+  any of the 23 is 2026-11-08T23:00Z** — nine days of total stillness, so the merge-order
+  plan below needs no re-measurement and stands verbatim. Salvage refs re-verified by
+  `git ls-remote`: `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`. Stash still 5; `#88` still OPEN so
+  `stash@{0}` is still not droppable. No engine run has touched this rig for **25 days**.
+- **Prior verification:** 2026-11-15 18:00
 - **Prior verification:** 2026-11-14 18:00
 - **Prior verification:** 2026-11-08 18:00
 - **Prior verification:** 2026-10-23 18:00
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (verified 2026-11-15 18:00)
+## Repo state (re-verified 2026-11-17 18:00)
 
-- **Still quiet, now 7 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
-  zero merges in a week, the longest gap since 2026-09-27. Local `main` is still **behind 14**
-  with nothing of its own; untracked `.agents/skills/` dirs still **five**.
+- **Still quiet, now 9 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
+  zero merges in nine days, the longest gap since 2026-09-27. Local `main` is still
+  **behind 14** with nothing of its own; untracked `.agents/skills/` dirs still **five**.
 - **The queue is static, not just unchanged in count: 23 open** (20 non-draft / 3 draft,
-  **17 MERGEABLE / 6 CONFLICTING**), and **not one of the 23 has any activity dated today**.
+  **17 MERGEABLE / 6 CONFLICTING**), and **not one of the 23 has any activity since
+  2026-11-08** — verified from `updatedAt`, not from the absence of notifications.
   `#88` is still `OPEN` and `MERGEABLE`, so `stash@{0}` (5 stash entries) is still not
   droppable on the recorded basis.
 - **A merge-order plan now exists for this queue**, posted to #factory-pace today
@@ -37,7 +48,7 @@
   `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
   `codex/referrals-entitlements-review` `87f9a844`. `tmutil` still reports **no Time Machine
   destinations**, so origin remains the only second copy — but a real one.
-- No engine run has touched this rig since 2026-10-23 (**23 days**); the engine has started
+- No engine run has touched this rig since 2026-10-23 (**25 days**); the engine has started
   nothing on any rig in that time, and spent **$0 over the last 7 days**.
 
 ## Repo state (prior verification, 2026-11-14 18:00)

@@ -3415,3 +3415,101 @@ started; **$0 spent**. The merge seat is the founder's.
 the 20-PR Pace queue. Plus the three evidence-backed Pace closures (#78 under #86; #88 and #150
 under #152), which remain a founder call. Items 2 and 3 are off the list: resolved by their
 posted defaults.
+
+
+## 2026-11-17 18:00 — EOD sync (git-, GitHub-, engine-, cron-, task-, Slack- and disk-verified)
+
+**Verdict: today's two records are substantially accurate, and three things in them are wrong.**
+Every claim in the 08:00 standup and the 11:00 cutoff block was re-checked against primary
+sources. Two of the three corrections land on the **16 Nov record written this morning** — the
+newest text in the file is the least accurate, which is itself the finding. No work dispatched,
+no run started, **$0 spent**.
+
+**Correction 1 — the 16 Nov record undercounts this month's steering failures.** It calls that
+day's two billing deaths "the **5th and 6th** steering failures this month" while its own
+parenthetical lists `11 Nov ×2, 12 Nov ×2, 13 Nov ×2` — six prior failures. `openclaw tasks list`
+over all of November returns **22 steering runs, 8 failed**: 11-11 ×2 and 11-12 ×2 (600 s
+watchdog), 11-13 ×2 (weekly limit), 11-16 ×2 (monthly spend). The 16 Nov pair are the
+**7th and 8th**. An arithmetic slip, not a data error — the evidence was in the same sentence.
+
+**Correction 2 — the silent clean exit is not a one-off; it has happened at least five times,
+and the records hole is six days wide, not one.** This morning's record presents
+`factory-eod-sync` reporting `succeeded` while producing no artifact as the novel finding of
+16 Nov ("exit status is not evidence of work"). Primary sources say it is a **pattern**:
+`factory-eod-sync` also reported `succeeded` on **11-10 (18:02), 11-11 (18:06), 11-12 (18:14)
+and 11-13 (18:14)**, and `grep -c` on STATE.md returns **zero mentions of 2026-11-09, -10, -11
+and -12**, with 11-13 appearing only as a passing reference inside another day's block.
+`git log -- STATE.md` is decisive: **no commit touches STATE.md between `895058d` (11-08 18:04)
+and `1242357` (11-14 11:02)** — six calendar days in which the EOD task reported success four
+times and wrote nothing. So: five verifiable silent successes (11-10, -11, -12, -13, -16), and
+the 11-09 slot is unknowable because the task store has since rolled.
+**This changes D37's scope.** R5 as approved is a *standup*-liveness watchdog; not one of these
+five failures was a standup failure. On 11-10 and 11-14 the standup was fine and the EOD sync
+was the task that lied. A watchdog that only checks the 08:00 slot would have caught **none of
+them**. R5 must assert on the **artifact** — "did STATE.md gain a block dated today?" — for
+every steering slot, not on the exit status of one. Recorded against D37; it still runs only
+after #9 and #10 land.
+
+**Correction 3 — "11 commits ahead" was invalidated by the turn that wrote it, two days after
+the identical correction.** The 11:00 cutoff block states local `main` is **11 ahead**; that same
+turn then committed `7d711c5` at 11:03, making it **12**. This is 11-15's Correction 1 recurring
+verbatim. The count is correct the instant it is measured and wrong by the end of the turn, every
+time. Correct figure now: **12 ahead, 0 behind** (13 after this sync's commit). The durable fix is
+to stop quoting a number the turn is about to change — state it as "all records to date are
+mirrored", which is checkable and stays true.
+
+**Verified correct, no change — the day's substance holds.**
+- **PR census bit-identical to 11-15 and to this morning.** app-factory: 2 open
+  ([#9](https://github.com/salaseviciusm/app-factory/pull/9),
+  [#10](https://github.com/salaseviciusm/app-factory/pull/10)), both non-draft, both
+  `MERGEABLE` + `CLEAN`, `updatedAt` still 2026-10-23. Pace: **23 open**, 3 draft (#86, #150,
+  #153), **17 MERGEABLE / 6 CONFLICTING** (#78, #81, #86, #112, #126, #150). skip-hero: **0**.
+  The newest `updatedAt` across all 23 Pace PRs is **2026-11-08T23:00Z** — nine days of
+  stillness — so the merge order posted to #factory-pace (`1794740611.236079`) stands verbatim
+  and needed no re-measurement, exactly as the 11:00 block claimed.
+- **All three `origin/main`s unmoved:** Pace `7328ce8c` (9 quiet days), app-factory `739d25c`,
+  skip-hero `c2bb590` (38 quiet days).
+- **Engine:** 94 runs, latest start `2026-10-23T10:08:23Z` → **idle 25 days**. `report --days 7`:
+  **0 runs, $0.00**. Exactly two non-terminal runs, both `awaiting-merge` with `deployHeld: true`
+  — #9 and #10. **Zero runs carry a non-null gate**, read from `status --json`, not narrative.
+- **Steering loop: 3/3 slots ran, all at exact `:00`** (`08:00:00.019`, `11:00:00.019`,
+  `18:00:00.018`). All four cron jobs `ok`. No watchdog timeout has occurred since 11-12; the
+  only failures since are 11-13 (weekly limit) and 11-16 (monthly spend) — **neither is the
+  600 s bug**, so the `fresh`+`resume` maxMs fix is now holding over five days and the gateway
+  still needs no restart.
+- **No founder reply, verified at the source.** Read #factory-standup: all 15 messages in the
+  window carry the **same single bot identity** (`U0BMFJ52A2W` / `B0BN9U642U8`) — zero human
+  messages. The newest message in the channel is the bot's own 11:03 cutoff post. Nothing
+  arrived after the cutoff either.
+- **Single-copy risk stays closed.** `records-backup-20261117` on origin is `7d711c5`, exactly
+  local `main`'s tip as of this morning. `tmutil destinationinfo` still returns **no destinations
+  configured**, so origin remains the only second copy.
+- Pace salvage refs hold (`pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`); skip-hero `spike/android-pose-parity`
+  `893ab34b` holds. Pace stash still 5 entries, `stash@{0}` still not droppable (#88 open).
+  Pace working tree dirty only with the five untracked `.agents/skills/` dirs — no product work
+  at risk.
+- **D36 and D37 are correctly recorded** in `docs/process/decision-log.md` and
+  `apps/skip-hero/STATUS.md`.
+
+**Fixed by this sync — three STATUS records were two days stale.** `apps/running-with-pace`,
+`apps/pullup` and `apps/web-clock` all still read "Last verified 2026-11-15". Refreshed against
+today's evidence: Pace 7→**9 quiet days** and its body section re-dated so header and body can't
+drift (the defect caught on skip-hero on 11-15 had simply moved to the next file); pullup 101→
+**103 dormant days**; web-clock re-verified unchanged. `apps/skip-hero/STATUS.md` was
+deliberately **not** touched — D36 ended its quiet-day tracking by design.
+
+**Needs founder attention tomorrow — still exactly one thing, now 25 days old.** Merge
+[#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10). Both green, both `MERGEABLE` +
+`CLEAN`, untouched since 23 Oct. That single action publishes the stranded local records, ends
+the `deploy: hold` (local) / `auto` (origin) contradiction, releases R5 — whose scope Correction 2
+has just widened and which is the factory's own defence against six-day records holes — and hands
+over the rebase-train tool built specifically to drain the 20-PR Pace queue that has now been
+still for nine days. **Everything the factory can do without the merge seat, it has done.** Also
+still a founder call, unchanged: the three evidence-backed Pace closures (#78 under #86; #88 and
+#150 under #152).
+
+**Not done, deliberately:** nothing merged, rebased, closed or dispatched; no engine run started;
+R5 not begun (it is app-factory work and would collide with #9/#10 — the same reasoning as this
+morning). $0 spent.
