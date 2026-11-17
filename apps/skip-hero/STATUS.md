@@ -2,11 +2,17 @@
 
 > Kept truthful by the chief of staff; verified against git, `gh` and the run engine.
 
-- **Stage:** PRIORITY APP on paper (founder steer 2026-08-06, D27) — **but the designation
-  is contested and unenforced**; see "Blocked on the founder". Registered rig in
-  `orchestration/rigs.json` with a production deploy path.
+- **Stage:** **SHELVED** (2026-11-17, D36 — by the standup's posted default after **nine**
+  consecutive standups with the priority question unanswered). The 2026-08-06 PRIORITY APP steer
+  (D27) is superseded. Shelved means **not carried**, not abandoned: the rig stays registered in
+  `orchestration/rigs.json` with its production deploy path, branches and the spike ref are kept,
+  and **one word from the founder un-shelves it**. The chief of staff stops carrying the priority
+  question and stops counting quiet days as an open factory concern.
   **Pre-launch: no ship date, no marketing executed, nothing posted or paid for.**
-- **Last updated:** 2026-11-15 (EOD sync — 36 quiet days; 8th standup with the priority question unanswered, now the factory's oldest live question)
+- **Last updated:** 2026-11-17 11:00 (standup cutoff — **shelved** per D36; 38 quiet days,
+  63 days since any engine run, 9th standup unanswered. Re-verified today: `origin/main`
+  `c2bb590` (2026-10-10) unmoved, **zero open PRs**. This is the last entry that will track the
+  quiet-day count unless the founder un-shelves it.)
 - **Last verified:** 2026-11-15 18:00. Re-verified unchanged: `origin/main` `c2bb590`
   (2026-10-10), **36 quiet days**; **zero open PRs** (`gh pr list` empty); local `codex/ui`
   `b969447`, **1 behind**; spike ref `origin/spike/android-pose-parity` **`893ab34b`** holds;

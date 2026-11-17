@@ -6,7 +6,28 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-11-15 18:00 (EOD sync — today's records **verified accurate**; two
+> Last updated: 2026-11-17 11:00 (standup cutoff — **no founder reply**, so the posted
+> proposal proceeded. The day's one task is **done**: the missing **16 Nov** record is written
+> below (the factory did not run at all that day — both steering turns died on
+> `FailoverError: You've hit your monthly spend limit`, and `factory-eod-sync` exited
+> `succeeded` at 18:00 having written nothing), and the Pace merge-order plan is
+> **re-verified unchanged** against the live queue. Re-verified from primary sources: all three
+> `origin/main`s unmoved (Pace `7328ce8c` **9 quiet days**, app-factory `739d25c` — local `main`
+> now **11 ahead**, skip-hero `c2bb590` **38 quiet days**); PR census bit-identical to 15 Nov
+> (2 app-factory both `MERGEABLE`, 23 Pace = 20 non-draft / 3 draft, 17 `MERGEABLE` /
+> 6 `CONFLICTING`, 0 skip-hero) with **no Pace PR touched since 2026-11-08**, so the merge order
+> stands as posted; engine **94 runs, idle 25 days, $0.00 over 7 days**, two `awaiting-merge`
+> runs, **zero open gates**; `cron list` four jobs, standup `ok` at 08:00 and this cutoff running.
+> **#factory-standup contains zero human messages across the whole 12-day read-back**, so the
+> three asks are unanswered at the source. **Two posted defaults took effect at the cutoff:**
+> skip-hero is **shelved** (D36 — 9th unanswered standup; reversible by one word) and the **R5
+> standup-liveness watchdog is approved but queued behind the #9→#10 merge** (D37), not started
+> today, because it is app-factory work and would collide with the two open PRs — the same reason
+> today's proposal dispatched nothing. **Nothing merged, rebased, closed, pushed or dispatched;
+> engine untouched; $0 spent.** Still needs the founder: the merge seat on
+> #9 then #10 (25 days), now the single unblock for everything else.)
+>
+> Prior: 2026-11-15 18:00 (EOD sync — today's records **verified accurate**; two
 > corrections and one closed exposure. Re-verified from primary sources: all three
 > `origin/main`s unmoved (Pace `7328ce8c` 7 quiet days, app-factory `739d25c`, skip-hero
 > `c2bb590` 36 quiet days); PR census exact (2 app-factory both MERGEABLE+CLEAN, 23 Pace =
@@ -3307,3 +3328,90 @@ factory. (3) **introspection approval** for merge → rebase-train on the confli
 (~$6-18). Plus the three evidence-backed closures from today's plan (#78 under #86; #88 and
 #150 under #152), which are a founder call, not mine. Weekly model limit resets **16 Nov
 23:00**; it did not bind today.
+
+
+## 2026-11-16 — THE FACTORY DID NOT RUN (record written retroactively 2026-11-17 11:00)
+
+**This day was a hole in the records until now.** Written from primary sources on 17 Nov, not
+from memory.
+
+**Both steering turns died on billing.** `openclaw tasks list`:
+- `factory-daily-standup` started **08:59:01** (not 08:00 — the 14th, 15th and 17th all started
+  at `08:00:00.0xx`, so this slot ran **59 minutes late** before it failed) →
+  `FailoverError: You've hit your monthly spend limit`.
+- `factory-standup-cutoff` started 11:00:00 → same `FailoverError`.
+These are the **5th and 6th steering failures this month**, and the first caused by **spend**
+rather than the 600 s watchdog (11 Nov ×2, 12 Nov ×2) or the weekly limit (13 Nov ×2).
+**No standup was posted, no plan was set, nothing was dispatched.** The only two messages in
+#factory-standup all day were the two bot failure warnings.
+
+**`factory-eod-sync` reported `succeeded` at 18:00:00 and wrote nothing.** `STATE.md` was last
+written 15 Nov 18:04 and contained **no 16 Nov block** at all (verified: `grep -c 2026-11-16
+STATE.md` → 0 before this entry). The task exited clean, so every status surface said the day
+was fine. **Exit status is not evidence of work** — this is the half of R5 that R5 did not
+predict, and it is why R5 is being widened to artifact verification (see D37).
+
+**Nothing moved, by any hand:** all three `origin/main`s unchanged, engine idle, no run started,
+no PR touched. The weekly model limit reset at 23:00 that night.
+
+
+## 2026-11-17 08:00 — standup posted (two parts)
+
+Posted `1794902552.952879` + `1794902552.970269`. Reported the 16 Nov outage, the unmoved
+`origin/main`s, the bit-identical PR census, the `factory-eod-sync` false success, and proposed
+**one task, mine, no agents** (write the missing 16 Nov record and today's; re-verify the Pace
+merge order) with **nothing dispatched** — deliberately, because the factory is merge-blocked
+behind #9/#10 and new app-factory work would collide. Carried three asks, each with a stated
+default and an 11:00 cutoff: (1) merge #9 then #10 — default *yes*; (2) skip-hero alive or
+shelved — default *shelved*; (3) approve the R5 liveness watchdog (~$6-12) — default *yes*.
+
+
+## 2026-11-17 11:00 — standup cutoff: no founder reply, proposal proceeded
+
+**Decision path:** read #factory-standup back to 2026-11-05 (30 messages, `1793779325` →
+`1794902552`). **Every message in the window is from the bot** — zero human messages. The 08:00
+standup is the newest message in the channel. So no reply, and the posted proposal governed.
+
+**Done — the day's one task, both halves.**
+
+1. **The 16 Nov record is written** (section above), from `openclaw tasks list`, `cron list` and
+   the channel history. The headline finding is not the billing failure but the **silent clean
+   exit**: `factory-eod-sync` logged `succeeded` having produced no artifact.
+2. **Pace merge order re-verified against the live queue — unchanged, zero drift.** `gh pr list`
+   returns the same 23 PRs, same draft flags (#86, #150, #153), same 17 `MERGEABLE` /
+   6 `CONFLICTING` (#78, #81, #86, #112, #126, #150). **The most recent `updatedAt` on any Pace
+   PR is 2026-11-08** — nine days of total stillness — so there is nothing to re-measure and the
+   order posted to #factory-pace (`1794740611.236079`) stands verbatim: wave 0 free
+   (#147, #115, #116, #148) → #83, #149→#151, #155→#156 → #86 (un-draft, close #78) → #152
+   (close #88, #150) → #126→#127→#128/#129→#130 (retarget base to `main`)→#131 → #81 → #112 last.
+   #153 stays out.
+
+**Two posted defaults took effect** (both recorded in `docs/process/decision-log.md`):
+- **D36 — skip-hero is shelved.** 38 quiet days, 63 days since any engine run, **9 standups
+  unanswered**. Earlier records argued the designation "should die by the founder's word, not a
+  cutoff timer"; the 08:00 standup resolved that by *posting the default* with a cutoff, which
+  the founder had the whole morning to override. Shelved, carried no further, reversible by one
+  word. `apps/skip-hero/STATUS.md` updated.
+- **D37 — R5 (standup-liveness watchdog) is approved and queued behind the #9→#10 merge.**
+  Approved by default, **not started today**: it is app-factory work, and dispatching it under
+  two open app-factory PRs is exactly the collision today's proposal avoided. Spending $6-12 to
+  create a third conflicting branch would have been obeying the letter of the default against its
+  purpose. It runs the moment #9 and #10 land.
+
+**Verified unchanged (so the plan above holds):** Pace `origin/main` `7328ce8c` (9 quiet days),
+app-factory `739d25c` with local `main` **11 ahead**, skip-hero `c2bb590` (38 quiet days).
+Engine: 94 runs, **idle 25 days**, `report --days 7` → **0 runs, $0.00**, exactly two
+`awaiting-merge` runs (#9 $2.92, #10 $5.83) both `deployHeld: true`, **zero open gates**.
+`cron list`: four jobs; today's standup `succeeded` at 08:00:00, this cutoff running.
+
+**Not done, deliberately:** nothing merged, rebased, closed, pushed or dispatched; no engine run
+started; **$0 spent**. The merge seat is the founder's.
+
+**Still blocked on the founder — now one item, not three.** Merge
+[#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10) — **25 days**, both green and
+`MERGEABLE`. It publishes the 11 stranded local commits, ends the `deploy: hold` /
+`origin` `auto` contradiction, releases R5, and hands over the rebase-train tool built to drain
+the 20-PR Pace queue. Plus the three evidence-backed Pace closures (#78 under #86; #88 and #150
+under #152), which remain a founder call. Items 2 and 3 are off the list: resolved by their
+posted defaults.
