@@ -795,3 +795,22 @@ mode survived six days of green status.
 **Anti-instruction:** do not implement this as a check on the cron job's recorded status, however
 it is spelled. The whole point is that the job's own report of itself is the unreliable witness.
 Read the artifact from disk or from Slack.
+
+**Evidence addendum (2026-11-18 EOD sync) — the mechanism, and a fourth failure class.**
+D38's premise is now explained rather than merely observed. `factory-eod-sync` reports
+`succeeded` with an end-to-end duration of **0 s on every run in the task store** (11-11 through
+11-17 and again on 11-18), *including* 11-14, 11-15 and 11-17, which all demonstrably wrote
+STATE.md blocks: its `endedAt` equals its `createdAt`. `cron list` shows why — it targets `main`
+with delivery `not requested`, so its task record closes at dispatch, whereas
+`factory-daily-standup` and `factory-standup-cutoff` run `isolated` and report true durations
+(138-271 s working, 502-548 s failing). This job's status is a **dispatch receipt that cannot
+express failure**; it is incapable of distinguishing a six-day records hole from a clean day.
+That is not an argument for fixing the receipt — it is why D38's artifact assertion is the only
+check with any information in it. Separately, **2026-11-18 added a fourth distinct steering
+failure class**: both slots failed four times each with
+`FailoverError: API Error: Can't reach the API server (ENOTFOUND)`, ~9 minutes burned per
+attempt, ~72 minutes total, no Slack post and no STATE.md block. Four classes in eight days
+(600 s watchdog, weekly limit, monthly spend, network/DNS), each previous fix specific to its
+own class — further evidence that R5 must test the artifact and stay indifferent to the cause.
+Steering failures this month: **16**. The task store has begun rolling (11-11's pair is gone),
+so STATE.md is now the only surviving record of the earlier ones.

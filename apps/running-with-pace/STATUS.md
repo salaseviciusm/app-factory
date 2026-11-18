@@ -5,17 +5,20 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-11-17 (EOD sync — 9 quiet days, queue bit-identical at 23, merge-order plan re-verified with zero drift)
-- **Last verified:** 2026-11-17 18:00. **Nine quiet days.** `origin/main` still `7328ce8c`
-  (2026-11-08 17:50); local `main` still **behind 14** with nothing of its own; the five
-  untracked `.agents/skills/` dirs are unchanged. The queue is **bit-identical** to the
-  11-15 reading: **23 open** (20 non-draft / 3 draft — #86, #150, #153), **17 MERGEABLE /
-  6 CONFLICTING** (#78, #81, #86, #112, #126, #150), and the **most recent `updatedAt` on
-  any of the 23 is 2026-11-08T23:00Z** — nine days of total stillness, so the merge-order
-  plan below needs no re-measurement and stands verbatim. Salvage refs re-verified by
-  `git ls-remote`: `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+- **Last updated:** 2026-11-18 (EOD sync — 10 quiet days, queue bit-identical for the fourth consecutive reading, merge-order plan still unmeasured and unchanged)
+- **Last verified:** 2026-11-18 18:00. **Ten quiet days.** `origin/main` still `7328ce8c`
+  (2026-11-08 17:50); local `main` still **0 ahead / 14 behind** with nothing of its own; the
+  five untracked `.agents/skills/` dirs are unchanged. The queue is **bit-identical** for the
+  fourth consecutive reading (11-15, 11-17 ×2, today): **23 open** (20 non-draft / 3 draft —
+  #86, #150, #153), **17 MERGEABLE / 6 CONFLICTING** (#78, #81, #86, #112, #126, #150), and the
+  **most recent `updatedAt` on any of the 23 is 2026-11-08T23:00Z** — ten days of total
+  stillness, so the merge-order plan below needs no re-measurement and stands verbatim. Salvage
+  refs re-verified: `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
   `codex/referrals-entitlements-review` `87f9a844`. Stash still 5; `#88` still OPEN so
-  `stash@{0}` is still not droppable. No engine run has touched this rig for **25 days**.
+  `stash@{0}` is still not droppable. No engine run has touched this rig for **26 days**.
+  Verified by the EOD sync alone: **neither steering turn ran today** — both slots failed four
+  times each on `ENOTFOUND`, so nothing about this rig was proposed, dispatched or posted.
+- **Prior verification:** 2026-11-17 18:00 (9 quiet days; queue bit-identical, zero drift)
 - **Prior verification:** 2026-11-15 18:00
 - **Prior verification:** 2026-11-14 18:00
 - **Prior verification:** 2026-11-08 18:00
@@ -23,11 +26,12 @@
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (re-verified 2026-11-17 18:00)
+## Repo state (re-verified 2026-11-18 18:00)
 
-- **Still quiet, now 9 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
-  zero merges in nine days, the longest gap since 2026-09-27. Local `main` is still
-  **behind 14** with nothing of its own; untracked `.agents/skills/` dirs still **five**.
+- **Still quiet, now 10 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
+  zero merges in ten days, the longest gap since 2026-09-27. Local `main` is still
+  **0 ahead / 14 behind** with nothing of its own; untracked `.agents/skills/` dirs still
+  **five**.
 - **The queue is static, not just unchanged in count: 23 open** (20 non-draft / 3 draft,
   **17 MERGEABLE / 6 CONFLICTING**), and **not one of the 23 has any activity since
   2026-11-08** — verified from `updatedAt`, not from the absence of notifications.

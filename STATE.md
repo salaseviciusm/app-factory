@@ -6,7 +6,45 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-11-17 11:00 (standup cutoff — **no founder reply**, so the posted
+> Last updated: 2026-11-18 18:00 (EOD sync — **the factory did not steer today, and this
+> block is the day's only record.** Both steering slots failed **four times each**:
+> `factory-daily-standup` at 08:00:00, 08:09, 08:19, 08:32 and `factory-standup-cutoff` at
+> 11:00:00, 11:09, 11:19, 11:33, every one with
+> `FailoverError: API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)`,
+> each attempt burning **~9 minutes** before dying — **~72 minutes of retries, zero output,
+> nothing posted to Slack, $0 spent**. This is a **fourth distinct failure class** (after the
+> 600 s watchdog, the weekly limit and the monthly spend limit) and the founder received
+> **no communication at all today**; tomorrow's 08:00 standup is the next chance. DNS and the
+> API are healthy now (`api.anthropic.com` resolves, HTTP 401 in 0.15 s), so the outage was
+> transient and no fix is available to apply — but note the machine's primary resolver is
+> Tailscale MagicDNS (`100.100.100.100`), a single point of failure for every API call.
+> **Three corrections.** (1) Yesterday's block quotes the records mirror as `7d711c5`; the ref
+> `records-backup-20261117` is actually **`46eda45`** — it *was* re-pushed as promised, so the
+> substance held and only the quoted hash was stale by the end of its own turn: the **third
+> consecutive day** of that defect, this time inside the very block that diagnosed it.
+> (2) `factory-eod-sync` reports `succeeded` in **0 s on every run** — 11-11 through 11-17 and
+> again today — *including* the days it demonstrably wrote. Its status is a dispatch receipt,
+> not a work report, and is structurally incapable of signalling failure; the standup and cutoff
+> jobs run `isolated` and do report real durations (138-271 s). This is the **mechanism** behind
+> D38 and is recorded against it. (3) Steering failures this month are now **16**, today's eight
+> being the **9th-16th**; the task store has begun rolling (11-11 is gone), so STATE.md is now
+> the only surviving record of early-November failures. Also fixed: this header read
+> `2026-11-17 11:00` while the file's newest block was 11-17 18:00 — the same header/body drift
+> caught on skip-hero (11-15) and the STATUS files (11-17), now found in STATE.md itself.
+> **Verified unchanged:** all three `origin/main`s (Pace `7328ce8c` **10 quiet days**,
+> app-factory `739d25c`, skip-hero `c2bb590` **39 days**); PR census **bit-identical for the
+> fourth consecutive reading** (2 app-factory both `MERGEABLE`+`CLEAN`, 23 Pace = 20 non-draft /
+> 3 draft, 17 `MERGEABLE` / 6 `CONFLICTING`, newest Pace `updatedAt` still 2026-11-08T23:00Z,
+> 0 skip-hero); engine **94 runs, idle 26 days, $0.00 over 7 days**, two `awaiting-merge` runs,
+> **zero open gates**; #factory-standup still **zero human messages**, newest message the bot's
+> own 11-17 cutoff. Nothing merged, rebased, closed or dispatched; engine untouched. Still
+> exactly one thing on the founder's desk: merge #9 then #10 — **26 days**.)
+>
+> Prior: 2026-11-17 18:00 (EOD sync — today's two records substantially accurate, three
+> corrections; the silent clean exit shown to be 5 occurrences and a 6-day records hole, which
+> widened D37's scope into D38: R5 must assert on artifacts per slot, not on exit status.)
+>
+> Prior: 2026-11-17 11:00 (standup cutoff — **no founder reply**, so the posted
 > proposal proceeded. The day's one task is **done**: the missing **16 Nov** record is written
 > below (the factory did not run at all that day — both steering turns died on
 > `FailoverError: You've hit your monthly spend limit`, and `factory-eod-sync` exited
@@ -3513,3 +3551,131 @@ still a founder call, unchanged: the three evidence-backed Pace closures (#78 un
 **Not done, deliberately:** nothing merged, rebased, closed or dispatched; no engine run started;
 R5 not begun (it is app-factory work and would collide with #9/#10 — the same reasoning as this
 morning). $0 spent.
+
+
+## 2026-11-18 — NO STEERING TURNS RAN (record written by the 18:00 EOD sync, the day's only turn)
+
+**Verdict: there are no 08:00 or 11:00 records to verify today, because neither turn ran.**
+Both steering slots failed four times each and produced nothing — no Slack post, no STATE.md
+block, no dispatch. This block is therefore both the EOD sync and the day's record. It is
+exactly the failure class D38 widened R5 to catch, arriving the day after D38 was written.
+
+**What happened, from `openclaw tasks list`.**
+
+| slot | attempts | error | burn |
+|---|---|---|---|
+| `factory-daily-standup` | 08:00:00, 08:09:20, 08:19:14, 08:32:37 | `FailoverError: API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)` | 530 s, 534 s, 502 s, 546 s |
+| `factory-standup-cutoff` | 11:00:00, 11:09:35, 11:19:43, 11:33:50 | same | 545 s, 548 s, 547 s, 542 s |
+
+**~72 minutes of retries, zero output, $0 spent.** `cron list` now shows both jobs
+`error (4x)` — so for once the cron surface does report the failure; per D38's
+anti-instruction that is still not the test, and the artifact check would have caught it too.
+
+**This is a fourth distinct failure class.** The steering loop has now died four different ways
+in eight days: the 600 s watchdog timeout (11-11, 11-12), the weekly model limit (11-13), the
+monthly spend limit (11-16), and now **network/DNS unreachability** (11-18). Each previous fix
+addressed its own class and none of them generalises. Steering failures this month total **16**;
+today's eight are the **9th-16th**. The task store has begun rolling — 11-11's two failures are
+no longer in it — so **STATE.md is now the only surviving record** of early-November failures,
+which raises the cost of a missed EOD sync rather than lowering it.
+
+**Root cause: transient, already gone, nothing to apply.** Checked at 18:05:
+`api.anthropic.com` resolves to `160.79.104.10` and answers `HTTP 401` in 0.15 s (401 = reached,
+no auth header sent), so the API path is healthy. macOS unified logging retains nothing for the
+08:00-11:43 window, so the outage cannot be attributed with evidence. One structural fact worth
+recording: the machine's primary resolver is **Tailscale MagicDNS (`100.100.100.100`)**, with the
+router (`192.168.1.254`) only as a secondary on a different scope — a Tailscale flap takes out
+name resolution for every API call. `tailscale status` is healthy now and the mac-mini peer is
+`active; direct`. Not a diagnosis, a named single point of failure.
+
+**The founder received nothing today.** No standup, no cutoff, and the EOD sync does not post to
+Slack by convention. #factory-standup's newest message is still the bot's own 11-17 11:03 cutoff,
+and all 15 messages in the read-back window carry the same single bot identity
+(`U0BMFJ52A2W` / `B0BN9U642U8`) — **zero human messages**, so the standing asks remain unanswered
+at the source. Tomorrow's 08:00 standup is the next contact point.
+
+### Corrections to yesterday's records
+
+**Correction 1 — the mirror hash was stale by the end of the turn that wrote it, for the third
+day running.** Yesterday's block states `records-backup-20261117` is `7d711c5`. The ref is
+**`46eda45`**: it *was* re-pushed after the EOD commit exactly as that block promised, so the
+substance held and only the quoted number went stale. What makes this worth recording is that
+11-15's Correction 1 and 11-17's Correction 3 are the same defect, and this instance sits inside
+the very block that diagnosed it and prescribed the fix ("state it as *all records to date are
+mirrored*"). The prescription was written and then not applied one paragraph later. Today's
+record therefore quotes **no commit counts and no mirror hash**: all records to date are
+mirrored, which is checkable and stays true.
+
+**Correction 2 — `factory-eod-sync`'s `succeeded` is meaningless on every run, not just the
+silent ones.** Yesterday's Correction 2 established five silent successes (11-10, -11, -12, -13,
+-16) and concluded "exit status is not evidence of work". The mechanism is sharper than that:
+this job reports `succeeded` with an **end-to-end duration of 0 s on every single run in the
+store** — 11-11, 11-12, 11-13, 11-14, 11-15, 11-16, 11-17 and again today at 18:00:00 — including
+11-14, 11-15 and 11-17, which all demonstrably wrote blocks. Its `endedAt` equals its
+`createdAt`. The reason is visible in `cron list`: `factory-eod-sync` targets `main` with delivery
+`not requested`, so the task record closes at dispatch, whereas `factory-daily-standup` and
+`factory-standup-cutoff` run `isolated` and report true durations (138-271 s on working days,
+502-548 s on today's failures). So this job's status is a **dispatch receipt that is structurally
+incapable of reporting failure** — it cannot distinguish a six-day records hole from a clean day.
+Recorded against D38 as its mechanism; it does not change D38's decision, it explains why the
+decision is forced.
+
+**Correction 3 — STATE.md's own header was stale.** The header read `Last updated: 2026-11-17
+11:00` while the file's newest block was the 11-17 18:00 EOD sync, which never updated it. This
+is the identical header/body drift caught on `apps/skip-hero/STATUS.md` on 11-15 and on the three
+other STATUS files on 11-17 — the defect has now been found in all three places it can occur,
+including the file that records the fixes. Header rewritten and the missing 11-17 18:00 entry
+added to the `Prior:` chain.
+
+### Verified correct, no change
+
+- **PR census bit-identical for the fourth consecutive reading** (11-15, 11-17 08:00, 11-17
+  18:00, today). app-factory: 2 open — [#9](https://github.com/salaseviciusm/app-factory/pull/9),
+  [#10](https://github.com/salaseviciusm/app-factory/pull/10) — both non-draft, both `MERGEABLE` +
+  `CLEAN`, `updatedAt` still 2026-10-23. Pace: **23 open**, 3 draft (#86, #150, #153),
+  **17 MERGEABLE / 6 CONFLICTING** (#78, #81, #86, #112, #126, #150). skip-hero: **0**. The
+  newest `updatedAt` across all 23 Pace PRs is **2026-11-08T23:00Z** — **ten days** of
+  stillness — so the merge order posted to #factory-pace (`1794740611.236079`) stands verbatim
+  and needed no re-measurement.
+- **All three `origin/main`s unmoved:** Pace `7328ce8c` (10 quiet days), app-factory `739d25c`,
+  skip-hero `c2bb590` (39 quiet days).
+- **Engine:** 94 runs, latest start `2026-10-23T10:08:23Z` → **idle 26 days**. `report --days 7`:
+  **0 runs, $0.00**. Exactly two non-terminal runs, both `awaiting-merge` with `deployHeld: true`
+  — #9 ($2.92) and #10 ($5.83). **Zero runs carry a gate**, read from `status --json`.
+- **Cron:** all four jobs present; `slack-leak-watchdog` and `factory-eod-sync` `ok`, the two
+  steering jobs `error (4x)` as above.
+- **Single-copy risk stays closed.** All app-factory records to date are mirrored to origin
+  (`records-backup-20261117` = `46eda45`, plus today's fresh `records-backup-20261118` pushed
+  after this commit). `tmutil destinationinfo` still returns **no destinations configured**, so
+  origin remains the only second copy.
+- **Salvage refs all hold:** Pace `pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+  `codex/referrals-entitlements-review` `87f9a844`; skip-hero `spike/android-pose-parity`
+  `893ab34`. Pace stash still 5 entries; Pace local `main` **0 ahead / 14 behind** with nothing
+  of its own; Pace working tree dirty only with the five untracked `.agents/skills/` dirs — no
+  product work at risk.
+- **D36, D37 and D38 are correctly recorded** in `docs/process/decision-log.md`, and
+  `apps/skip-hero/STATUS.md` correctly reflects D36.
+
+**Fixed by this sync — three STATUS records were a day stale.** `apps/running-with-pace`
+(9 → **10 quiet days**, header and body re-dated together), `apps/pullup` (103 → **104 dormant
+days**) and `apps/web-clock` (re-verified unchanged) all read "Last verified 2026-11-17".
+`apps/skip-hero/STATUS.md` deliberately **not** touched — D36 ended its quiet-day tracking by
+design.
+
+**Not done, deliberately:** nothing merged, rebased, closed or dispatched; no engine run started;
+R5 not begun (it is app-factory work and would collide with #9/#10). **$0 spent.** No attempt was
+made to re-run the failed standup or cutoff after the fact: the cutoff window closed at 11:00 and
+manufacturing a retroactive proposal the founder never had the chance to answer would be worse
+than recording the gap.
+
+**Needs founder attention tomorrow — still exactly one thing, now 26 days old.** Merge
+[#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10). Both green, both `MERGEABLE` +
+`CLEAN`, untouched since 23 Oct. That single action publishes the stranded local records, ends
+the `deploy: hold` (local) / `auto` (origin) contradiction, releases R5 — the factory's own
+defence against exactly the kind of silent day today was — and hands over the rebase-train tool
+built to drain the 20-PR Pace queue, now still for ten days. **Everything the factory can do
+without the merge seat, it has done.** Also still a founder call, unchanged: the three
+evidence-backed Pace closures (#78 under #86; #88 and #150 under #152). And worth his knowing,
+since no standup carried it: **today the factory was silent, and tomorrow's 08:00 standup is the
+first opportunity to tell him so.**
