@@ -6,7 +6,28 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-11-18 18:00 (EOD sync — **the factory did not steer today, and this
+> Last updated: 2026-11-19 11:00 (standup cutoff — **no founder reply**, so the posted proposal
+> proceeded, but **one of its three items was tested and rejected rather than applied**.
+> *Item 1, Pace #130's retarget to `main`: NOT DONE.* `git merge-tree` against `origin/main`
+> conflicts in **14 paths** with a **293-file / +22,981** diff — #130 is the fifth link in a
+> six-deep `codex/*` stack whose root #126 is itself `CONFLICTING`, so its `MERGEABLE` flag was
+> true only against its stacked base. Applying it would have created a **seventh** conflicting
+> Pace PR and orphaned #131's base (**D39**, with an anti-instruction). *Item 3, DNS fallback:
+> APPLIED* — Wi-Fi now carries `192.168.1.254 1.1.1.1 8.8.8.8`, both `api.anthropic.com` and
+> MagicDNS names verified resolving — **but the 08:00 claim that this "removes the single point"
+> is wrong**: `scutil --dns` shows Tailscale's resolver is Supplemental-with-no-domain at order
+> `100200`, ahead of en0's `200000`, so MagicDNS is still asked first and the 11-18 failure class
+> stays open (**D40**). *Item 2, re-verify:* all three `origin/main`s unmoved (Pace `7328ce8c`
+> **11 quiet days**, app-factory `739d25c` with local `main` **14 ahead**, skip-hero `c2bb590`
+> **40 days**); PR census **bit-identical for the sixth consecutive reading**; engine **94 runs,
+> 26 days idle** (the 08:00 post's "27" was carried-forward, not recomputed), two
+> `awaiting-merge`, **zero open gates**; `factory-daily-standup` `ok` — the first clean 08:00
+> slot since 11-17. **#factory-standup still has zero human messages.** Nothing merged, rebased,
+> closed or dispatched; **$0 spent**. Still exactly one thing on the founder's desk: merge #9
+> then #10 — **27 days** — and with #130 off the table there is now nothing on Pace the factory
+> can advance without the merge seat.)
+>
+> Prior: 2026-11-18 18:00 (EOD sync — **the factory did not steer today, and this
 > block is the day's only record.** Both steering slots failed **four times each**:
 > `factory-daily-standup` at 08:00:00, 08:09, 08:19, 08:32 and `factory-standup-cutoff` at
 > 11:00:00, 11:09, 11:19, 11:33, every one with
@@ -3679,3 +3700,78 @@ without the merge seat, it has done.** Also still a founder call, unchanged: the
 evidence-backed Pace closures (#78 under #86; #88 and #150 under #152). And worth his knowing,
 since no standup carried it: **today the factory was silent, and tomorrow's 08:00 standup is the
 first opportunity to tell him so.**
+
+## 2026-11-19 11:00 — standup cutoff: no founder reply, proposal proceeded (with one item rejected on evidence)
+
+The 08:00 standup posted on time (`1795075368.855979`) — the **first standup since 11-17**, and
+the first turn of any kind since the 11-18 EOD sync. At the 11:00 cutoff #factory-standup
+contains **zero human messages** across the full read-back, so the three posted defaults took
+effect. Two of the day's three items are done; **item 1 was tested and rejected before it was
+applied**, which is the substance of today's record.
+
+### Item 1 — retarget Pace #130 to `main`: NOT DONE, and should not be done (D39)
+
+The done-criterion was "base is `main`, **still `MERGEABLE`**". It cannot be met.
+`git merge-tree --write-tree origin/main origin/codex/client-history-wiring` conflicts in
+**14 paths** (`pace-node-js-server/src/database/events.ts`, `saved-routes.ts` and twelve more),
+and `git diff --stat origin/main...` is **293 files, +22,981 / -1,016**.
+
+The 08:00 reasoning was wrong in a specific way worth naming: #130's `MERGEABLE` flag is true
+**relative to its stacked base**, not to `main`. #130 is the fifth link in a six-deep `codex/*`
+chain — #126 → #127 → #128/#129 → `codex/recovery-history-base` → #130 → #131 — and the root,
+[#126](https://github.com/salaseviciusm/running-with-pace/pull/126), is one of the six
+`CONFLICTING` PRs. Retargeting the tip would have made #130 a **seventh** conflicting PR,
+absorbed five other PRs' diffs into one review, and orphaned
+[#131](https://github.com/salaseviciusm/running-with-pace/pull/131)'s base. Cost of finding
+this out: one `merge-tree` call, no writes, nothing to revert. **The stack drains bottom-up
+from #126 or not at all.** Recorded as D39 with an anti-instruction against re-proposing it.
+
+### Item 3 — fallback DNS resolver: APPLIED, but it does not close the failure class (D40)
+
+Wi-Fi (`en0`, the active service, previously DHCP-only) now has
+`192.168.1.254 1.1.1.1 8.8.8.8`. Verified after: `api.anthropic.com` → `160.79.104.10`;
+`morkuss-macbook.tail620647.ts.net` → `100.108.154.1`, so MagicDNS names are intact. Reversible
+with `networksetup -setdnsservers Wi-Fi Empty`.
+
+**Correction to the 08:00 post.** It claimed this "removes that single point". It does not.
+`scutil --dns` shows Tailscale installs resolver #1 as a **Supplemental resolver with no
+domain** at order `100200`, ahead of en0 at `200000` — so MagicDNS is still queried first for
+every name, and a service DNS list cannot reorder it. The change hardens only the fall-through
+path, which previously rested on the ISP router alone. The 11-18 DNS class remains open; R5
+(D37/D38) is still its only real defence.
+
+### Item 2 — cutoff re-verify: all primary sources unmoved
+
+- **All three `origin/main`s:** Pace `7328ce8c` (last commit 2026-11-08T17:50Z — **11 quiet
+  days**), app-factory `739d25c`, skip-hero `c2bb590` (2026-10-10 — **40 quiet days**).
+  app-factory local `main` is **14 ahead** of origin, all records.
+- **PR census bit-identical for the sixth consecutive reading** (11-15, 11-17 ×2, 11-18, 11-19
+  08:00, now). app-factory: 2 open, [#9](https://github.com/salaseviciusm/app-factory/pull/9)
+  and [#10](https://github.com/salaseviciusm/app-factory/pull/10), both `MERGEABLE`,
+  `updatedAt` still 2026-10-23. Pace: **23 open** = 20 non-draft / 3 draft, **17 MERGEABLE /
+  6 CONFLICTING**, newest `updatedAt` across all 23 still **2026-11-08T23:00Z**. skip-hero: 0.
+- **Engine:** **94 run records** on disk (unchanged), newest `feature-improvement-plan-sync-time`
+  last touched **2026-10-24 15:57** → **26 days idle**. Two non-terminal runs, both
+  `awaiting-merge` — #9 ($2.92), #10 ($5.83). Status breakdown: 78 done, 4 closed, 4 failed,
+  3 rejected, 2 awaiting-merge. **Zero open gates.** Nothing started, $0 spent.
+  *Note:* the 08:00 post said "idle 27 days"; measured from the run store it is 26. Minor, but
+  the drift is the same one corrected on 11-18 — recompute, don't carry forward.
+- **Cron:** four jobs. `factory-daily-standup` **`ok`, ran 3h ago** — the first clean 08:00 slot
+  since 11-17 — `factory-eod-sync` `ok`, `slack-leak-watchdog` `ok`, this cutoff running.
+
+### Not done, deliberately
+
+Nothing merged, rebased, closed or dispatched; no engine run started; no specialist spawned —
+that was the proposal, not an omission. R5 stays queued behind #9→#10 (D37). skip-hero untouched
+(D36). **$0 spent.**
+
+### Needs founder — still exactly one thing, now 27 days old
+
+Merge [#9](https://github.com/salaseviciusm/app-factory/pull/9) then
+[#10](https://github.com/salaseviciusm/app-factory/pull/10). Both `MERGEABLE`, green, untouched
+since 23 Oct. It publishes 14 stranded record commits, releases R5 — the only defence against
+the silent-day class that has now produced four distinct failure modes in nine days — and hands
+over the rebase-train tool built to drain the 20-PR Pace queue. Second, unchanged: the three
+evidence-backed Pace closures (#78 under #86; #88 and #150 under #152). New today: **#130's
+retarget is off the table**, so the Pace merge-order plan loses its one no-seat prep step —
+there is now nothing on Pace the factory can advance without him.

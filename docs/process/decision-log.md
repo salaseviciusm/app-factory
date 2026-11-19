@@ -814,3 +814,43 @@ attempt, ~72 minutes total, no Slack post and no STATE.md block. Four classes in
 own class — further evidence that R5 must test the artifact and stay indifferent to the cause.
 Steering failures this month: **16**. The task store has begun rolling (11-11's pair is gone),
 so STATE.md is now the only surviving record of the earlier ones.
+
+## D39 — Pace #130 stays based on `codex/recovery-history-base`; the retarget is rejected on evidence (2026-11-19)
+
+**Context:** the 2026-11-19 08:00 standup proposed, as the day's one Pace task, retargeting
+[#130](https://github.com/salaseviciusm/running-with-pace/pull/130) from
+`codex/recovery-history-base` to `main`, with the stated done-criterion "base is `main`, still
+`MERGEABLE`". Tested before acting, with `git merge-tree --write-tree origin/main
+origin/codex/client-history-wiring`: the merge **conflicts in 14 paths** (including
+`pace-node-js-server/src/database/events.ts` and `saved-routes.ts`) and the diff against `main`
+is **293 files, +22,981 / -1,016**. The reason is ancestry: #130 sits at the top of a six-deep
+`codex/*` stack (#126 → #127 → #128/#129 → `recovery-history-base` → #130 → #131) whose root,
+[#126](https://github.com/salaseviciusm/running-with-pace/pull/126), is itself `CONFLICTING`
+against `main`. #130's `MERGEABLE` flag is true *only* relative to its stacked base.
+**Decision:** do not retarget. #130 keeps its current base. The stack is drained bottom-up —
+#126 first — or not at all; retargeting a tip commit of a stack is not a free metadata change,
+it silently reassigns five other PRs' worth of diff to one review.
+**Why:** the proposal's own done-criterion could not be met, and had the retarget been applied
+before measuring, the queue would have gained a seventh `CONFLICTING` PR and #131's base would
+have been orphaned. The cost of checking was one `merge-tree` call and no writes.
+**Anti-instruction:** do not re-propose a "low-risk, reversible metadata change" on any stacked
+PR without first running the merge-tree probe against the target base. `MERGEABLE` on a stacked
+PR says nothing about `main`.
+
+## D40 — a fallback resolver is added to Wi-Fi, but MagicDNS stays first and the DNS blind spot is not closed (2026-11-19)
+
+**Context:** the 08:00 standup offered a "two-minute edit" to stop a Tailscale MagicDNS blip
+silencing the factory, after 11-18's eight `ENOTFOUND` failures. Applied: Wi-Fi (the active
+service, `en0`, previously DHCP-only) now carries `192.168.1.254 1.1.1.1 8.8.8.8`. Verified
+after the change — `api.anthropic.com` → `160.79.104.10`, and
+`morkuss-macbook.tail620647.ts.net` → `100.108.154.1`, so MagicDNS names still resolve.
+**Decision:** keep the fallback, and record that it is **not the fix the standup claimed**.
+`scutil --dns` shows Tailscale installs resolver #1 as a *Supplemental* resolver with **no
+domain** at order `100200`, ahead of the en0 resolver at `200000`. It is therefore queried first
+for *every* name, and the service DNS list cannot reorder it. What was bought is narrower: the
+fall-through path no longer depends on the ISP router alone. Reversible with
+`networksetup -setdnsservers Wi-Fi Empty`.
+**Why:** the premise ("the resolver order puts MagicDNS first") was right; the remedy did not
+address it. Writing this down stops the DNS class being treated as handled.
+**Anti-instruction:** do not cite D40 as closing the 11-18 failure class. The only real defence
+remains R5 (D37/D38) — out-of-band, artifact-based, and not reliant on the same network path.
