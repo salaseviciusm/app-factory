@@ -5,13 +5,14 @@
 - **Stage:** implemented end to end; store-ready pending footage, a phone, and an
   Apple Developer account. **Never run on a device. No accuracy figure.**
 - **Last updated:** 2026-09-06
-- **Last verified:** 2026-11-18 18:00 (EOD sync). Unchanged and still accurate. Still no
-  device, no accuracy figure, no TestFlight build. The last commit touching `apps/web-clock/`
-  is `46eda45` (2026-11-17) — an EOD sync writing STATUS files, not product work. Every
-  blocker below is a founder dependency (hardware, an Apple Developer account, four ASO
-  calls) and none of them moved — nor could they have been raised today: **neither steering
-  turn ran** (both slots failed four times on `ENOTFOUND`). Not listed as an open factory
-  concern.
+- **Last verified:** 2026-11-19 18:00 (EOD sync). Unchanged and still accurate. Still no device,
+  no accuracy figure, no TestFlight build. The last commit touching `apps/web-clock/` is still
+  `46eda45` (2026-11-17) — an EOD sync writing STATUS files, not product work. Every blocker below
+  is a founder dependency (hardware, an Apple Developer account, four ASO calls) and none moved.
+  Unlike 11-18, both steering turns ran and posted today (08:02 and 11:04), so the four ASO calls
+  *were* askable — they were not asked, by design: the standup carries one question, and that seat
+  is held by the #9→#10 merge. Not listed as an open factory concern.
+- **Prior verification:** 2026-11-18 18:00 (EOD sync). Unchanged and still accurate.
 - **Prior verification:** 2026-11-17 18:00 (EOD sync). Unchanged and still accurate. Still no
   device, no accuracy figure, no TestFlight build. Every blocker is a founder dependency and
   none moved.

@@ -13,7 +13,17 @@
   63 days since any engine run, 9th standup unanswered. Re-verified today: `origin/main`
   `c2bb590` (2026-10-10) unmoved, **zero open PRs**. This is the last entry that will track the
   quiet-day count unless the founder un-shelves it.)
-- **Last verified:** 2026-11-15 18:00. Re-verified unchanged: `origin/main` `c2bb590`
+- **Last verified:** 2026-11-19 18:00 (EOD sync). **Shelved and unchanged.** Repo facts only, per
+  D36 — the quiet-day count and the priority question are no longer carried: `origin/main`
+  `c2bb590` (2026-10-10) unmoved, **zero open PRs** (`gh pr list` empty), local `codex/ui`
+  `b969447` **1 behind**, spike ref `origin/spike/android-pose-parity` **`893ab34b`** holds,
+  untracked `.agents/`, `.codex/`. No engine run has ever been added since 2026-09-13; the
+  engine's 94-run history is unchanged. Both steering turns ran and posted today and skip-hero
+  was not raised in either — that is D36 working as intended, not an omission. **One word from the
+  founder un-shelves it.** *(Note: the 11-17 and 11-18 EOD syncs did not write this file at all —
+  correct under D36, but it left "Last verified" reading 11-15 against a header dated 11-17. Dated
+  entries resume here, at repo-facts scope.)*
+- **Prior verification:** 2026-11-15 18:00. Re-verified unchanged: `origin/main` `c2bb590`
   (2026-10-10), **36 quiet days**; **zero open PRs** (`gh pr list` empty); local `codex/ui`
   `b969447`, **1 behind**; spike ref `origin/spike/android-pose-parity` **`893ab34b`** holds;
   untracked `.agents/`, `.codex/`. **No engine run since 2026-09-13 — 63 days.** The steering

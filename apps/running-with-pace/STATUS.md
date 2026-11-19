@@ -5,8 +5,25 @@
 - **Stage:** ACTIVE. The founder's own product, driven largely by him directly; the
   factory contributes feature/bug runs off `factory/*` branches that land as GitHub
   PRs. Registered rig, merge policy `review`.
-- **Last updated:** 2026-11-18 (EOD sync — 10 quiet days, queue bit-identical for the fourth consecutive reading, merge-order plan still unmeasured and unchanged)
-- **Last verified:** 2026-11-18 18:00. **Ten quiet days.** `origin/main` still `7328ce8c`
+- **Last updated:** 2026-11-19 (EOD sync — 11 quiet days, queue bit-identical for the seventh consecutive reading, merge-order plan still unchanged; D39 re-verified at source)
+- **Last verified:** 2026-11-19 18:00. **Eleven quiet days** — the longest gap since 2026-09-27.
+  `origin/main` still `7328ce8c` (2026-11-08 17:50); local `main` still **0 ahead / 14 behind** with
+  nothing of its own; the five untracked `.agents/skills/` dirs unchanged. The queue is
+  **bit-identical for the seventh consecutive reading** (11-15, 11-17 ×2, 11-18, 11-19 ×3):
+  **23 open** (20 non-draft / 3 draft — #86, #150, #153), **17 MERGEABLE / 6 CONFLICTING** (#78,
+  #81, #86, #112, #126, #150), and the **most recent `updatedAt` on any of the 23 is still
+  `2026-11-08T23:00Z`** — eleven days of total stillness, so the merge-order plan below needs no
+  re-measurement and stands verbatim. Salvage refs re-verified: `pr78-salvage` `37efb30b`,
+  `pr83-rebase` `71ee06d5`, `codex/referrals-entitlements-review` `87f9a844`. Stash still 5; `#88`
+  still `OPEN` + `MERGEABLE`, so `stash@{0}` is still not droppable. No engine run has touched this
+  rig for **27 days** (not 26 — the newest run `updatedAt` anywhere is 2026-10-23T10:32Z; the
+  11-19 11:00 record miscorrected this figure downward). **D39 re-verified at source:** #130 is
+  still based on `codex/recovery-history-base`, the stack root #126 is still `CONFLICTING` against
+  `main`, and #131 is still based on #130's head — so the rejected retarget would still have
+  orphaned #131 and produced a seventh conflicting PR. Both steering turns ran and posted today
+  (08:02, 11:04), but **nothing on this rig was dispatched**: per D39 there is nothing here the
+  factory can advance without the #9→#10 merge seat.
+- **Prior verification:** 2026-11-18 18:00. **Ten quiet days.** `origin/main` still `7328ce8c`
   (2026-11-08 17:50); local `main` still **0 ahead / 14 behind** with nothing of its own; the
   five untracked `.agents/skills/` dirs are unchanged. The queue is **bit-identical** for the
   fourth consecutive reading (11-15, 11-17 ×2, today): **23 open** (20 non-draft / 3 draft —
@@ -26,19 +43,22 @@
 - **Prior verification:** 2026-10-22 18:00
 - **Prior verification:** 2026-09-26 18:00
 
-## Repo state (re-verified 2026-11-18 18:00)
+## Repo state (re-verified 2026-11-19 18:00)
 
-- **Still quiet, now 10 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
-  zero merges in ten days, the longest gap since 2026-09-27. Local `main` is still
+- **Still quiet, now 11 days.** `origin/main` is **still `7328ce8c`** (2026-11-08 17:50) —
+  zero merges in eleven days, the longest gap since 2026-09-27. Local `main` is still
   **0 ahead / 14 behind** with nothing of its own; untracked `.agents/skills/` dirs still
   **five**.
 - **The queue is static, not just unchanged in count: 23 open** (20 non-draft / 3 draft,
   **17 MERGEABLE / 6 CONFLICTING**), and **not one of the 23 has any activity since
-  2026-11-08** — verified from `updatedAt`, not from the absence of notifications.
+  2026-11-08** — verified from `updatedAt`, not from the absence of notifications; this is the
+  **seventh consecutive bit-identical reading**.
   `#88` is still `OPEN` and `MERGEABLE`, so `stash@{0}` (5 stash entries) is still not
   droppable on the recorded basis.
-- **A merge-order plan now exists for this queue**, posted to #factory-pace today
-  (`1794740611.236079`) and recorded in STATE.md. Built read-only from full paginated file
+- **A merge-order plan now exists for this queue**, posted to #factory-pace on **2026-11-15**
+  (`1794740611.236079`) and recorded in STATE.md. *(Corrected 2026-11-19: this line read "posted
+  today" for four days after the fact — the same header/body drift caught on skip-hero on 11-15
+  and in STATE.md on 11-18. Dates, not relative words, from here.)* Built read-only from full paginated file
   lists for all 23 PRs, a pairwise collision matrix, and `git merge-tree` against
   `origin/main`. Two findings shrink the queue to an **effective 20**: **#86 is a strict
   superset of #78** (merge #86, close #78), and **#152 supersedes #88 and #150** by their own

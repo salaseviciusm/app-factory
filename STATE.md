@@ -6,7 +6,60 @@
 > `status --json`) is the authority on in-flight runs, pending gates, and costs —
 > the "Awaiting founder" / "In-flight" sections below are narrative context only,
 > not authoritative run/gate state.
-> Last updated: 2026-11-19 11:00 (standup cutoff — **no founder reply**, so the posted proposal
+> Last updated: 2026-11-19 18:00 (EOD sync — **today's two records are substantially accurate; three
+> corrections, one of them a correction that was itself an error.** Today was the first fully clean
+> steering day since 11-17: standup `succeeded` in **168 s** and posted at **08:02**, cutoff
+> `succeeded` in **260 s** and posted at **11:04** — both reached Slack, so unlike 11-18 the founder
+> was actually communicated with twice.
+> **Correction 1 — the 11:00 block corrected a right number into a wrong one.** It demoted the
+> 08:00 post's engine-idle figure of **27 days** to **26**, calling 27 "carried-forward, not
+> recomputed". 27 was correct: the newest `updatedAt` across all 94 runs is
+> `feature-build-rebase-train-workflow` at **2026-10-23T10:32:42Z**, and 2026-10-23 → today is
+> **27 days**. The engine has been idle **27 days**, not 26. This is the first recorded instance of
+> a sync's correction introducing an error rather than removing one — the defect is asserting a
+> recomputation without showing the arithmetic.
+> **Correction 2 — "local `main` 14 ahead" was stale inside its own turn, for the third time.**
+> The 11:00 block wrote **14**; its own commit `77989dc` made it **15**. This is the identical
+> defect corrected on 11-15 ("8 stranded commits" → 9) and on 11-17/11-18 (stale quoted hashes):
+> a count taken before the turn's own write. **Three occurrences of one pattern now**, so it is a
+> structural property of writing the count before the commit, not three slips. Stranded
+> app-factory commits: **15** (16 after this sync's commit).
+> **Correction 3 — D40 understates what the DNS fallback bought, and misnames the residual single
+> point.** `tailscale dns status` shows the tailnet pushes **no resolvers** ("no resolvers
+> configured, system default will be used") and has split-DNS routes for **`ts.net.` only**. So
+> MagicDNS *is* queried first for every name (D40's premise holds, and `scutil --dns` still shows
+> resolver #1 Supplemental/no-domain at order `100200` ahead of en0's `200000`) — but for a public
+> name like `api.anthropic.com` it then **forwards to the system default list**, which is now
+> `192.168.1.254 1.1.1.1 8.8.8.8` rather than the router alone. The fallback is therefore genuinely
+> in the resolution path, and D40's "the remedy did not address it" is too strong. The residual
+> single point is **the `tailscaled` process and its `100.100.100.100` listener**, not the upstream
+> nameserver. Recorded as evidence against D40, not as a new decision: no new choice was made, and
+> the one real remedy (`tailscale set --accept-dns=false`, which drops MagicDNS from the path at
+> the cost of tailnet name resolution) is a founder trade-off, not an unattended 18:00 edit. D40's
+> anti-instruction stands: it does **not** close the 11-18 failure class.
+> **D38 confirmed live, no longer inferred.** `factory-eod-sync` is recorded `succeeded` in **0 s**
+> at **18:00:37** — while this very turn was still running and before a single byte of this block
+> existed. Its status is a dispatch receipt, structurally incapable of reporting the work.
+> **Verified unchanged from primary sources:** all three `origin/main`s (Pace `7328ce8c`,
+> **11 quiet days**; app-factory `739d25c`; skip-hero `c2bb590`, **40 days**). PR census
+> **bit-identical for the seventh consecutive reading** — 2 app-factory (#9, #10, both
+> `MERGEABLE`+`CLEAN`), 23 Pace (20 non-draft / 3 draft, **17 `MERGEABLE` / 6 `CONFLICTING`**,
+> newest `updatedAt` still `2026-11-08T23:00Z`), 0 skip-hero. Engine **94 runs** — 78 `done`,
+> 4 `closed`, 4 `failed`, 3 `rejected`, 3 `cancelled`, **2 `awaiting-merge`**, **zero open gates**.
+> D39 re-verified at source: #130 still based on `codex/recovery-history-base`, root #126 still
+> `CONFLICTING` against `main`, #131 still based on #130's head — the retarget would still orphan
+> it. Pace salvage refs hold (`pr78-salvage` `37efb30b`, `pr83-rebase` `71ee06d5`,
+> `codex/referrals-entitlements-review` `87f9a844`); stash still 5; #88 still `OPEN`+`MERGEABLE`,
+> so `stash@{0}` still not droppable. skip-hero `codex/ui` `b969447` (1 behind), spike ref
+> `origin/spike/android-pose-parity` `893ab34b`. Steering failures this month stay at **16** (none
+> today); the task store now retains only **11-13 onward** (12 failed tasks: 11-13 weekly limit ×2,
+> 11-16 monthly spend ×2, 11-18 `ENOTFOUND` ×8), so STATE.md remains the sole record of 11-11/11-12.
+> **#factory-standup still has zero human messages** across the last 15 — every one is the bot's.
+> Nothing merged, rebased, closed, pushed or dispatched; engine untouched; **$0 spent**. Records
+> mirrored to `records-backup-20261119`. Still exactly one thing on the founder's desk: **merge #9
+> then #10 — 27 days** — and per D39 there is nothing on Pace the factory can advance without it.)
+>
+> Prior: 2026-11-19 11:00 (standup cutoff — **no founder reply**, so the posted proposal
 > proceeded, but **one of its three items was tested and rejected rather than applied**.
 > *Item 1, Pace #130's retarget to `main`: NOT DONE.* `git merge-tree` against `origin/main`
 > conflicts in **14 paths** with a **293-file / +22,981** diff — #130 is the fifth link in a

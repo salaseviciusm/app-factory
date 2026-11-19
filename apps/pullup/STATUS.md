@@ -8,12 +8,15 @@
   pending**. Do not advance any stage, re-open the gate, or list pullup as awaiting the
   founder until he explicitly reverses D27.
 - **Last updated:** 2026-08-06 (D27 — backlogged, superseding the 2026-08-03 09:20 hold)
-- **Last verified:** 2026-11-18 18:00 (EOD sync). Still correct, still dormant. **Dormant 104
-  days** under D27. Re-confirmed against the engine's full 94-run history: **no pullup run has
-  ever existed**. The last commit touching `apps/pullup/` is `46eda45` (2026-11-17) — an EOD
-  sync editing this file, not product work. D27 was not revisited, and could not have been:
-  **neither steering turn ran today** (both slots failed four times on `ENOTFOUND`). Nothing
-  here waits on the founder.
+- **Last verified:** 2026-11-19 18:00 (EOD sync). Still correct, still dormant. **Dormant 105
+  days** under D27. Re-confirmed against the engine's full 94-run history (78 done / 4 closed /
+  4 failed / 3 rejected / 3 cancelled / 2 awaiting-merge): **no pullup run has ever existed**, and
+  every run belongs to running-with-pace, skip-hero or app-factory. The last commit touching
+  `apps/pullup/` is still `46eda45` (2026-11-17) — an EOD sync editing this file, not product work.
+  Both steering turns ran and posted today, and D27 was not revisited. Nothing here waits on the
+  founder, so neither the outage nor its repair costs this app anything.
+- **Prior verification:** 2026-11-18 18:00 (EOD sync). Still correct, still dormant, dormant 104
+  days; neither steering turn ran that day (eight `ENOTFOUND` failures).
 - **Prior verification:** 2026-11-17 18:00 (EOD sync). Still correct, still dormant. **Dormant 103
   days** under D27. No pullup run has ever existed; last commit touching `apps/pullup/` was an
   EOD sync editing this file.

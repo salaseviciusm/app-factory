@@ -854,3 +854,18 @@ fall-through path no longer depends on the ISP router alone. Reversible with
 address it. Writing this down stops the DNS class being treated as handled.
 **Anti-instruction:** do not cite D40 as closing the 11-18 failure class. The only real defence
 remains R5 (D37/D38) — out-of-band, artifact-based, and not reliant on the same network path.
+
+**Evidence appended 2026-11-19 18:00 (EOD sync) — the fallback is in the path; the residual single
+point is the daemon, not the router.** `tailscale dns status` reports, for the resolvers the
+coordination server pushes to this device: *"(no resolvers configured, system default will be
+used)"*, with Split DNS Routes for **`ts.net.` only**. The consequence is narrower and better than
+this decision records: MagicDNS is still asked first for every name (the premise above is intact,
+and `scutil --dns` still shows resolver #1 as Supplemental-with-no-domain at order `100200` ahead
+of en0's `200000`), but for any non-`ts.net` name it **forwards to the system default list** — and
+that list is now `192.168.1.254 1.1.1.1 8.8.8.8`, not the ISP router alone. So "the remedy did not
+address it" is too strong: a router-side DNS failure no longer silences the factory. What remains a
+true single point of failure is **the `tailscaled` process and its `100.100.100.100` listener**,
+which the service DNS list cannot route around. The only edit that would remove it is
+`tailscale set --accept-dns=false`, which costs tailnet name resolution — a founder trade-off, not
+an unattended change, and not made. **The anti-instruction above still stands**: D40 does not close
+the 11-18 failure class, and R5 (D37/D38) remains the only real defence.
